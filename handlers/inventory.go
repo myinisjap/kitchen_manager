@@ -22,8 +22,22 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 			WriteError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
+		if item.Quantity < 0 {
+			WriteError(w, http.StatusBadRequest, "quantity must be non-negative")
+			return
+		}
+		if item.LowThreshold < 0 {
+			WriteError(w, http.StatusBadRequest, "low_threshold must be non-negative")
+			return
+		}
 		if item.LowThreshold == 0 {
 			item.LowThreshold = 1
+		}
+		if item.ExpirationDate != "" {
+			if _, err := time.Parse("2006-01-02", item.ExpirationDate); err != nil {
+				WriteError(w, http.StatusBadRequest, "invalid expiration_date format, expected YYYY-MM-DD")
+				return
+			}
 		}
 		res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode) VALUES (?,?,?,?,?,?,?)`,
 			item.Name, item.Quantity, item.Unit, item.Location, item.ExpirationDate, item.LowThreshold, item.Barcode)
@@ -48,6 +62,10 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 				days = d
 			}
 		}
+		if days < 0 {
+			WriteError(w, http.StatusBadRequest, "days must be non-negative")
+			return
+		}
 		today := time.Now().Format("2006-01-02")
 		cutoff := time.Now().AddDate(0, 0, days).Format("2006-01-02")
 		rows, err := db.Query(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode FROM inventory WHERE expiration_date != '' AND expiration_date >= ? AND expiration_date <= ?`, today, cutoff)
@@ -56,7 +74,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer rows.Close()
-		WriteJSON(w, http.StatusOK, scanInventoryRows(rows))
+		items, err := scanInventoryRows(rows)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, items)
 	})
 
 	mux.HandleFunc("GET /api/inventory/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +118,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer rows.Close()
-		WriteJSON(w, http.StatusOK, scanInventoryRows(rows))
+		items, err := scanInventoryRows(rows)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, items)
 	})
 
 	mux.HandleFunc("PATCH /api/inventory/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -109,16 +137,30 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 			WriteError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
+		if expDate, ok := patch["expiration_date"]; ok {
+			if expStr, ok := expDate.(string); ok && expStr != "" {
+				if _, err := time.Parse("2006-01-02", expStr); err != nil {
+					WriteError(w, http.StatusBadRequest, "invalid expiration_date format, expected YYYY-MM-DD")
+					return
+				}
+			}
+		}
 		allowed := []string{"name", "quantity", "unit", "location", "expiration_date", "low_threshold", "barcode"}
 		for _, field := range allowed {
 			if val, ok := patch[field]; ok {
-				db.Exec(`UPDATE inventory SET `+field+`=? WHERE id=?`, val, id)
+				if _, err := db.Exec(`UPDATE inventory SET `+field+`=? WHERE id=?`, val, id); err != nil {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
 			}
 		}
 		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode FROM inventory WHERE id=?`, id)
 		item, err := scanInventoryRow(row)
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "not found")
+			return
+		} else if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		WriteJSON(w, http.StatusOK, item)
@@ -155,24 +197,28 @@ func scanInventoryRow(row *sql.Row) (map[string]any, error) {
 	}, nil
 }
 
-func scanInventoryRows(rows *sql.Rows) []map[string]any {
+func scanInventoryRows(rows *sql.Rows) ([]map[string]any, error) {
 	var items []map[string]any
 	for rows.Next() {
 		var id int64
 		var name, unit, location, expDate, barcode string
 		var qty, threshold float64
-		if err := rows.Scan(&id, &name, &qty, &unit, &location, &expDate, &threshold, &barcode); err == nil {
-			items = append(items, map[string]any{
-				"id": id, "name": name, "quantity": qty, "unit": unit,
-				"location": location, "expiration_date": expDate,
-				"low_threshold": threshold, "barcode": barcode,
-			})
+		if err := rows.Scan(&id, &name, &qty, &unit, &location, &expDate, &threshold, &barcode); err != nil {
+			return nil, err
 		}
+		items = append(items, map[string]any{
+			"id": id, "name": name, "quantity": qty, "unit": unit,
+			"location": location, "expiration_date": expDate,
+			"low_threshold": threshold, "barcode": barcode,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	if items == nil {
-		return []map[string]any{}
+		return []map[string]any{}, nil
 	}
-	return items
+	return items, nil
 }
 
 // pathIDFromPattern reads a named path parameter from Go 1.22 ServeMux patterns.

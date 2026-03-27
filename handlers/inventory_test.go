@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"kitchen_manager/handlers"
 	_ "modernc.org/sqlite"
@@ -173,7 +174,8 @@ func TestDeleteInventoryItem(t *testing.T) {
 
 func TestGetExpiringSoon(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Yogurt","quantity":1,"unit":"cup","location":"fridge","expiration_date":"2026-03-29"}`
+	expirationDate := time.Now().AddDate(0, 0, 3).Format("2006-01-02")
+	body := `{"name":"Yogurt","quantity":1,"unit":"cup","location":"fridge","expiration_date":"` + expirationDate + `"}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
