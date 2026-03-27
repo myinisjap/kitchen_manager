@@ -1,1 +1,649 @@
-<!DOCTYPE html><html><body><h1>Kitchen Manager</h1></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kitchen Manager</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    .tab-bar { padding-bottom: env(safe-area-inset-bottom); }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen" x-data="app()" x-cloak>
+
+  <!-- Header -->
+  <header class="bg-green-700 text-white px-4 py-3 flex items-center justify-between sticky top-0 z-10">
+    <h1 class="text-lg font-bold">🍽 Kitchen Manager</h1>
+    <span class="text-sm opacity-75" x-text="activeTab"></span>
+  </header>
+
+  <!-- Main content -->
+  <main class="pb-20 max-w-2xl mx-auto px-4">
+
+    <!-- ===== INVENTORY TAB ===== -->
+    <section x-show="activeTab === 'inventory'">
+      <div class="flex gap-2 my-4">
+        <input x-model="inventorySearch" @input.debounce.300ms="fetchInventory()" type="text" placeholder="Search items..." class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <select x-model="inventoryLocation" @change="fetchInventory()" class="border rounded-lg px-3 py-2 text-sm">
+          <option value="">All Locations</option>
+          <template x-for="loc in locations">
+            <option :value="loc" x-text="loc"></option>
+          </template>
+        </select>
+        <button @click="openAddItem()" class="bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-medium">+ Add</button>
+      </div>
+
+      <!-- Expiring soon banner -->
+      <template x-if="expiringItems.length > 0">
+        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4 text-sm text-yellow-800">
+          ⚠️ <strong x-text="expiringItems.length"></strong> items expiring within 7 days
+        </div>
+      </template>
+
+      <!-- Item list -->
+      <div class="space-y-2">
+        <template x-for="item in inventoryItems" :key="item.id">
+          <div class="bg-white rounded-xl shadow-sm border p-3 flex items-start justify-between">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="font-medium text-gray-900 truncate" x-text="item.name"></span>
+                <template x-if="item.quantity <= item.low_threshold">
+                  <span class="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded">Low</span>
+                </template>
+              </div>
+              <div class="text-sm text-gray-500 mt-0.5">
+                <span x-text="item.quantity"></span> <span x-text="item.unit"></span>
+                &bull; <span x-text="item.location || 'No location'"></span>
+                <template x-if="item.expiration_date">
+                  <span> &bull; Exp: <span x-text="item.expiration_date"></span></span>
+                </template>
+              </div>
+            </div>
+            <div class="flex gap-2 ml-2">
+              <button @click="editItem(item)" class="text-blue-600 text-sm font-medium">Edit</button>
+              <button @click="deleteItem(item.id)" class="text-red-500 text-sm">✕</button>
+            </div>
+          </div>
+        </template>
+        <template x-if="inventoryItems.length === 0">
+          <p class="text-center text-gray-400 py-8">No items found. Add some!</p>
+        </template>
+      </div>
+    </section>
+
+    <!-- ===== SHOPPING TAB ===== -->
+    <section x-show="activeTab === 'shopping'">
+      <div class="flex gap-2 my-4">
+        <button @click="generateFromThresholds()" class="flex-1 bg-blue-600 text-white rounded-lg px-3 py-2 text-sm font-medium">
+          ↻ Auto-generate from low stock
+        </button>
+        <button @click="openAddShoppingItem()" class="bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-medium">+ Add</button>
+      </div>
+      <button @click="clearCheckedItems()" class="mb-4 text-sm text-red-500 underline w-full text-center">
+        Clear checked items
+      </button>
+
+      <div class="space-y-2">
+        <template x-for="item in shoppingItems" :key="item.id">
+          <div class="bg-white rounded-xl shadow-sm border p-3 flex items-center gap-3"
+               :class="item.checked ? 'opacity-50' : ''">
+            <input type="checkbox" :checked="item.checked"
+                   @change="toggleShoppingItem(item)"
+                   class="w-5 h-5 accent-green-600 flex-shrink-0" />
+            <div class="flex-1 min-w-0">
+              <span class="font-medium" :class="item.checked ? 'line-through' : ''" x-text="item.name"></span>
+              <div class="text-sm text-gray-500">
+                <span x-text="item.quantity_needed"></span> <span x-text="item.unit"></span>
+                <span class="ml-1 text-xs text-gray-400" x-text="'(' + item.source + ')'"></span>
+              </div>
+            </div>
+            <button @click="deleteShoppingItem(item.id)" class="text-red-400 text-sm">✕</button>
+          </div>
+        </template>
+        <template x-if="shoppingItems.length === 0">
+          <p class="text-center text-gray-400 py-8">Shopping list is empty!</p>
+        </template>
+      </div>
+    </section>
+
+    <!-- ===== RECIPES TAB ===== -->
+    <section x-show="activeTab === 'recipes'">
+      <div class="flex gap-2 my-4">
+        <input x-model="recipeTagFilter" @input.debounce.300ms="fetchRecipes()" type="text" placeholder="Filter by tag..." class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <label class="flex items-center gap-1 text-sm text-gray-600 whitespace-nowrap">
+          <input type="checkbox" x-model="recipeAvailableOnly" @change="fetchRecipes()" class="accent-green-600" />
+          Have ingredients
+        </label>
+        <button @click="openAddRecipe()" class="bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-medium">+ Add</button>
+      </div>
+
+      <div class="space-y-3">
+        <template x-for="recipe in recipes" :key="recipe.id">
+          <div class="bg-white rounded-xl shadow-sm border p-4">
+            <div class="flex items-start justify-between">
+              <div>
+                <h3 class="font-semibold text-gray-900" x-text="recipe.name"></h3>
+                <p class="text-sm text-gray-500 mt-0.5" x-text="recipe.description || ''"></p>
+                <template x-if="recipe.tags">
+                  <div class="flex flex-wrap gap-1 mt-1">
+                    <template x-for="tag in (recipe.tags || '').split(',')" :key="tag">
+                      <span class="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded" x-text="tag.trim()"></span>
+                    </template>
+                  </div>
+                </template>
+              </div>
+              <div class="flex gap-2 ml-2">
+                <button @click="viewRecipe(recipe)" class="text-blue-600 text-sm">View</button>
+                <button @click="deleteRecipe(recipe.id)" class="text-red-400 text-sm">✕</button>
+              </div>
+            </div>
+          </div>
+        </template>
+        <template x-if="recipes.length === 0">
+          <p class="text-center text-gray-400 py-8">No recipes found.</p>
+        </template>
+      </div>
+    </section>
+
+    <!-- ===== CALENDAR TAB ===== -->
+    <section x-show="activeTab === 'calendar'">
+      <div class="flex items-center gap-2 my-4">
+        <button @click="prevWeek()" class="bg-white border rounded-lg px-3 py-2 text-sm">←</button>
+        <span class="flex-1 text-center text-sm font-medium text-gray-700"
+              x-text="calendarWeekLabel"></span>
+        <button @click="nextWeek()" class="bg-white border rounded-lg px-3 py-2 text-sm">→</button>
+      </div>
+      <button @click="generateWeeklyShopping()" class="mb-4 w-full bg-blue-600 text-white rounded-lg px-3 py-2 text-sm font-medium">
+        ↻ Generate weekly shopping list
+      </button>
+
+      <div class="space-y-3">
+        <template x-for="day in calendarDays" :key="day.date">
+          <div class="bg-white rounded-xl shadow-sm border overflow-hidden">
+            <div class="bg-gray-100 px-3 py-2 text-sm font-semibold text-gray-700"
+                 x-text="day.label"></div>
+            <div class="p-3 space-y-2">
+              <template x-for="slot in ['breakfast','lunch','dinner']" :key="slot">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-gray-400 w-16 capitalize" x-text="slot"></span>
+                  <template x-if="getCalendarEntry(day.date, slot)">
+                    <div class="flex-1 flex items-center justify-between bg-green-50 rounded-lg px-2 py-1">
+                      <span class="text-sm text-green-800"
+                            x-text="getRecipeName(getCalendarEntry(day.date, slot).recipe_id)"></span>
+                      <button @click="deleteCalendarEntry(getCalendarEntry(day.date, slot).id)"
+                              class="text-red-400 text-xs ml-2">✕</button>
+                    </div>
+                  </template>
+                  <template x-if="!getCalendarEntry(day.date, slot)">
+                    <button @click="openAddCalendarEntry(day.date, slot)"
+                            class="flex-1 border border-dashed border-gray-300 rounded-lg px-2 py-1 text-xs text-gray-400 text-left hover:border-green-400">
+                      + Add meal
+                    </button>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Tab Bar -->
+  <nav class="tab-bar fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around py-2 z-10">
+    <template x-for="tab in tabs" :key="tab.id">
+      <button @click="switchTab(tab.id)"
+              class="flex flex-col items-center gap-0.5 px-4 py-1"
+              :class="activeTab === tab.id ? 'text-green-600' : 'text-gray-400'">
+        <span class="text-xl" x-text="tab.icon"></span>
+        <span class="text-xs font-medium" x-text="tab.label"></span>
+      </button>
+    </template>
+  </nav>
+
+  <!-- ===== MODALS ===== -->
+
+  <!-- Add/Edit Inventory Item Modal -->
+  <div x-show="modal === 'item'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+      <h2 class="text-lg font-bold" x-text="editingItem ? 'Edit Item' : 'Add Item'"></h2>
+      <input x-model="itemForm.name" placeholder="Name *" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <div class="flex gap-2">
+        <input x-model.number="itemForm.quantity" type="number" placeholder="Quantity" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <input x-model="itemForm.unit" placeholder="Unit (e.g. kg)" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <input x-model="itemForm.location" placeholder="Location (fridge, pantry...)" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <input x-model="itemForm.expiration_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <div class="flex gap-2">
+        <label class="text-sm text-gray-600 self-center">Low threshold:</label>
+        <input x-model.number="itemForm.low_threshold" type="number" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Cancel</button>
+        <button @click="saveItem()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Shopping Item Modal -->
+  <div x-show="modal === 'shopping'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4">
+      <h2 class="text-lg font-bold">Add Shopping Item</h2>
+      <input x-model="shoppingForm.name" placeholder="Item name *" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <div class="flex gap-2">
+        <input x-model.number="shoppingForm.quantity_needed" type="number" placeholder="Qty" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <input x-model="shoppingForm.unit" placeholder="Unit" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Cancel</button>
+        <button @click="saveShoppingItem()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Recipe Modal -->
+  <div x-show="modal === 'recipe'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+      <h2 class="text-lg font-bold">Add Recipe</h2>
+      <input x-model="recipeForm.name" placeholder="Recipe name *" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <input x-model="recipeForm.description" placeholder="Short description" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <textarea x-model="recipeForm.instructions" placeholder="Instructions" rows="3" class="w-full border rounded-lg px-3 py-2 text-sm"></textarea>
+      <input x-model="recipeForm.tags" placeholder="Tags (comma-separated: breakfast,quick)" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <input x-model.number="recipeForm.servings" type="number" placeholder="Servings" class="w-full border rounded-lg px-3 py-2 text-sm" />
+
+      <h3 class="font-semibold text-sm text-gray-700">Ingredients</h3>
+      <template x-for="(ing, idx) in recipeForm.ingredients" :key="idx">
+        <div class="flex gap-1">
+          <input x-model="ing.name" placeholder="Ingredient" class="flex-1 border rounded-lg px-2 py-1.5 text-sm" />
+          <input x-model.number="ing.quantity" type="number" placeholder="Qty" class="w-16 border rounded-lg px-2 py-1.5 text-sm" />
+          <input x-model="ing.unit" placeholder="Unit" class="w-16 border rounded-lg px-2 py-1.5 text-sm" />
+          <button @click="recipeForm.ingredients.splice(idx, 1)" class="text-red-400 text-sm px-1">✕</button>
+        </div>
+      </template>
+      <button @click="recipeForm.ingredients.push({name:'',quantity:1,unit:'',inventory_id:null})"
+              class="text-sm text-blue-600 underline">+ Add ingredient</button>
+
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Cancel</button>
+        <button @click="saveRecipe()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- View Recipe Modal -->
+  <div x-show="modal === 'viewRecipe'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-3 max-h-[90vh] overflow-y-auto" x-show="selectedRecipe">
+      <h2 class="text-lg font-bold" x-text="selectedRecipe?.name"></h2>
+      <p class="text-sm text-gray-500" x-text="selectedRecipe?.description"></p>
+      <template x-if="selectedRecipe?.tags">
+        <div class="flex flex-wrap gap-1">
+          <template x-for="tag in (selectedRecipe?.tags || '').split(',')" :key="tag">
+            <span class="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded" x-text="tag.trim()"></span>
+          </template>
+        </div>
+      </template>
+      <div>
+        <h3 class="font-semibold text-sm mb-1">Ingredients</h3>
+        <ul class="space-y-1">
+          <template x-for="ing in selectedRecipe?.ingredients" :key="ing.id">
+            <li class="text-sm text-gray-700">
+              • <span x-text="ing.quantity"></span> <span x-text="ing.unit"></span> <span x-text="ing.name"></span>
+            </li>
+          </template>
+        </ul>
+      </div>
+      <template x-if="selectedRecipe?.instructions">
+        <div>
+          <h3 class="font-semibold text-sm mb-1">Instructions</h3>
+          <p class="text-sm text-gray-700 whitespace-pre-wrap" x-text="selectedRecipe?.instructions"></p>
+        </div>
+      </template>
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Close</button>
+        <button @click="addRecipeToShoppingList(selectedRecipe)" class="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-medium">
+          + Missing items to shopping list
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Calendar Entry Modal -->
+  <div x-show="modal === 'calendarEntry'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4">
+      <h2 class="text-lg font-bold">Add Meal</h2>
+      <p class="text-sm text-gray-500">
+        <span x-text="calendarEntryForm.date"></span> — <span x-text="calendarEntryForm.meal_slot" class="capitalize"></span>
+      </p>
+      <select x-model.number="calendarEntryForm.recipe_id" class="w-full border rounded-lg px-3 py-2 text-sm">
+        <option value="">Select a recipe...</option>
+        <template x-for="recipe in recipes" :key="recipe.id">
+          <option :value="recipe.id" x-text="recipe.name"></option>
+        </template>
+      </select>
+      <div class="flex gap-2 items-center">
+        <label class="text-sm text-gray-600">Servings:</label>
+        <input x-model.number="calendarEntryForm.servings" type="number" min="1" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Cancel</button>
+        <button @click="saveCalendarEntry()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div x-show="toast" x-transition
+       class="fixed top-16 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full z-30 shadow-lg"
+       x-text="toast"></div>
+
+  <script>
+    function app() {
+      return {
+        // State
+        activeTab: 'inventory',
+        tabs: [
+          { id: 'inventory', label: 'Pantry', icon: '🥫' },
+          { id: 'shopping', label: 'Shopping', icon: '🛒' },
+          { id: 'recipes', label: 'Recipes', icon: '📖' },
+          { id: 'calendar', label: 'Calendar', icon: '📅' },
+        ],
+        modal: null,
+        toast: '',
+
+        // Inventory
+        inventoryItems: [],
+        expiringItems: [],
+        inventorySearch: '',
+        inventoryLocation: '',
+        locations: ['fridge', 'freezer', 'pantry', 'cabinet', 'other'],
+        editingItem: null,
+        itemForm: { name: '', quantity: 0, unit: '', location: '', expiration_date: '', low_threshold: 1 },
+
+        // Shopping
+        shoppingItems: [],
+        shoppingForm: { name: '', quantity_needed: 1, unit: '' },
+
+        // Recipes
+        recipes: [],
+        recipeTagFilter: '',
+        recipeAvailableOnly: false,
+        selectedRecipe: null,
+        recipeForm: { name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] },
+
+        // Calendar
+        calendarEntries: [],
+        calendarWeekStart: null,
+        calendarEntryForm: { date: '', meal_slot: 'dinner', recipe_id: '', servings: 1 },
+
+        async init() {
+          this.calendarWeekStart = this.getMonday(new Date());
+          await this.fetchInventory();
+          await this.fetchExpiring();
+          await this.fetchShoppingList();
+          await this.fetchRecipes();
+          await this.fetchCalendar();
+        },
+
+        async switchTab(tab) {
+          this.activeTab = tab;
+          if (tab === 'inventory') { await this.fetchInventory(); await this.fetchExpiring(); }
+          if (tab === 'shopping') await this.fetchShoppingList();
+          if (tab === 'recipes') await this.fetchRecipes();
+          if (tab === 'calendar') await this.fetchCalendar();
+        },
+
+        showToast(msg) {
+          this.toast = msg;
+          setTimeout(() => this.toast = '', 2500);
+        },
+
+        // --- Inventory ---
+        async fetchInventory() {
+          const params = new URLSearchParams();
+          if (this.inventorySearch) params.set('name', this.inventorySearch);
+          if (this.inventoryLocation) params.set('location', this.inventoryLocation);
+          const res = await fetch('/api/inventory/?' + params);
+          this.inventoryItems = await res.json();
+        },
+
+        async fetchExpiring() {
+          const res = await fetch('/api/inventory/expiring?days=7');
+          this.expiringItems = await res.json();
+        },
+
+        openAddItem() {
+          this.editingItem = null;
+          this.itemForm = { name: '', quantity: 0, unit: '', location: '', expiration_date: '', low_threshold: 1 };
+          this.modal = 'item';
+        },
+
+        editItem(item) {
+          this.editingItem = item;
+          this.itemForm = { ...item };
+          this.modal = 'item';
+        },
+
+        async saveItem() {
+          if (!this.itemForm.name) return;
+          if (this.editingItem) {
+            await fetch(`/api/inventory/${this.editingItem.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(this.itemForm),
+            });
+            this.showToast('Item updated');
+          } else {
+            await fetch('/api/inventory/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(this.itemForm),
+            });
+            this.showToast('Item added');
+          }
+          this.modal = null;
+          await this.fetchInventory();
+          await this.fetchExpiring();
+        },
+
+        async deleteItem(id) {
+          if (!confirm('Delete this item?')) return;
+          await fetch(`/api/inventory/${id}`, { method: 'DELETE' });
+          await this.fetchInventory();
+          this.showToast('Item deleted');
+        },
+
+        // --- Shopping ---
+        async fetchShoppingList() {
+          const res = await fetch('/api/shopping/');
+          this.shoppingItems = await res.json();
+        },
+
+        openAddShoppingItem() {
+          this.shoppingForm = { name: '', quantity_needed: 1, unit: '' };
+          this.modal = 'shopping';
+        },
+
+        async saveShoppingItem() {
+          if (!this.shoppingForm.name) return;
+          await fetch('/api/shopping/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.shoppingForm),
+          });
+          this.modal = null;
+          await this.fetchShoppingList();
+          this.showToast('Added to list');
+        },
+
+        async toggleShoppingItem(item) {
+          await fetch(`/api/shopping/${item.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ checked: !item.checked }),
+          });
+          await this.fetchShoppingList();
+        },
+
+        async deleteShoppingItem(id) {
+          await fetch(`/api/shopping/${id}`, { method: 'DELETE' });
+          await this.fetchShoppingList();
+        },
+
+        async clearCheckedItems() {
+          await fetch('/api/shopping/checked', { method: 'DELETE' });
+          await this.fetchShoppingList();
+          this.showToast('Cleared checked items');
+        },
+
+        async generateFromThresholds() {
+          const res = await fetch('/api/shopping/generate-from-thresholds', { method: 'POST' });
+          const data = await res.json();
+          await this.fetchShoppingList();
+          this.showToast(`Added ${data.added} low-stock items`);
+        },
+
+        // --- Recipes ---
+        async fetchRecipes() {
+          const params = new URLSearchParams();
+          if (this.recipeTagFilter) params.set('tag', this.recipeTagFilter);
+          if (this.recipeAvailableOnly) params.set('available_only', 'true');
+          const res = await fetch('/api/recipes/?' + params);
+          this.recipes = await res.json();
+        },
+
+        openAddRecipe() {
+          this.recipeForm = { name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] };
+          this.modal = 'recipe';
+        },
+
+        async saveRecipe() {
+          if (!this.recipeForm.name) return;
+          await fetch('/api/recipes/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.recipeForm),
+          });
+          this.modal = null;
+          await this.fetchRecipes();
+          this.showToast('Recipe saved');
+        },
+
+        viewRecipe(recipe) {
+          this.selectedRecipe = recipe;
+          this.modal = 'viewRecipe';
+        },
+
+        async addRecipeToShoppingList(recipe) {
+          const res = await fetch(`/api/recipes/${recipe.id}/add-to-shopping-list`, { method: 'POST' });
+          const data = await res.json();
+          this.modal = null;
+          this.showToast(`Added ${data.added} missing ingredient(s) to shopping list`);
+          await this.fetchShoppingList();
+        },
+
+        async deleteRecipe(id) {
+          if (!confirm('Delete this recipe?')) return;
+          await fetch(`/api/recipes/${id}`, { method: 'DELETE' });
+          await this.fetchRecipes();
+          this.showToast('Recipe deleted');
+        },
+
+        // --- Calendar ---
+        getMonday(d) {
+          const day = d.getDay();
+          const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+          const monday = new Date(d.setDate(diff));
+          monday.setHours(0, 0, 0, 0);
+          return monday;
+        },
+
+        get calendarWeekLabel() {
+          if (!this.calendarWeekStart) return '';
+          const end = new Date(this.calendarWeekStart);
+          end.setDate(end.getDate() + 6);
+          return this.calendarWeekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+            ' – ' + end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        },
+
+        get calendarDays() {
+          if (!this.calendarWeekStart) return [];
+          const days = [];
+          for (let i = 0; i < 7; i++) {
+            const d = new Date(this.calendarWeekStart);
+            d.setDate(d.getDate() + i);
+            days.push({
+              date: d.toISOString().split('T')[0],
+              label: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }),
+            });
+          }
+          return days;
+        },
+
+        prevWeek() {
+          const d = new Date(this.calendarWeekStart);
+          d.setDate(d.getDate() - 7);
+          this.calendarWeekStart = d;
+          this.fetchCalendar();
+        },
+
+        nextWeek() {
+          const d = new Date(this.calendarWeekStart);
+          d.setDate(d.getDate() + 7);
+          this.calendarWeekStart = d;
+          this.fetchCalendar();
+        },
+
+        async fetchCalendar() {
+          const start = this.calendarWeekStart.toISOString().split('T')[0];
+          const res = await fetch(`/api/calendar/week?start=${start}`);
+          this.calendarEntries = await res.json();
+        },
+
+        getCalendarEntry(date, slot) {
+          return this.calendarEntries.find(e => e.date === date && e.meal_slot === slot) || null;
+        },
+
+        getRecipeName(recipeId) {
+          const r = this.recipes.find(r => r.id === recipeId);
+          return r ? r.name : 'Unknown';
+        },
+
+        openAddCalendarEntry(date, slot) {
+          this.calendarEntryForm = { date, meal_slot: slot, recipe_id: '', servings: 1 };
+          this.modal = 'calendarEntry';
+        },
+
+        async saveCalendarEntry() {
+          if (!this.calendarEntryForm.recipe_id) return;
+          await fetch('/api/calendar/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(this.calendarEntryForm),
+          });
+          this.modal = null;
+          await this.fetchCalendar();
+          this.showToast('Meal added');
+        },
+
+        async deleteCalendarEntry(id) {
+          await fetch(`/api/calendar/${id}`, { method: 'DELETE' });
+          await this.fetchCalendar();
+          this.showToast('Meal removed');
+        },
+
+        async generateWeeklyShopping() {
+          const start = this.calendarWeekStart.toISOString().split('T')[0];
+          const res = await fetch(`/api/calendar/generate-weekly-shopping?start=${start}`, { method: 'POST' });
+          const data = await res.json();
+          this.showToast(`Added ${data.items.length} item(s) to shopping list`);
+          await this.fetchShoppingList();
+          this.activeTab = 'shopping';
+        },
+      };
+    }
+  </script>
+</body>
+</html>
