@@ -345,3 +345,87 @@ func TestGenerateFromThresholdsIdempotent(t *testing.T) {
 		t.Errorf("second call: want added=0 (idempotent), got %v", r2["added"])
 	}
 }
+
+func TestCreateRecipe(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"Scrambled Eggs","description":"Simple breakfast","instructions":"Beat eggs, cook.","tags":"breakfast,quick","servings":2,"ingredients":[{"name":"Eggs","quantity":3,"unit":"count"},{"name":"Butter","quantity":1,"unit":"tbsp"}]}`
+	req := httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body)
+	}
+	var recipe map[string]any
+	json.NewDecoder(w.Body).Decode(&recipe)
+	if recipe["name"] != "Scrambled Eggs" {
+		t.Errorf("want Scrambled Eggs, got %v", recipe["name"])
+	}
+	ings := recipe["ingredients"].([]any)
+	if len(ings) != 2 {
+		t.Errorf("want 2 ingredients, got %d", len(ings))
+	}
+}
+
+func TestFilterRecipesByTag(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"Pancakes","tags":"breakfast,sweet","servings":4,"ingredients":[]}`
+	req := httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	req2 := httptest.NewRequest("GET", "/api/recipes/?tag=breakfast", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	var recipes []map[string]any
+	json.NewDecoder(w2.Body).Decode(&recipes)
+	found := false
+	for _, r := range recipes {
+		if r["name"] == "Pancakes" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Pancakes not found when filtering by breakfast tag")
+	}
+}
+
+func TestAddRecipeToShoppingList(t *testing.T) {
+	mux, _ := newMux(t)
+	// Create inventory item with 0 quantity
+	invW := httptest.NewRecorder()
+	mux.ServeHTTP(invW, httptest.NewRequest("POST", "/api/inventory/",
+		bytes.NewBufferString(`{"name":"RecipeEgg","quantity":0,"unit":"count","location":"fridge"}`)))
+	var invItem map[string]any
+	json.NewDecoder(invW.Body).Decode(&invItem)
+	invID := int(invItem["id"].(float64))
+
+	body := `{"name":"QuickOmelet","servings":1,"ingredients":[{"name":"RecipeEgg","quantity":2,"unit":"count","inventory_id":` + strconv.Itoa(invID) + `}]}`
+	req := httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var recipe map[string]any
+	json.NewDecoder(w.Body).Decode(&recipe)
+	recipeID := int(recipe["id"].(float64))
+
+	req2 := httptest.NewRequest("POST", "/api/recipes/"+strconv.Itoa(recipeID)+"/add-to-shopping-list", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w2.Code, w2.Body)
+	}
+
+	req3 := httptest.NewRequest("GET", "/api/shopping/", nil)
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	var items []map[string]any
+	json.NewDecoder(w3.Body).Decode(&items)
+	found := false
+	for _, item := range items {
+		if item["name"] == "RecipeEgg" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("RecipeEgg not found in shopping list after adding recipe")
+	}
+}
