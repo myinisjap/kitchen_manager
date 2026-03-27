@@ -198,3 +198,123 @@ func TestGetExpiringSoon(t *testing.T) {
 		t.Error("Yogurt not found in expiring items")
 	}
 }
+
+func TestAddManualShoppingItem(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"Olive Oil","quantity_needed":1,"unit":"bottle","source":"manual"}`
+	req := httptest.NewRequest("POST", "/api/shopping/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body)
+	}
+	var item map[string]any
+	json.NewDecoder(w.Body).Decode(&item)
+	if item["name"] != "Olive Oil" {
+		t.Errorf("want Olive Oil, got %v", item["name"])
+	}
+	if item["checked"] != false {
+		t.Errorf("want checked=false, got %v", item["checked"])
+	}
+}
+
+func TestCheckShoppingItem(t *testing.T) {
+	mux, _ := newMux(t)
+	req := httptest.NewRequest("POST", "/api/shopping/", bytes.NewBufferString(`{"name":"Pepper","quantity_needed":1,"unit":"jar"}`))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int(created["id"].(float64))
+
+	req2 := httptest.NewRequest("PATCH", "/api/shopping/"+strconv.Itoa(id), bytes.NewBufferString(`{"checked":true}`))
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w2.Code)
+	}
+	var updated map[string]any
+	json.NewDecoder(w2.Body).Decode(&updated)
+	if updated["checked"] != true {
+		t.Errorf("want checked=true, got %v", updated["checked"])
+	}
+}
+
+func TestClearCheckedShoppingItems(t *testing.T) {
+	mux, _ := newMux(t)
+	var id1, id2 int
+	for i, name := range []string{"ItemA", "ItemB"} {
+		req := httptest.NewRequest("POST", "/api/shopping/", bytes.NewBufferString(`{"name":"`+name+`","quantity_needed":1,"unit":""}`))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		var c map[string]any
+		json.NewDecoder(w.Body).Decode(&c)
+		if i == 0 {
+			id1 = int(c["id"].(float64))
+		} else {
+			id2 = int(c["id"].(float64))
+			_ = id2
+		}
+	}
+	// Check ItemA
+	req := httptest.NewRequest("PATCH", "/api/shopping/"+strconv.Itoa(id1), bytes.NewBufferString(`{"checked":true}`))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	req2 := httptest.NewRequest("DELETE", "/api/shopping/checked", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w2.Code)
+	}
+
+	req3 := httptest.NewRequest("GET", "/api/shopping/", nil)
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	var items []map[string]any
+	json.NewDecoder(w3.Body).Decode(&items)
+	for _, item := range items {
+		if item["name"] == "ItemA" {
+			t.Error("ItemA should have been cleared")
+		}
+	}
+	found := false
+	for _, item := range items {
+		if item["name"] == "ItemB" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ItemB should still be on the list")
+	}
+}
+
+func TestGenerateFromThresholds(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"ThresholdTest","quantity":0.2,"unit":"bottle","location":"pantry","low_threshold":1.0}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	req2 := httptest.NewRequest("POST", "/api/shopping/generate-from-thresholds", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w2.Code, w2.Body)
+	}
+
+	req3 := httptest.NewRequest("GET", "/api/shopping/", nil)
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	var items []map[string]any
+	json.NewDecoder(w3.Body).Decode(&items)
+	found := false
+	for _, item := range items {
+		if item["name"] == "ThresholdTest" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("ThresholdTest not found in shopping list after threshold generation")
+	}
+}
