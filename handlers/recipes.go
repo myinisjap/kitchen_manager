@@ -105,9 +105,14 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if availableOnly && !recipeIsAvailable(db, recipe) {
-				continue
-			}
+			available, err := recipeIsAvailable(db, recipe)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if availableOnly && !available {
+			continue
+		}
 			result = append(result, recipe)
 		}
 		if result == nil {
@@ -140,17 +145,35 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
 			WriteError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		res, err := db.Exec(`DELETE FROM recipes WHERE id=?`, id)
+		// Check existence first
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM recipes WHERE id=?`, id).Scan(&exists); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if exists == 0 {
+			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		tx, err := db.Begin()
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			WriteError(w, http.StatusNotFound, "not found")
+		if _, err := tx.Exec(`DELETE FROM recipe_ingredients WHERE recipe_id=?`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		db.Exec(`DELETE FROM recipe_ingredients WHERE recipe_id=?`, id)
+		if _, err := tx.Exec(`DELETE FROM recipes WHERE id=?`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -248,16 +271,25 @@ func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
 	}, nil
 }
 
-func recipeIsAvailable(db *sql.DB, recipe map[string]any) bool {
+func recipeIsAvailable(db *sql.DB, recipe map[string]any) (bool, error) {
 	ings := recipe["ingredients"].([]map[string]any)
 	for _, ing := range ings {
-		if invID, ok := ing["inventory_id"]; ok && invID != nil {
-			var qty float64
-			db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, invID).Scan(&qty)
-			if qty < ing["quantity"].(float64) {
-				return false
-			}
+		invID, hasInvID := ing["inventory_id"]
+		if !hasInvID || invID == nil {
+			continue
+		}
+		var qty float64
+		err := db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, invID).Scan(&qty)
+		if err == sql.ErrNoRows {
+			// Ingredient links to an inventory item that doesn't exist → not available
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if qty < ing["quantity"].(float64) {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
