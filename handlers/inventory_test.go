@@ -107,7 +107,7 @@ func newMux(t *testing.T) (*http.ServeMux, *sql.DB) {
 
 func TestCreateInventoryItem(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Milk","quantity":1,"unit":"gallon","location":"fridge","low_threshold":0.5}`
+	body := `{"name":"Milk","quantity":1,"unit":"L","location":"fridge","low_threshold":0.5}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -126,7 +126,7 @@ func TestCreateInventoryItem(t *testing.T) {
 
 func TestListInventoryItems(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Eggs","quantity":12,"unit":"count","location":"fridge"}`
+	body := `{"name":"Eggs","quantity":12,"unit":"piece","location":"fridge"}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -152,7 +152,7 @@ func TestListInventoryItems(t *testing.T) {
 
 func TestUpdateInventoryItem(t *testing.T) {
 	mux, _ := newMux(t)
-	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(`{"name":"Butter","quantity":2,"unit":"stick","location":"fridge"}`))
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(`{"name":"Butter","quantity":2,"unit":"oz","location":"fridge"}`))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	var created map[string]any
@@ -200,7 +200,7 @@ func TestDeleteInventoryItem(t *testing.T) {
 func TestGetExpiringSoon(t *testing.T) {
 	mux, _ := newMux(t)
 	expirationDate := time.Now().AddDate(0, 0, 3).Format("2006-01-02")
-	body := `{"name":"Yogurt","quantity":1,"unit":"cup","location":"fridge","expiration_date":"` + expirationDate + `"}`
+	body := `{"name":"Yogurt","quantity":1,"unit":"ml","location":"fridge","expiration_date":"` + expirationDate + `"}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -313,7 +313,7 @@ func TestClearCheckedShoppingItems(t *testing.T) {
 
 func TestGenerateFromThresholds(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"ThresholdTest","quantity":0.2,"unit":"bottle","location":"pantry","low_threshold":1.0}`
+	body := `{"name":"ThresholdTest","quantity":0.2,"unit":"L","location":"pantry","low_threshold":1.0}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -373,7 +373,7 @@ func TestGenerateFromThresholdsIdempotent(t *testing.T) {
 
 func TestCreateRecipe(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Scrambled Eggs","description":"Simple breakfast","instructions":"Beat eggs, cook.","tags":"breakfast,quick","servings":2,"ingredients":[{"name":"Eggs","quantity":3,"unit":"count"},{"name":"Butter","quantity":1,"unit":"tbsp"}]}`
+	body := `{"name":"Scrambled Eggs","description":"Simple breakfast","instructions":"Beat eggs, cook.","tags":"breakfast,quick","servings":2,"ingredients":[{"name":"Eggs","quantity":3,"unit":"piece"},{"name":"Butter","quantity":1,"unit":"tbsp"}]}`
 	req := httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -419,12 +419,12 @@ func TestAddRecipeToShoppingList(t *testing.T) {
 	// Create inventory item with 0 quantity
 	invW := httptest.NewRecorder()
 	mux.ServeHTTP(invW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"RecipeEgg","quantity":0,"unit":"count","location":"fridge"}`)))
+		bytes.NewBufferString(`{"name":"RecipeEgg","quantity":0,"unit":"piece","location":"fridge"}`)))
 	var invItem map[string]any
 	json.NewDecoder(invW.Body).Decode(&invItem)
 	invID := int(invItem["id"].(float64))
 
-	body := `{"name":"QuickOmelet","servings":1,"ingredients":[{"name":"RecipeEgg","quantity":2,"unit":"count","inventory_id":` + strconv.Itoa(invID) + `}]}`
+	body := `{"name":"QuickOmelet","servings":1,"ingredients":[{"name":"RecipeEgg","quantity":2,"unit":"piece","inventory_id":` + strconv.Itoa(invID) + `}]}`
 	req := httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -495,7 +495,7 @@ func TestFullWeeklyPlanningFlow(t *testing.T) {
 	// Step 2: Add sauce to inventory (below threshold — SHOULD appear in threshold shopping)
 	sauceW := httptest.NewRecorder()
 	mux.ServeHTTP(sauceW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"Tomato Sauce","quantity":1,"unit":"jar","location":"Pantry","low_threshold":2}`)))
+		bytes.NewBufferString(`{"name":"Tomato Sauce","quantity":1,"unit":"can","location":"Pantry","low_threshold":2}`)))
 	if sauceW.Code != http.StatusCreated {
 		t.Fatalf("create sauce: want 201, got %d: %s", sauceW.Code, sauceW.Body)
 	}
@@ -539,7 +539,7 @@ func TestFullWeeklyPlanningFlow(t *testing.T) {
 	// Step 4: Create recipe "Pasta with Sauce"
 	recipeBody := `{"name":"Pasta with Sauce","tags":"dinner","servings":2,"ingredients":[` +
 		`{"name":"Pasta","quantity":300,"unit":"g","inventory_id":` + strconv.Itoa(pastaID) + `},` +
-		`{"name":"Tomato Sauce","quantity":2,"unit":"jar","inventory_id":` + strconv.Itoa(sauceID) + `}` +
+		`{"name":"Tomato Sauce","quantity":2,"unit":"can","inventory_id":` + strconv.Itoa(sauceID) + `}` +
 		`]}`
 	recipeW := httptest.NewRecorder()
 	mux.ServeHTTP(recipeW, httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(recipeBody)))
@@ -606,14 +606,14 @@ func TestWeeklyShoppingAccountsForInventory(t *testing.T) {
 	// Add inventory: 2 eggs
 	invW := httptest.NewRecorder()
 	mux.ServeHTTP(invW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"CalEgg","quantity":2,"unit":"count","location":"fridge"}`)))
+		bytes.NewBufferString(`{"name":"CalEgg","quantity":2,"unit":"piece","location":"fridge"}`)))
 	var inv map[string]any
 	json.NewDecoder(invW.Body).Decode(&inv)
 	invID := int(inv["id"].(float64))
 
 	// Create recipe: needs 4 eggs per serving
 	recW := httptest.NewRecorder()
-	body := `{"name":"EggDish","servings":1,"ingredients":[{"name":"CalEgg","quantity":4,"unit":"count","inventory_id":` + strconv.Itoa(invID) + `}]}`
+	body := `{"name":"EggDish","servings":1,"ingredients":[{"name":"CalEgg","quantity":4,"unit":"piece","inventory_id":` + strconv.Itoa(invID) + `}]}`
 	mux.ServeHTTP(recW, httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(body)))
 	var rec map[string]any
 	json.NewDecoder(recW.Body).Decode(&rec)
@@ -648,5 +648,50 @@ func TestWeeklyShoppingAccountsForInventory(t *testing.T) {
 	}
 	if total != 6.0 {
 		t.Errorf("want 6 eggs needed, got %v", total)
+	}
+}
+
+func TestCreateInventoryItemInvalidUnit(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"Pasta","quantity":500,"unit":"handful","location":"Pantry"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestCreateInventoryItemMismatchedPreferredUnit(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"Pasta","quantity":500,"unit":"g","preferred_unit":"ml","location":"Pantry"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetUnitsEndpoint(t *testing.T) {
+	mux, _ := newMux(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/units", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var result map[string][]string
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(result["mass"]) == 0 {
+		t.Error("expected mass units")
+	}
+	if len(result["volume"]) == 0 {
+		t.Error("expected volume units")
+	}
+	if len(result["count"]) == 0 {
+		t.Error("expected count units")
 	}
 }

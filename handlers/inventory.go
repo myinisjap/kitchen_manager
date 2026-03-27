@@ -5,14 +5,25 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"kitchen_manager/units"
 )
 
 func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
+	mux.HandleFunc("GET /api/units", func(w http.ResponseWriter, r *http.Request) {
+		WriteJSON(w, http.StatusOK, map[string][]string{
+			"mass":   {"g", "kg", "oz", "lb"},
+			"volume": {"ml", "L", "cup", "tbsp", "tsp"},
+			"count":  {"piece", "clove", "can", "jar", "bunch"},
+		})
+	})
+
 	mux.HandleFunc("POST /api/inventory/", func(w http.ResponseWriter, r *http.Request) {
 		var item struct {
 			Name           string  `json:"name"`
 			Quantity       float64 `json:"quantity"`
 			Unit           string  `json:"unit"`
+			PreferredUnit  string  `json:"preferred_unit"`
 			Location       string  `json:"location"`
 			ExpirationDate string  `json:"expiration_date"`
 			LowThreshold   float64 `json:"low_threshold"`
@@ -39,8 +50,22 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode) VALUES (?,?,?,?,?,?,?)`,
-			item.Name, item.Quantity, item.Unit, item.Location, item.ExpirationDate, item.LowThreshold, item.Barcode)
+		if item.Unit != "" && !units.IsValid(units.Unit(item.Unit)) {
+			WriteError(w, http.StatusBadRequest, "invalid unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
+			return
+		}
+		if item.PreferredUnit != "" {
+			if !units.IsValid(units.Unit(item.PreferredUnit)) {
+				WriteError(w, http.StatusBadRequest, "invalid preferred_unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
+				return
+			}
+			if item.Unit != "" && units.BaseDimension(units.Unit(item.Unit)) != units.BaseDimension(units.Unit(item.PreferredUnit)) {
+				WriteError(w, http.StatusBadRequest, "preferred_unit must be in the same dimension as unit")
+				return
+			}
+		}
+		res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES (?,?,?,?,?,?,?,?)`,
+			item.Name, item.Quantity, item.Unit, item.Location, item.ExpirationDate, item.LowThreshold, item.Barcode, item.PreferredUnit)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -48,9 +73,9 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 		id, _ := res.LastInsertId()
 		WriteJSON(w, http.StatusCreated, map[string]any{
 			"id": id, "name": item.Name, "quantity": item.Quantity,
-			"unit": item.Unit, "location": item.Location,
-			"expiration_date": item.ExpirationDate, "low_threshold": item.LowThreshold,
-			"barcode": item.Barcode,
+			"unit": item.Unit, "preferred_unit": item.PreferredUnit,
+			"location": item.Location, "expiration_date": item.ExpirationDate,
+			"low_threshold": item.LowThreshold, "barcode": item.Barcode,
 		})
 	})
 
@@ -68,7 +93,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 		}
 		today := time.Now().Format("2006-01-02")
 		cutoff := time.Now().AddDate(0, 0, days).Format("2006-01-02")
-		rows, err := db.Query(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode FROM inventory WHERE expiration_date != '' AND expiration_date >= ? AND expiration_date <= ?`, today, cutoff)
+		rows, err := db.Query(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit FROM inventory WHERE expiration_date != '' AND expiration_date >= ? AND expiration_date <= ?`, today, cutoff)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -88,7 +113,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 			WriteError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode FROM inventory WHERE id=?`, id)
+		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit FROM inventory WHERE id=?`, id)
 		item, err := scanInventoryRow(row)
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "not found")
@@ -102,7 +127,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	mux.HandleFunc("GET /api/inventory/", func(w http.ResponseWriter, r *http.Request) {
-		q := `SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode FROM inventory WHERE 1=1`
+		q := `SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit FROM inventory WHERE 1=1`
 		args := []any{}
 		if name := r.URL.Query().Get("name"); name != "" {
 			q += ` AND name LIKE ?`
@@ -157,7 +182,29 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		allowed := []string{"name", "quantity", "unit", "location", "expiration_date", "low_threshold", "barcode"}
+		if u, ok := patch["unit"]; ok {
+			if uStr, ok := u.(string); ok && uStr != "" && !units.IsValid(units.Unit(uStr)) {
+				WriteError(w, http.StatusBadRequest, "invalid unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
+				return
+			}
+		}
+		if pu, ok := patch["preferred_unit"]; ok {
+			if puStr, ok := pu.(string); ok && puStr != "" {
+				if !units.IsValid(units.Unit(puStr)) {
+					WriteError(w, http.StatusBadRequest, "invalid preferred_unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
+					return
+				}
+				if u, ok := patch["unit"]; ok {
+					if uStr, ok := u.(string); ok && uStr != "" {
+						if units.BaseDimension(units.Unit(uStr)) != units.BaseDimension(units.Unit(puStr)) {
+							WriteError(w, http.StatusBadRequest, "preferred_unit must be in the same dimension as unit")
+							return
+						}
+					}
+				}
+			}
+		}
+		allowed := []string{"name", "quantity", "unit", "location", "expiration_date", "low_threshold", "barcode", "preferred_unit"}
 		for _, field := range allowed {
 			if val, ok := patch[field]; ok {
 				if _, err := db.Exec(`UPDATE inventory SET `+field+`=? WHERE id=?`, val, id); err != nil {
@@ -166,7 +213,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 		}
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode FROM inventory WHERE id=?`, id)
+		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit FROM inventory WHERE id=?`, id)
 		item, err := scanInventoryRow(row)
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "not found")
@@ -196,16 +243,16 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 
 func scanInventoryRow(row *sql.Row) (map[string]any, error) {
 	var id int64
-	var name, unit, location, expDate, barcode string
+	var name, unit, location, expDate, barcode, preferredUnit string
 	var qty, threshold float64
-	err := row.Scan(&id, &name, &qty, &unit, &location, &expDate, &threshold, &barcode)
+	err := row.Scan(&id, &name, &qty, &unit, &location, &expDate, &threshold, &barcode, &preferredUnit)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"id": id, "name": name, "quantity": qty, "unit": unit,
-		"location": location, "expiration_date": expDate,
-		"low_threshold": threshold, "barcode": barcode,
+		"preferred_unit": preferredUnit, "location": location,
+		"expiration_date": expDate, "low_threshold": threshold, "barcode": barcode,
 	}, nil
 }
 
@@ -213,15 +260,15 @@ func scanInventoryRows(rows *sql.Rows) ([]map[string]any, error) {
 	var items []map[string]any
 	for rows.Next() {
 		var id int64
-		var name, unit, location, expDate, barcode string
+		var name, unit, location, expDate, barcode, preferredUnit string
 		var qty, threshold float64
-		if err := rows.Scan(&id, &name, &qty, &unit, &location, &expDate, &threshold, &barcode); err != nil {
+		if err := rows.Scan(&id, &name, &qty, &unit, &location, &expDate, &threshold, &barcode, &preferredUnit); err != nil {
 			return nil, err
 		}
 		items = append(items, map[string]any{
 			"id": id, "name": name, "quantity": qty, "unit": unit,
-			"location": location, "expiration_date": expDate,
-			"low_threshold": threshold, "barcode": barcode,
+			"preferred_unit": preferredUnit, "location": location,
+			"expiration_date": expDate, "low_threshold": threshold, "barcode": barcode,
 		})
 	}
 	if err := rows.Err(); err != nil {
