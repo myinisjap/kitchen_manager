@@ -429,3 +429,77 @@ func TestAddRecipeToShoppingList(t *testing.T) {
 		t.Error("RecipeEgg not found in shopping list after adding recipe")
 	}
 }
+
+func TestAddMealToCalendar(t *testing.T) {
+	mux, _ := newMux(t)
+	recipeW := httptest.NewRecorder()
+	mux.ServeHTTP(recipeW, httptest.NewRequest("POST", "/api/recipes/",
+		bytes.NewBufferString(`{"name":"CalRecipe","servings":2,"ingredients":[]}`)))
+	var rec map[string]any
+	json.NewDecoder(recipeW.Body).Decode(&rec)
+	recipeID := int(rec["id"].(float64))
+
+	body := `{"date":"2026-04-07","meal_slot":"dinner","recipe_id":` + strconv.Itoa(recipeID) + `,"servings":2}`
+	req := httptest.NewRequest("POST", "/api/calendar/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body)
+	}
+	var entry map[string]any
+	json.NewDecoder(w.Body).Decode(&entry)
+	if entry["recipe_id"] != float64(recipeID) {
+		t.Errorf("want recipe_id %d, got %v", recipeID, entry["recipe_id"])
+	}
+}
+
+func TestWeeklyShoppingAccountsForInventory(t *testing.T) {
+	mux, _ := newMux(t)
+
+	// Add inventory: 2 eggs
+	invW := httptest.NewRecorder()
+	mux.ServeHTTP(invW, httptest.NewRequest("POST", "/api/inventory/",
+		bytes.NewBufferString(`{"name":"CalEgg","quantity":2,"unit":"count","location":"fridge"}`)))
+	var inv map[string]any
+	json.NewDecoder(invW.Body).Decode(&inv)
+	invID := int(inv["id"].(float64))
+
+	// Create recipe: needs 4 eggs per serving
+	recW := httptest.NewRecorder()
+	body := `{"name":"EggDish","servings":1,"ingredients":[{"name":"CalEgg","quantity":4,"unit":"count","inventory_id":` + strconv.Itoa(invID) + `}]}`
+	mux.ServeHTTP(recW, httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(body)))
+	var rec map[string]any
+	json.NewDecoder(recW.Body).Decode(&rec)
+	recipeID := int(rec["id"].(float64))
+
+	// Add recipe on Monday 2026-04-14 and Wednesday 2026-04-16
+	for _, date := range []string{"2026-04-14", "2026-04-16"} {
+		entry := `{"date":"` + date + `","meal_slot":"dinner","recipe_id":` + strconv.Itoa(recipeID) + `,"servings":1}`
+		mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/calendar/", bytes.NewBufferString(entry)))
+	}
+
+	req := httptest.NewRequest("POST", "/api/calendar/generate-weekly-shopping?start=2026-04-14", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+
+	var result map[string]any
+	json.NewDecoder(w.Body).Decode(&result)
+	items := result["items"].([]any)
+
+	// Mon: need 4, have 2 → buy 2, stock=0
+	// Wed: need 4, have 0 → buy 4
+	// Total = 6
+	total := 0.0
+	for _, item := range items {
+		m := item.(map[string]any)
+		if m["name"] == "CalEgg" {
+			total += m["quantity_needed"].(float64)
+		}
+	}
+	if total != 6.0 {
+		t.Errorf("want 6 eggs needed, got %v", total)
+	}
+}
