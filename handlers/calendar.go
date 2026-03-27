@@ -116,6 +116,14 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/calendar/generate-weekly-shopping", func(w http.ResponseWriter, r *http.Request) {
 		startStr := r.URL.Query().Get("start")
 		if startStr == "" {
+			// Try to read week_start from JSON body
+			var body struct {
+				WeekStart string `json:"week_start"`
+			}
+			ReadJSON(r, &body) //nolint:errcheck — body is optional
+			startStr = body.WeekStart
+		}
+		if startStr == "" {
 			startStr = time.Now().Format("2006-01-02")
 		}
 		needs, err := services.GenerateWeeklyShopping(db, startStr)

@@ -747,3 +747,71 @@ func TestCreateShoppingItemInvalidUnit(t *testing.T) {
 		t.Errorf("expected 400, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestWeeklyShoppingUnitConversion(t *testing.T) {
+	mux, db := newMux(t)
+
+	// Add 1kg of pasta, preferred_unit = kg
+	res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,low_threshold,preferred_unit) VALUES ('Pasta',1,'kg',0.1,'kg')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pastaID, _ := res.LastInsertId()
+
+	// Recipe uses 600g pasta per 1 serving
+	res2, err := db.Exec(`INSERT INTO recipes (name,servings) VALUES ('Pasta Dish',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipeID, _ := res2.LastInsertId()
+	_, err = db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,'Pasta',600,'g')`, recipeID, pastaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add to calendar: Monday + Wednesday, 1 serving each
+	_, err = db.Exec(`INSERT INTO meal_calendar (date,meal_slot,recipe_id,servings) VALUES ('2026-05-04','dinner',?,1)`, recipeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO meal_calendar (date,meal_slot,recipe_id,servings) VALUES ('2026-05-06','dinner',?,1)`, recipeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Generate weekly shopping
+	body := `{"week_start":"2026-05-04"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/calendar/generate-weekly-shopping", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Math:
+	// 1kg on hand. Mon: needs 600g = 0.6kg, have 1kg, no shortfall. Simulated → 0.4kg.
+	// Wed: needs 600g = 0.6kg, have 0.4kg, shortfall = 0.2kg.
+	// Expect shopping list item for Pasta with quantity_needed ~0.2 and unit "kg"
+	shoppingReq := httptest.NewRequest(http.MethodGet, "/api/shopping/", nil)
+	shoppingW := httptest.NewRecorder()
+	mux.ServeHTTP(shoppingW, shoppingReq)
+	var items []map[string]any
+	json.Unmarshal(shoppingW.Body.Bytes(), &items)
+
+	found := false
+	for _, item := range items {
+		if item["name"] == "Pasta" {
+			found = true
+			if item["unit"] != "kg" {
+				t.Errorf("expected unit kg, got %v", item["unit"])
+			}
+			qty, _ := item["quantity_needed"].(float64)
+			if qty < 0.19 || qty > 0.21 {
+				t.Errorf("expected quantity_needed ~0.2kg, got %v", qty)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected Pasta in shopping list")
+	}
+}

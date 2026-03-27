@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"kitchen_manager/units"
 )
 
 // ShoppingNeed represents an ingredient that needs to be purchased.
@@ -16,6 +18,7 @@ type ShoppingNeed struct {
 
 // GenerateWeeklyShopping simulates daily inventory depletion over a 7-day week
 // and returns the shopping items needed, accounting for prior days' usage.
+// Quantities are expressed in each inventory item's preferred_unit (or stored unit if no preference).
 func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error) {
 	start, err := time.Parse("2006-01-02", weekStart)
 	if err != nil {
@@ -53,19 +56,30 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	}
 	rows.Close()
 
-	// Step 2: load current inventory into simulated map
-	invRows, err := db.Query(`SELECT id, quantity FROM inventory`)
+	// Step 2: load current inventory into simulated map (in preferred unit)
+	type invInfo struct {
+		qty           float64
+		unit          string
+		preferredUnit string // canonical display/storage unit; falls back to unit if empty
+	}
+	invRows, err := db.Query(`SELECT id, quantity, unit, preferred_unit FROM inventory`)
 	if err != nil {
 		return nil, err
 	}
+	inventory := map[int64]invInfo{}
 	simulated := map[int64]float64{}
 	for invRows.Next() {
 		var id int64
 		var qty float64
-		if err := invRows.Scan(&id, &qty); err != nil {
+		var u, pu string
+		if err := invRows.Scan(&id, &qty, &u, &pu); err != nil {
 			invRows.Close()
 			return nil, err
 		}
+		if pu == "" {
+			pu = u
+		}
+		inventory[id] = invInfo{qty: qty, unit: u, preferredUnit: pu}
 		simulated[id] = qty
 	}
 	if err := invRows.Err(); err != nil {
@@ -75,7 +89,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	invRows.Close()
 
 	// Step 3: simulate day-by-day depletion
-	// key: "invID|unit" or "name|unit" for unlinked ingredients
+	// key: "invID|preferredUnit" for linked ingredients, "name|unit" for unlinked
 	needs := map[string]*ShoppingNeed{}
 
 	for _, e := range entries {
@@ -85,7 +99,6 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 		}
 		scale := float64(e.servings) / float64(recServings)
 
-		// Fetch ingredients for this recipe
 		ingRows, err := db.Query(`SELECT inventory_id, name, quantity, unit FROM recipe_ingredients WHERE recipe_id=?`, e.recipeID)
 		if err != nil {
 			return nil, err
@@ -112,44 +125,63 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 		ingRows.Close()
 
 		for _, ing := range ings {
-			needed := ing.qty * scale
-			available := 0.0
-			if ing.invID.Valid {
-				available = simulated[ing.invID.Int64]
-			}
-			shortfall := needed - available
-			if shortfall < 0 {
-				shortfall = 0
-			}
+			rawNeeded := ing.qty * scale
+			ingUnit := units.Unit(ing.unit)
 
-			key := ing.name + "|" + ing.unit
 			if ing.invID.Valid {
-				key = fmt.Sprintf("%d|%s", ing.invID.Int64, ing.unit)
-			}
-
-			if shortfall > 0 {
-				if needs[key] == nil {
-					var invIDPtr *int64
-					if ing.invID.Valid {
-						v := ing.invID.Int64
-						invIDPtr = &v
-					}
-					needs[key] = &ShoppingNeed{
-						InventoryID: invIDPtr,
-						Name:        ing.name,
-						Unit:        ing.unit,
-					}
+				inv, ok := inventory[ing.invID.Int64]
+				if !ok {
+					continue
 				}
-				needs[key].QuantityNeeded += shortfall
-			}
+				targetUnit := units.Unit(inv.preferredUnit)
 
-			// Deduct from simulated inventory for future days
-			if ing.invID.Valid {
+				// Convert ingredient quantity to the inventory item's preferred unit
+				needed := rawNeeded
+				if converted, err := units.Convert(rawNeeded, ingUnit, targetUnit); err == nil {
+					needed = converted
+				}
+
+				available := simulated[ing.invID.Int64]
+				shortfall := needed - available
+				if shortfall < 0 {
+					shortfall = 0
+				}
+
+				key := fmt.Sprintf("%d|%s", ing.invID.Int64, string(targetUnit))
+				if shortfall > 0 {
+					if needs[key] == nil {
+						v := ing.invID.Int64
+						needs[key] = &ShoppingNeed{
+							InventoryID: &v,
+							Name:        ing.name,
+							Unit:        string(targetUnit),
+						}
+					}
+					needs[key].QuantityNeeded += shortfall
+				}
+
+				// Deduct from simulated inventory in preferred unit
 				remaining := available - needed
 				if remaining < 0 {
 					remaining = 0
 				}
 				simulated[ing.invID.Int64] = remaining
+			} else {
+				// Unlinked ingredient: no conversion, use as-is
+				shortfall := rawNeeded
+				if shortfall < 0 {
+					shortfall = 0
+				}
+				key := ing.name + "|" + ing.unit
+				if shortfall > 0 {
+					if needs[key] == nil {
+						needs[key] = &ShoppingNeed{
+							Name: ing.name,
+							Unit: ing.unit,
+						}
+					}
+					needs[key].QuantityNeeded += shortfall
+				}
 			}
 		}
 	}
