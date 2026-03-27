@@ -12,6 +12,7 @@ func GenerateFromThresholds(db *sql.DB) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer rows.Close()
 
 	type belowThreshold struct {
 		id        int64
@@ -24,7 +25,7 @@ func GenerateFromThresholds(db *sql.DB) (int, error) {
 	for rows.Next() {
 		var c belowThreshold
 		if err := rows.Scan(&c.id, &c.name, &c.qty, &c.threshold, &c.unit); err != nil {
-			continue
+			return 0, err
 		}
 		candidates = append(candidates, c)
 	}
@@ -37,13 +38,17 @@ func GenerateFromThresholds(db *sql.DB) (int, error) {
 	for _, c := range candidates {
 		// Check if already on the shopping list (unchecked)
 		var count int
-		db.QueryRow(`SELECT COUNT(*) FROM shopping_list WHERE inventory_id=? AND checked=0`, c.id).Scan(&count)
+		if err := db.QueryRow(`SELECT COUNT(*) FROM shopping_list WHERE inventory_id=? AND checked=0`, c.id).Scan(&count); err != nil {
+			return 0, err
+		}
 		if count > 0 {
 			continue
 		}
 		needed := c.threshold - c.qty
-		db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'threshold')`,
-			c.id, c.name, needed, c.unit)
+		if _, err := db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'threshold')`,
+			c.id, c.name, needed, c.unit); err != nil {
+			return 0, err
+		}
 		added++
 	}
 	return added, nil

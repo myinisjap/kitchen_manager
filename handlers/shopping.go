@@ -18,7 +18,10 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
 	})
 
 	mux.HandleFunc("DELETE /api/shopping/checked", func(w http.ResponseWriter, r *http.Request) {
-		db.Exec(`DELETE FROM shopping_list WHERE checked=1`)
+		if _, err := db.Exec(`DELETE FROM shopping_list WHERE checked=1`); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		WriteJSON(w, http.StatusOK, map[string]any{"deleted": true})
 	})
 
@@ -87,7 +90,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
 		}
 		if checked, ok := patch["checked"]; ok {
 			val := 0
-			if checked == true {
+			if b, ok := checked.(bool); ok && b {
 				val = 1
 			}
 			if _, err := db.Exec(`UPDATE shopping_list SET checked=? WHERE id=?`, val, id); err != nil {

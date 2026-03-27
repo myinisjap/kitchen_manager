@@ -242,7 +242,7 @@ func TestCheckShoppingItem(t *testing.T) {
 
 func TestClearCheckedShoppingItems(t *testing.T) {
 	mux, _ := newMux(t)
-	var id1, id2 int
+	var id1 int
 	for i, name := range []string{"ItemA", "ItemB"} {
 		req := httptest.NewRequest("POST", "/api/shopping/", bytes.NewBufferString(`{"name":"`+name+`","quantity_needed":1,"unit":""}`))
 		w := httptest.NewRecorder()
@@ -251,9 +251,6 @@ func TestClearCheckedShoppingItems(t *testing.T) {
 		json.NewDecoder(w.Body).Decode(&c)
 		if i == 0 {
 			id1 = int(c["id"].(float64))
-		} else {
-			id2 = int(c["id"].(float64))
-			_ = id2
 		}
 	}
 	// Check ItemA
@@ -302,6 +299,11 @@ func TestGenerateFromThresholds(t *testing.T) {
 	if w2.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w2.Code, w2.Body)
 	}
+	var genResult map[string]any
+	json.NewDecoder(w2.Body).Decode(&genResult)
+	if genResult["added"] != 1.0 {
+		t.Errorf("want added=1, got %v", genResult["added"])
+	}
 
 	req3 := httptest.NewRequest("GET", "/api/shopping/", nil)
 	w3 := httptest.NewRecorder()
@@ -316,5 +318,30 @@ func TestGenerateFromThresholds(t *testing.T) {
 	}
 	if !found {
 		t.Error("ThresholdTest not found in shopping list after threshold generation")
+	}
+}
+
+func TestGenerateFromThresholdsIdempotent(t *testing.T) {
+	mux, _ := newMux(t)
+	// Create item below threshold
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/inventory/",
+		bytes.NewBufferString(`{"name":"IdempTest","quantity":0.1,"unit":"kg","location":"pantry","low_threshold":1.0}`)))
+
+	// First call — should add 1
+	w1 := httptest.NewRecorder()
+	mux.ServeHTTP(w1, httptest.NewRequest("POST", "/api/shopping/generate-from-thresholds", nil))
+	var r1 map[string]any
+	json.NewDecoder(w1.Body).Decode(&r1)
+	if r1["added"] != 1.0 {
+		t.Errorf("first call: want added=1, got %v", r1["added"])
+	}
+
+	// Second call — item already on unchecked list, should add 0
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, httptest.NewRequest("POST", "/api/shopping/generate-from-thresholds", nil))
+	var r2 map[string]any
+	json.NewDecoder(w2.Body).Decode(&r2)
+	if r2["added"] != 0.0 {
+		t.Errorf("second call: want added=0 (idempotent), got %v", r2["added"])
 	}
 }
