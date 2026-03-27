@@ -213,7 +213,29 @@
       <input x-model="itemForm.name" placeholder="Name *" class="w-full border rounded-lg px-3 py-2 text-sm" />
       <div class="flex gap-2">
         <input x-model.number="itemForm.quantity" type="number" placeholder="Quantity" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
-        <input x-model="itemForm.unit" placeholder="Unit (e.g. kg)" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <select x-model="itemForm.unit" class="flex-1 border rounded-lg px-3 py-2 text-sm">
+          <option value="">Unit</option>
+          <template x-for="dim in ['mass','volume','count']" :key="dim">
+            <optgroup :label="dim">
+              <template x-for="u in (unitGroups[dim] || [])" :key="u">
+                <option :value="u" x-text="u"></option>
+              </template>
+            </optgroup>
+          </template>
+        </select>
+      </div>
+      <div class="flex gap-2 items-center">
+        <label class="text-sm text-gray-600 whitespace-nowrap">Preferred unit:</label>
+        <select x-model="itemForm.preferred_unit" class="flex-1 border rounded-lg px-3 py-2 text-sm">
+          <option value="">Same as unit</option>
+          <template x-for="dim in ['mass','volume','count']" :key="dim">
+            <optgroup :label="dim">
+              <template x-for="u in (unitGroups[dim] || [])" :key="u">
+                <option :value="u" x-text="u"></option>
+              </template>
+            </optgroup>
+          </template>
+        </select>
       </div>
       <input x-model="itemForm.location" placeholder="Location (fridge, pantry...)" class="w-full border rounded-lg px-3 py-2 text-sm" />
       <input x-model="itemForm.expiration_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm" />
@@ -235,7 +257,16 @@
       <input x-model="shoppingForm.name" placeholder="Item name *" class="w-full border rounded-lg px-3 py-2 text-sm" />
       <div class="flex gap-2">
         <input x-model.number="shoppingForm.quantity_needed" type="number" placeholder="Qty" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
-        <input x-model="shoppingForm.unit" placeholder="Unit" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <select x-model="shoppingForm.unit" class="flex-1 border rounded-lg px-3 py-2 text-sm">
+          <option value="">Unit</option>
+          <template x-for="dim in ['mass','volume','count']" :key="dim">
+            <optgroup :label="dim">
+              <template x-for="u in (unitGroups[dim] || [])" :key="u">
+                <option :value="u" x-text="u"></option>
+              </template>
+            </optgroup>
+          </template>
+        </select>
       </div>
       <div class="flex gap-2 pt-2">
         <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Cancel</button>
@@ -259,7 +290,16 @@
         <div class="flex gap-1">
           <input x-model="ing.name" placeholder="Ingredient" class="flex-1 border rounded-lg px-2 py-1.5 text-sm" />
           <input x-model.number="ing.quantity" type="number" placeholder="Qty" class="w-16 border rounded-lg px-2 py-1.5 text-sm" />
-          <input x-model="ing.unit" placeholder="Unit" class="w-16 border rounded-lg px-2 py-1.5 text-sm" />
+          <select x-model="ing.unit" class="w-24 border rounded-lg px-2 py-1.5 text-sm">
+            <option value="">Unit</option>
+            <template x-for="dim in ['mass','volume','count']" :key="dim">
+              <optgroup :label="dim">
+                <template x-for="u in (unitGroups[dim] || [])" :key="u">
+                  <option :value="u" x-text="u"></option>
+                </template>
+              </optgroup>
+            </template>
+          </select>
           <button @click="recipeForm.ingredients.splice(idx, 1)" class="text-red-400 text-sm px-1">✕</button>
         </div>
       </template>
@@ -360,7 +400,8 @@
         inventoryLocation: '',
         locations: ['fridge', 'freezer', 'pantry', 'cabinet', 'other'],
         editingItem: null,
-        itemForm: { name: '', quantity: 0, unit: '', location: '', expiration_date: '', low_threshold: 1 },
+        unitGroups: {},
+        itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1 },
 
         // Shopping
         shoppingItems: [],
@@ -385,6 +426,8 @@
           await this.fetchShoppingList();
           await this.fetchRecipes();
           await this.fetchCalendar();
+          const uRes = await fetch('/api/units');
+          this.unitGroups = await uRes.json();
         },
 
         async switchTab(tab) {
@@ -416,13 +459,13 @@
 
         openAddItem() {
           this.editingItem = null;
-          this.itemForm = { name: '', quantity: 0, unit: '', location: '', expiration_date: '', low_threshold: 1 };
+          this.itemForm = { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1 };
           this.modal = 'item';
         },
 
         editItem(item) {
           this.editingItem = item;
-          this.itemForm = { ...item };
+          this.itemForm = { ...item, preferred_unit: item.preferred_unit || '' };
           this.modal = 'item';
         },
 
