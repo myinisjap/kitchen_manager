@@ -453,6 +453,128 @@ func TestAddMealToCalendar(t *testing.T) {
 	}
 }
 
+func TestFullWeeklyPlanningFlow(t *testing.T) {
+	mux, _ := newMux(t)
+
+	// Step 1: Add pasta to inventory (above threshold — should NOT appear in threshold shopping)
+	pastaW := httptest.NewRecorder()
+	mux.ServeHTTP(pastaW, httptest.NewRequest("POST", "/api/inventory/",
+		bytes.NewBufferString(`{"name":"Pasta","quantity":500,"unit":"g","location":"Pantry","low_threshold":200}`)))
+	if pastaW.Code != http.StatusCreated {
+		t.Fatalf("create pasta: want 201, got %d: %s", pastaW.Code, pastaW.Body)
+	}
+	var pastaItem map[string]any
+	json.Unmarshal(pastaW.Body.Bytes(), &pastaItem)
+	pastaID := int(pastaItem["id"].(float64))
+
+	// Step 2: Add sauce to inventory (below threshold — SHOULD appear in threshold shopping)
+	sauceW := httptest.NewRecorder()
+	mux.ServeHTTP(sauceW, httptest.NewRequest("POST", "/api/inventory/",
+		bytes.NewBufferString(`{"name":"Tomato Sauce","quantity":1,"unit":"jar","location":"Pantry","low_threshold":2}`)))
+	if sauceW.Code != http.StatusCreated {
+		t.Fatalf("create sauce: want 201, got %d: %s", sauceW.Code, sauceW.Body)
+	}
+	var sauceItem map[string]any
+	json.Unmarshal(sauceW.Body.Bytes(), &sauceItem)
+	sauceID := int(sauceItem["id"].(float64))
+
+	// Step 3: Generate shopping from thresholds — verify exactly 1 item (sauce), not pasta
+	threshW := httptest.NewRecorder()
+	mux.ServeHTTP(threshW, httptest.NewRequest("POST", "/api/shopping/generate-from-thresholds", nil))
+	if threshW.Code != http.StatusOK {
+		t.Fatalf("generate-from-thresholds: want 200, got %d: %s", threshW.Code, threshW.Body)
+	}
+	var threshResult map[string]any
+	json.Unmarshal(threshW.Body.Bytes(), &threshResult)
+	if threshResult["added"] != 1.0 {
+		t.Errorf("threshold generation: want added=1 (sauce only), got %v", threshResult["added"])
+	}
+
+	// Verify sauce is in list, pasta is not
+	listW := httptest.NewRecorder()
+	mux.ServeHTTP(listW, httptest.NewRequest("GET", "/api/shopping/", nil))
+	var shoppingItems []map[string]any
+	json.Unmarshal(listW.Body.Bytes(), &shoppingItems)
+	foundSauce, foundPasta := false, false
+	for _, item := range shoppingItems {
+		if item["name"] == "Tomato Sauce" {
+			foundSauce = true
+		}
+		if item["name"] == "Pasta" {
+			foundPasta = true
+		}
+	}
+	if !foundSauce {
+		t.Error("threshold generation: Tomato Sauce should be in shopping list (below threshold)")
+	}
+	if foundPasta {
+		t.Error("threshold generation: Pasta should NOT be in shopping list (above threshold)")
+	}
+
+	// Step 4: Create recipe "Pasta with Sauce"
+	recipeBody := `{"name":"Pasta with Sauce","tags":"dinner","servings":2,"ingredients":[` +
+		`{"name":"Pasta","quantity":300,"unit":"g","inventory_id":` + strconv.Itoa(pastaID) + `},` +
+		`{"name":"Tomato Sauce","quantity":2,"unit":"jar","inventory_id":` + strconv.Itoa(sauceID) + `}` +
+		`]}`
+	recipeW := httptest.NewRecorder()
+	mux.ServeHTTP(recipeW, httptest.NewRequest("POST", "/api/recipes/", bytes.NewBufferString(recipeBody)))
+	if recipeW.Code != http.StatusCreated {
+		t.Fatalf("create recipe: want 201, got %d: %s", recipeW.Code, recipeW.Body)
+	}
+	var recipe map[string]any
+	json.Unmarshal(recipeW.Body.Bytes(), &recipe)
+	recipeID := int(recipe["id"].(float64))
+
+	// Step 5: Add recipe to calendar on 2026-04-20 (Monday) for 2 servings
+	for _, date := range []string{"2026-04-20", "2026-04-22"} {
+		entry := `{"date":"` + date + `","meal_slot":"dinner","recipe_id":` + strconv.Itoa(recipeID) + `,"servings":2}`
+		calW := httptest.NewRecorder()
+		mux.ServeHTTP(calW, httptest.NewRequest("POST", "/api/calendar/", bytes.NewBufferString(entry)))
+		if calW.Code != http.StatusCreated {
+			t.Fatalf("add to calendar %s: want 201, got %d: %s", date, calW.Code, calW.Body)
+		}
+	}
+
+	// Step 6: Generate weekly shopping for week of 2026-04-20
+	weekW := httptest.NewRecorder()
+	mux.ServeHTTP(weekW, httptest.NewRequest("POST", "/api/calendar/generate-weekly-shopping?start=2026-04-20", nil))
+	if weekW.Code != http.StatusOK {
+		t.Fatalf("generate-weekly-shopping: want 200, got %d: %s", weekW.Code, weekW.Body)
+	}
+
+	var weekResult map[string]any
+	json.Unmarshal(weekW.Body.Bytes(), &weekResult)
+	weekItems := weekResult["items"].([]any)
+
+	// Verify math:
+	// Pasta: 500g available. Recipe needs 300g per 2 servings (scale=1.0 since servings=2, recipe.servings=2).
+	//   Monday: need 300g, have 500g → shortfall 0, simulated → 200g
+	//   Wednesday: need 300g, have 200g → shortfall 100g, simulated → 0g
+	//   Total pasta needed: 100g
+	// Sauce: 1 jar available. Recipe needs 2 jars per 2 servings (scale=1.0).
+	//   Monday: need 2, have 1 → shortfall 1, simulated → 0
+	//   Wednesday: need 2, have 0 → shortfall 2, simulated → 0
+	//   Total sauce needed: 3 jars
+
+	var pastaNeeded, sauceNeeded float64
+	for _, item := range weekItems {
+		m := item.(map[string]any)
+		switch m["name"] {
+		case "Pasta":
+			pastaNeeded += m["quantity_needed"].(float64)
+		case "Tomato Sauce":
+			sauceNeeded += m["quantity_needed"].(float64)
+		}
+	}
+
+	if pastaNeeded < 100.0 {
+		t.Errorf("weekly shopping: want Pasta quantity_needed >= 100g, got %v", pastaNeeded)
+	}
+	if sauceNeeded < 3.0 {
+		t.Errorf("weekly shopping: want Tomato Sauce quantity_needed >= 3 jars, got %v", sauceNeeded)
+	}
+}
+
 func TestWeeklyShoppingAccountsForInventory(t *testing.T) {
 	mux, _ := newMux(t)
 
