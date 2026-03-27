@@ -145,6 +145,18 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 		}
+		if qty, ok := patch["quantity"]; ok {
+			if q, ok := qty.(float64); ok && q < 0 {
+				WriteError(w, http.StatusBadRequest, "quantity cannot be negative")
+				return
+			}
+		}
+		if thresh, ok := patch["low_threshold"]; ok {
+			if t, ok := thresh.(float64); ok && t < 0 {
+				WriteError(w, http.StatusBadRequest, "low_threshold cannot be negative")
+				return
+			}
+		}
 		allowed := []string{"name", "quantity", "unit", "location", "expiration_date", "low_threshold", "barcode"}
 		for _, field := range allowed {
 			if val, ok := patch[field]; ok {
