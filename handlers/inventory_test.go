@@ -695,3 +695,44 @@ func TestGetUnitsEndpoint(t *testing.T) {
 		t.Error("expected count units")
 	}
 }
+
+func TestCreateRecipeInvalidIngredientUnit(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"Test Recipe","servings":2,"ingredients":[{"name":"Flour","quantity":500,"unit":"handful"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/recipes/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRecipeAvailabilityWithUnitConversion(t *testing.T) {
+	mux, db := newMux(t)
+
+	// Add 1kg of flour (stored in kg)
+	res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,location,low_threshold,preferred_unit) VALUES ('Flour',1,'kg','Pantry',0.1,'kg')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flourID, _ := res.LastInsertId()
+
+	// Create recipe calling for 800g of flour (stored in g, but pantry has 1kg = 1000g)
+	body := `{"name":"Bread","servings":1,"ingredients":[{"name":"Flour","quantity":800,"unit":"g","inventory_id":` + strconv.FormatInt(flourID, 10) + `}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/recipes/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create recipe failed: %d %s", w.Code, w.Body.String())
+	}
+
+	// Recipe should be available (1kg >= 800g)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/recipes/?available_only=true", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	var recipes []map[string]any
+	json.Unmarshal(w2.Body.Bytes(), &recipes)
+	if len(recipes) != 1 {
+		t.Errorf("expected 1 available recipe, got %d", len(recipes))
+	}
+}
