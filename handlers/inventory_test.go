@@ -29,7 +29,8 @@ func newTestDB(t *testing.T) *sql.DB {
 		location TEXT NOT NULL DEFAULT '',
 		expiration_date TEXT NOT NULL DEFAULT '',
 		low_threshold REAL NOT NULL DEFAULT 1,
-		barcode TEXT NOT NULL DEFAULT ''
+		barcode TEXT NOT NULL DEFAULT '',
+		preferred_unit TEXT NOT NULL DEFAULT ''
 	);
 	CREATE TABLE IF NOT EXISTS shopping_list (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,6 +69,30 @@ func newTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+func TestPreferredUnitColumnExists(t *testing.T) {
+	db := newTestDB(t)
+	rows, err := db.Query(`PRAGMA table_info(inventory)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, colType, notNull string
+		var dfltValue, pk interface{}
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "preferred_unit" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("inventory table missing preferred_unit column")
+	}
 }
 
 func newMux(t *testing.T) (*http.ServeMux, *sql.DB) {

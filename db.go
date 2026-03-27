@@ -29,7 +29,8 @@ func createSchema() error {
 		location        TEXT    NOT NULL DEFAULT '',
 		expiration_date TEXT    NOT NULL DEFAULT '',
 		low_threshold   REAL    NOT NULL DEFAULT 1,
-		barcode         TEXT    NOT NULL DEFAULT ''
+		barcode         TEXT    NOT NULL DEFAULT '',
+		preferred_unit  TEXT    NOT NULL DEFAULT ''
 	);
 
 	CREATE TABLE IF NOT EXISTS shopping_list (
@@ -68,5 +69,40 @@ func createSchema() error {
 		servings  INTEGER NOT NULL DEFAULT 1
 	);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migration: add preferred_unit to inventory for databases created before this column
+	rows, err := db.Query(`PRAGMA table_info(inventory)`)
+	if err != nil {
+		return err
+	}
+	var cols []string
+	for rows.Next() {
+		var cid int
+		var name, colType, notNull, dfltValue, pk string
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		cols = append(cols, name)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	hasPrefUnit := false
+	for _, c := range cols {
+		if c == "preferred_unit" {
+			hasPrefUnit = true
+			break
+		}
+	}
+	if !hasPrefUnit {
+		if _, err := db.Exec(`ALTER TABLE inventory ADD COLUMN preferred_unit TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
