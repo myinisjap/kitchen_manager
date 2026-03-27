@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"kitchen_manager/services"
+	"kitchen_manager/units"
 )
 
 func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
@@ -42,6 +43,10 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
 		}
 		if item.QuantityNeeded == 0 {
 			item.QuantityNeeded = 1
+		}
+		if item.Unit != "" && !units.IsValid(units.Unit(item.Unit)) {
+			WriteError(w, http.StatusBadRequest, "invalid unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
+			return
 		}
 		res, err := db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,?)`,
 			item.InventoryID, item.Name, item.QuantityNeeded, item.Unit, item.Source)

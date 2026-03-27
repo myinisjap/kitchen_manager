@@ -226,7 +226,7 @@ func TestGetExpiringSoon(t *testing.T) {
 
 func TestAddManualShoppingItem(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Olive Oil","quantity_needed":1,"unit":"bottle","source":"manual"}`
+	body := `{"name":"Olive Oil","quantity_needed":1,"unit":"L","source":"manual"}`
 	req := httptest.NewRequest("POST", "/api/shopping/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -734,5 +734,16 @@ func TestRecipeAvailabilityWithUnitConversion(t *testing.T) {
 	json.Unmarshal(w2.Body.Bytes(), &recipes)
 	if len(recipes) != 1 {
 		t.Errorf("expected 1 available recipe, got %d", len(recipes))
+	}
+}
+
+func TestCreateShoppingItemInvalidUnit(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"Milk","quantity_needed":2,"unit":"gallon"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/shopping/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
