@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build
 go build -o kitchen_manager
 
-# Run (serves HTTPS on :8443, HTTP redirect on :8080)
+# Run (plain HTTP on :8080 by default; see Running Modes below for TLS/Docker)
 ./kitchen_manager
 
 # Run all tests

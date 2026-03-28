@@ -31,7 +31,7 @@ func newSessionManager() *scs.SessionManager {
 	sm.Lifetime = 24 * time.Hour
 	sm.Cookie.HttpOnly = true
 	sm.Cookie.SameSite = http.SameSiteLaxMode
-	sm.Cookie.Secure = os.Getenv("SELF_SIGNED_TLS") != "true"
+	sm.Cookie.Secure = true
 	return sm
 }
 

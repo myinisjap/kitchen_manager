@@ -9,7 +9,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o kitchen_manager .
 
 # ---- runtime ----
-FROM alpine:latest
+FROM alpine:3.21
 WORKDIR /app
 COPY --from=builder /src/kitchen_manager .
 COPY --from=builder /src/static ./static

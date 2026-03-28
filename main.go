@@ -36,6 +36,15 @@ func main() {
 	var handler http.Handler = mux
 
 	if os.Getenv("OAUTH_ENABLED") == "true" {
+		if os.Getenv("GOOGLE_CLIENT_ID") == "" || os.Getenv("GOOGLE_CLIENT_SECRET") == "" {
+			log.Fatal("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set when OAUTH_ENABLED=true")
+		}
+		if os.Getenv("BASE_URL") == "" {
+			log.Fatal("BASE_URL must be set when OAUTH_ENABLED=true")
+		}
+		if os.Getenv("OAUTH_ALLOWED_EMAILS") == "" {
+			log.Fatal("OAUTH_ALLOWED_EMAILS must be set when OAUTH_ENABLED=true (comma-separated list of allowed emails)")
+		}
 		sessionManager = newSessionManager()
 		oauthCfg := newOAuthConfig()
 		allowed := allowedEmails()
