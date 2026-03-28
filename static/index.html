@@ -874,54 +874,54 @@
             const res = await fetch('/api/inventory/barcode/' + encodeURIComponent(code));
             if (res.ok) {
               const item = await res.json();
-              // Determine increment amount from OFf
-              let addQty = 1;
-              let addUnit = item.unit;
-              try {
-                const offPromise = fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json').then(r => r.json());
-                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
-                let offData = null;
-                try {
-                  offData = await Promise.race([offPromise, timeoutPromise]);
-                } catch { /* fallback to +1 */ }
-                if (offData && offData.status === 1 && offData.product) {
-                  const parsed = this.parseOffQuantity(offData.product);
-                  if (parsed) {
-                    const targetUnit = item.preferred_unit || item.unit;
-                    const converted = this.convertUnits(parsed.qty, parsed.unit, targetUnit);
-                    if (converted !== null) {
-                      addQty = converted;
-                      addUnit = targetUnit;
-                    } else {
-                      // dimension mismatch — fall back to +1 in item's unit
-                      addQty = 1;
-                      addUnit = item.unit;
-                    }
-                  }
-                }
-              } catch { /* silent — use +1 default */ }
-
-              const newQty = parseFloat((item.quantity + addQty).toFixed(4));
+              // PATCH immediately with +1 so scanning isn't blocked waiting for OFf
+              const quickQty = parseFloat((item.quantity + 1).toFixed(4));
+              this._groceryProcessing = false;
               try {
                 const patch = await fetch(`/api/inventory/${item.id}`, {
                   method: 'PATCH',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ quantity: newQty }),
+                  body: JSON.stringify({ quantity: quickQty }),
                 });
                 if (patch.ok) {
                   this.groceryScanCount++;
-                  const displayQty = Number.isInteger(addQty) ? addQty : parseFloat(addQty.toFixed(2));
-                  const displayNew = Number.isInteger(newQty) ? newQty : parseFloat(newQty.toFixed(2));
-                  this.showToast(`${item.name} +${displayQty} ${addUnit}`, 'success', `${displayNew} ${item.unit}`);
+                  this.showToast(`${item.name} +1 ${item.unit}`, 'success', `${quickQty} ${item.unit}`);
                   this.fetchInventory(); // background refresh, no await
+                  // Refine with OFf quantity in background (no await, non-blocking)
+                  (async () => {
+                    try {
+                      const offPromise = fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json').then(r => r.json());
+                      const offData = await Promise.race([offPromise, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 3000))]);
+                      if (offData && offData.status === 1 && offData.product) {
+                        const parsed = this.parseOffQuantity(offData.product);
+                        if (parsed) {
+                          const targetUnit = item.preferred_unit || item.unit;
+                          const converted = this.convertUnits(parsed.qty, parsed.unit, targetUnit);
+                          if (converted !== null && converted !== 1) {
+                            // Re-PATCH with accurate quantity
+                            const accurateQty = parseFloat((item.quantity + converted).toFixed(4));
+                            const p2 = await fetch(`/api/inventory/${item.id}`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ quantity: accurateQty }),
+                            });
+                            if (p2.ok) {
+                              const displayQty = Number.isInteger(converted) ? converted : parseFloat(converted.toFixed(2));
+                              const displayNew = Number.isInteger(accurateQty) ? accurateQty : parseFloat(accurateQty.toFixed(2));
+                              this.showToast(`${item.name} +${displayQty} ${targetUnit}`, 'success', `${displayNew} ${item.unit}`);
+                              this.fetchInventory();
+                            }
+                          }
+                        }
+                      }
+                    } catch { /* silent — +1 patch already applied */ }
+                  })();
                 } else {
                   this.showToast(`Failed to update ${item.name}`, 'error');
                 }
               } catch {
                 this.showToast(`Failed to update ${item.name}`, 'error');
-                this._groceryProcessing = false;
               }
-              this._groceryProcessing = false;
               return;
             }
           } catch { /* fall through to new item flow */ }
