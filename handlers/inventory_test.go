@@ -864,8 +864,13 @@ func TestInventorySuggestions(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodGet, "/api/inventory/suggestions?q=pasta+s", nil)
 	w2 := httptest.NewRecorder()
 	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 for q=pasta+s, got %d: %s", w2.Code, w2.Body.String())
+	}
 	var results2 []map[string]any
-	json.Unmarshal(w2.Body.Bytes(), &results2)
+	if err := json.Unmarshal(w2.Body.Bytes(), &results2); err != nil {
+		t.Fatalf("invalid JSON for q=pasta+s: %v", err)
+	}
 	if len(results2) != 1 {
 		t.Errorf("expected 1 result for q=pasta s, got %d", len(results2))
 	}
@@ -877,9 +882,29 @@ func TestInventorySuggestions(t *testing.T) {
 	req3 := httptest.NewRequest(http.MethodGet, "/api/inventory/suggestions", nil)
 	w3 := httptest.NewRecorder()
 	mux.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("expected 200 for no-q, got %d: %s", w3.Code, w3.Body.String())
+	}
 	var results3 []map[string]any
-	json.Unmarshal(w3.Body.Bytes(), &results3)
+	if err := json.Unmarshal(w3.Body.Bytes(), &results3); err != nil {
+		t.Fatalf("invalid JSON for no-q: %v", err)
+	}
 	if len(results3) != 2 {
 		t.Errorf("expected 2 results for no q, got %d", len(results3))
+	}
+
+	// q with no matches → empty array (not null)
+	req4 := httptest.NewRequest(http.MethodGet, "/api/inventory/suggestions?q=xyz", nil)
+	w4 := httptest.NewRecorder()
+	mux.ServeHTTP(w4, req4)
+	if w4.Code != http.StatusOK {
+		t.Fatalf("expected 200 for no-match q, got %d: %s", w4.Code, w4.Body.String())
+	}
+	var results4 []map[string]any
+	if err := json.Unmarshal(w4.Body.Bytes(), &results4); err != nil {
+		t.Fatalf("invalid JSON for no-match: %v", err)
+	}
+	if len(results4) != 0 {
+		t.Errorf("expected 0 results for q=xyz, got %d", len(results4))
 	}
 }
