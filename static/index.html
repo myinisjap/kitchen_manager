@@ -952,6 +952,7 @@
               this._groceryProcessing = false;
 
               // OFf refinement in background (non-blocking)
+              const qtyAtScanTime = entry.qty;
               (async () => {
                 try {
                   const offPromise = fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json').then(r => r.json());
@@ -963,7 +964,7 @@
                       const converted = this.convertUnits(parsed.qty, parsed.unit, targetUnit);
                       if (converted !== null && converted !== 1) {
                         const pendingEntry = this.groceryPendingItems.find(p => p.barcode === code);
-                        if (pendingEntry && pendingEntry.qty === 1) {
+                        if (pendingEntry && pendingEntry.qty === qtyAtScanTime) {
                           pendingEntry.qty = parseFloat(converted.toFixed(4));
                           pendingEntry.unit = targetUnit;
                         }
