@@ -25,16 +25,16 @@
 
     <!-- ===== INVENTORY TAB ===== -->
     <section x-show="activeTab === 'inventory'">
-      <div class="flex gap-2 my-4">
-        <input x-model="inventorySearch" @input.debounce.300ms="fetchInventory()" type="text" placeholder="Search items..." class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+      <div class="flex flex-wrap gap-2 my-4">
+        <input x-model="inventorySearch" @input.debounce.300ms="fetchInventory()" type="text" placeholder="Search items..." class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm" />
         <select x-model="inventoryLocation" @change="fetchInventory()" class="border rounded-lg px-3 py-2 text-sm">
           <option value="">All Locations</option>
           <template x-for="loc in locations">
             <option :value="loc" x-text="loc"></option>
           </template>
         </select>
-        <button @click="openScanner('find')" class="border border-gray-300 text-gray-600 px-3 py-1.5 rounded-lg text-sm font-medium">📷 Scan</button>
-        <button @click="openAddItem()" class="bg-green-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium">+ Add Item</button>
+        <button @click="openScanner('find')" class="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm font-medium">📷 Scan</button>
+        <button @click="openAddItem()" class="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium">+ Add Item</button>
       </div>
 
       <!-- Expiring soon banner -->
@@ -458,6 +458,14 @@
         scannerOpen: false,
         scannerMode: '',
         _codeReader: null,
+        _stream: null,
+        _scannerActive: false,
+        _scanRaf: null,
+        groceryScanOpen: false,
+        groceryScanCount: 0,
+        groceryScanPaused: false,
+        groceryNewItem: null, // prefill object when paused for unknown item
+        groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' },
         itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' },
 
         // Shopping
@@ -521,40 +529,61 @@
           this.showSuggestions = false;
         },
 
-        openScanner(mode) {
-          if (this._codeReader) this.closeScanner();
+        async openScanner(mode) {
+          if (this._scannerActive) { this.closeScanner(); }
           this.scannerMode = mode;
           this.scannerOpen = true;
-          this.$nextTick(() => {
-            if (!this.scannerOpen) return; // closed before nextTick fired
-            const hints = new Map();
-            this._codeReader = new ZXing.BrowserMultiFormatReader(hints);
-            this._codeReader.decodeFromConstraints(
-              { video: { facingMode: 'environment' } },
-              'scanner-video',
-              (result, err) => {
-                if (result) {
-                  this.onBarcodeScanned(result.getText());
-                }
-              }
-            ).catch((err) => {
-              this.closeScanner();
-              const knownErrors = ['NotAllowedError', 'PermissionDeniedError', 'NotFoundError', 'NotReadableError', 'OverconstrainedError'];
-              if (err && knownErrors.includes(err.name)) {
-                const msg = (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')
-                  ? 'Camera access denied — enter barcode manually'
-                  : 'Camera unavailable — enter barcode manually';
-                this.showToast(msg);
-              }
+          await this.$nextTick();
+          if (!this.scannerOpen) return;
+
+          const video = document.getElementById('scanner-video');
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
             });
-          });
+            if (!this.scannerOpen) { stream.getTracks().forEach(t => t.stop()); return; }
+            this._stream = stream;
+            video.srcObject = stream;
+            await video.play();
+            await new Promise(resolve => {
+              if (video.readyState >= 2) { resolve(); return; }
+              video.addEventListener('canplay', resolve, { once: true });
+            });
+          } catch (err) {
+            this.closeScanner();
+            const msg = (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')
+              ? 'Camera access denied — enter barcode manually'
+              : 'Camera unavailable — enter barcode manually';
+            this.showToast(msg);
+            return;
+          }
+
+          this._scannerActive = true;
+
+          if (typeof BarcodeDetector !== 'undefined') {
+            const detector = new BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code','itf','codabar'] });
+            const scan = async () => {
+              if (!this._scannerActive) return;
+              try {
+                const codes = await detector.detect(video);
+                if (codes.length > 0) { this.onBarcodeScanned(codes[0].rawValue); return; }
+              } catch {}
+              this._scanRaf = requestAnimationFrame(scan);
+            };
+            this._scanRaf = requestAnimationFrame(scan);
+          } else {
+            this._codeReader = new ZXing.BrowserMultiFormatReader();
+            this._codeReader.decodeFromVideoElementContinuously(video, (result, err) => {
+              if (result) this.onBarcodeScanned(result.getText());
+            });
+          }
         },
 
         closeScanner() {
-          if (this._codeReader) {
-            this._codeReader.reset();
-            this._codeReader = null;
-          }
+          this._scannerActive = false;
+          if (this._scanRaf) { cancelAnimationFrame(this._scanRaf); this._scanRaf = null; }
+          if (this._codeReader) { this._codeReader.reset(); this._codeReader = null; }
+          if (this._stream) { this._stream.getTracks().forEach(t => t.stop()); this._stream = null; }
           this.scannerOpen = false;
           this.scannerMode = '';
         },
@@ -587,6 +616,50 @@
               if (data.status === 1 && data.product) {
                 const p = data.product;
                 if (p.product_name) prefill.name = p.product_name;
+
+                // Map Open Food Facts unit strings to our valid units
+                const offUnitMap = {
+                  'g': 'g', 'gram': 'g', 'grams': 'g',
+                  'kg': 'kg', 'kilogram': 'kg', 'kilograms': 'kg',
+                  'oz': 'oz', 'ounce': 'oz', 'ounces': 'oz',
+                  'lb': 'lb', 'lbs': 'lb', 'pound': 'lb', 'pounds': 'lb',
+                  'ml': 'ml', 'milliliter': 'ml', 'milliliters': 'ml', 'millilitre': 'ml',
+                  'l': 'L', 'L': 'L', 'liter': 'L', 'liters': 'L', 'litre': 'L', 'litres': 'L',
+                  'cl': 'ml', // centiliters → convert to ml below
+                };
+
+                let qty = null, unit = null;
+
+                // Prefer structured fields
+                if (p.product_quantity && p.product_quantity_unit) {
+                  const rawUnit = p.product_quantity_unit.trim().toLowerCase();
+                  const mapped = offUnitMap[rawUnit] || offUnitMap[p.product_quantity_unit.trim()];
+                  if (mapped) {
+                    qty = parseFloat(p.product_quantity);
+                    unit = mapped;
+                    if (rawUnit === 'cl') qty = qty * 10; // cl → ml
+                  }
+                }
+
+                // Fallback: parse freeform quantity string e.g. "500 g", "1.5 L"
+                if ((qty === null || unit === null) && p.quantity) {
+                  const m = p.quantity.trim().match(/^([\d.,]+)\s*([a-zA-Z]+)/);
+                  if (m) {
+                    const rawUnit = m[2].trim().toLowerCase();
+                    const mapped = offUnitMap[rawUnit] || offUnitMap[m[2].trim()];
+                    if (mapped) {
+                      qty = parseFloat(m[1].replace(',', '.'));
+                      unit = mapped;
+                      if (rawUnit === 'cl') qty = qty * 10;
+                    }
+                  }
+                }
+
+                if (qty !== null && unit !== null && !isNaN(qty)) {
+                  prefill.quantity = qty;
+                  prefill.unit = unit;
+                  prefill.preferred_unit = unit;
+                }
               }
             }
           } catch {
@@ -662,7 +735,7 @@
 
         // --- Shopping ---
         async fetchShoppingList() {
-          const res = await fetch('/api/shopping/');
+          const res = await fetch('/api/shopping/?show_checked=true');
           this.shoppingItems = await res.json();
         },
 
