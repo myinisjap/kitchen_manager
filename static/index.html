@@ -538,6 +538,7 @@
         ],
         modal: null,
         toast: '',
+        _toastTimer: null,
         toastStyle: '',
         toastBadge: '',
 
@@ -989,10 +990,11 @@
         },
 
         showToast(msg, style = '', badge = '') {
+          clearTimeout(this._toastTimer);
           this.toast = msg;
           this.toastStyle = style;
           this.toastBadge = badge;
-          setTimeout(() => { this.toast = ''; this.toastStyle = ''; this.toastBadge = ''; }, 2500);
+          this._toastTimer = setTimeout(() => { this.toast = ''; this.toastStyle = ''; this.toastBadge = ''; }, 2500);
         },
 
         // --- Inventory ---
