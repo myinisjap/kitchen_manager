@@ -210,7 +210,25 @@
   <div x-show="modal === 'item'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
     <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
       <h2 class="text-lg font-bold" x-text="editingItem ? 'Edit Item' : 'Add Item'"></h2>
-      <input x-model="itemForm.name" placeholder="Name *" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <div class="relative">
+        <input x-model="itemForm.name"
+               @input="fetchSuggestions()"
+               @keydown.escape="showSuggestions = false"
+               @blur="setTimeout(() => showSuggestions = false, 150)"
+               placeholder="Name *"
+               class="w-full border rounded-lg px-3 py-2 text-sm"
+               autocomplete="off" />
+        <div x-show="showSuggestions && suggestions.length"
+             class="absolute z-30 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+          <template x-for="s in suggestions" :key="s.name">
+            <div @click="selectSuggestion(s)"
+                 class="flex items-center justify-between px-3 py-2 text-sm cursor-pointer hover:bg-blue-50">
+              <span x-text="s.name" class="font-medium"></span>
+              <span x-text="s.location + ' · ' + s.unit" class="text-xs text-gray-400 ml-2"></span>
+            </div>
+          </template>
+        </div>
+      </div>
       <div class="flex gap-2">
         <input x-model.number="itemForm.quantity" type="number" placeholder="Quantity" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
         <select x-model="itemForm.unit" class="flex-1 border rounded-lg px-3 py-2 text-sm">
@@ -398,9 +416,11 @@
         expiringItems: [],
         inventorySearch: '',
         inventoryLocation: '',
-        locations: ['fridge', 'freezer', 'pantry', 'cabinet', 'other'],
+        locations: [],
         editingItem: null,
         unitGroups: {},
+        suggestions: [],
+        showSuggestions: false,
         itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1 },
 
         // Shopping
@@ -428,6 +448,9 @@
           await this.fetchCalendar();
           const uRes = await fetch('/api/units');
           this.unitGroups = await uRes.json();
+          const sRes = await fetch('/api/inventory/suggestions');
+          const allItems = await sRes.json();
+          this.locations = [...new Set(allItems.map(i => i.location).filter(Boolean))];
         },
 
         async switchTab(tab) {
@@ -436,6 +459,23 @@
           if (tab === 'shopping') await this.fetchShoppingList();
           if (tab === 'recipes') await this.fetchRecipes();
           if (tab === 'calendar') await this.fetchCalendar();
+        },
+
+        async fetchSuggestions() {
+          const q = this.itemForm.name;
+          if (!q) { this.suggestions = []; this.showSuggestions = false; return; }
+          const res = await fetch('/api/inventory/suggestions?q=' + encodeURIComponent(q));
+          this.suggestions = await res.json();
+          this.showSuggestions = this.suggestions.length > 0;
+        },
+
+        selectSuggestion(s) {
+          this.itemForm.name = s.name;
+          this.itemForm.unit = s.unit;
+          this.itemForm.preferred_unit = s.preferred_unit;
+          this.itemForm.location = s.location;
+          this.itemForm.low_threshold = s.low_threshold;
+          this.showSuggestions = false;
         },
 
         showToast(msg) {
