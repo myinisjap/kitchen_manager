@@ -907,31 +907,34 @@
           if (this._scanRaf) { cancelAnimationFrame(this._scanRaf); this._scanRaf = null; }
           if (this._codeReader) { this._codeReader.reset(); this._codeReader = null; }
           if (this._stream) { this._stream.getTracks().forEach(t => t.stop()); this._stream = null; }
+          this.groceryScanPaused = false;
+          this.groceryNewItem = null;
           this.groceryScanReview = true;
         },
 
         async commitGroceryItems() {
-          const count = this.groceryPendingItems.length;
+          let successCount = 0;
           for (const pending of this.groceryPendingItems) {
             try {
               const cur = await fetch('/api/inventory/barcode/' + encodeURIComponent(pending.barcode));
               if (!cur.ok) continue;
               const item = await cur.json();
               const newQty = parseFloat((item.quantity + pending.qty).toFixed(4));
-              await fetch(`/api/inventory/${pending.id}`, {
+              const patch = await fetch(`/api/inventory/${pending.id}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ quantity: newQty }),
               });
+              if (patch.ok) successCount++;
             } catch { /* skip failed items silently */ }
           }
           this.fetchInventory();
           this.closeGroceryScanner();
-          this.showToast(`Updated ${count} item(s)`);
+          this.showToast(`Updated ${successCount} item(s)`);
         },
 
         async onGroceryBarcodeScanned(code) {
-          if (!this.groceryScanOpen || this.groceryScanPaused || this._groceryProcessing || this._scanCooldown) return;
+          if (!this.groceryScanOpen || this.groceryScanPaused || this.groceryScanReview || this._groceryProcessing || this._scanCooldown) return;
           this._groceryProcessing = true;
           this._scanCooldown = true;
           setTimeout(() => { this._scanCooldown = false; }, 2500);
