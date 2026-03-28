@@ -506,6 +506,9 @@
     </div>
   </div>
 
+  <!-- Tailwind safelist: keeps dynamically-applied classes from being purged -->
+  <div class="hidden bg-green-600 bg-red-600"></div>
+
   <!-- Toast notification -->
   <div x-show="toast" x-transition
        :class="{
