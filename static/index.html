@@ -819,9 +819,11 @@
         async openGroceryScanner() {
           if (this._scannerActive) this.closeScanner();
           this.groceryScanOpen = true;
-          this.groceryScanCount = 0;
           this.groceryScanPaused = false;
+          this.groceryScanReview = false;
+          this.groceryPendingItems = [];
           this._groceryProcessing = false;
+          this._scanCooldown = false;
           this.groceryNewItem = null;
           this.groceryCameraError = '';
           await this.$nextTick();
@@ -886,6 +888,9 @@
         closeGroceryScanner() {
           this.groceryScanOpen = false;
           this.groceryScanPaused = false;
+          this.groceryScanReview = false;
+          this.groceryPendingItems = [];
+          this._scanCooldown = false;
           this.groceryNewItem = null;
           this._scannerActive = false;
           if (this._scanRaf) { cancelAnimationFrame(this._scanRaf); this._scanRaf = null; }
@@ -893,68 +898,85 @@
           if (this._stream) { this._stream.getTracks().forEach(t => t.stop()); this._stream = null; }
         },
 
-        async onGroceryBarcodeScanned(code) {
-          if (!this.groceryScanOpen || this.groceryScanPaused || this._groceryProcessing) return;
-          this._groceryProcessing = true;
+        finishGroceryScan() {
+          if (this.groceryPendingItems.length === 0) {
+            this.closeGroceryScanner();
+            return;
+          }
+          this._scannerActive = false;
+          if (this._scanRaf) { cancelAnimationFrame(this._scanRaf); this._scanRaf = null; }
+          if (this._codeReader) { this._codeReader.reset(); this._codeReader = null; }
+          if (this._stream) { this._stream.getTracks().forEach(t => t.stop()); this._stream = null; }
+          this.groceryScanReview = true;
+        },
 
-          // Check inventory first
+        async commitGroceryItems() {
+          const count = this.groceryPendingItems.length;
+          for (const pending of this.groceryPendingItems) {
+            try {
+              const cur = await fetch('/api/inventory/barcode/' + encodeURIComponent(pending.barcode));
+              if (!cur.ok) continue;
+              const item = await cur.json();
+              const newQty = parseFloat((item.quantity + pending.qty).toFixed(4));
+              await fetch(`/api/inventory/${pending.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: newQty }),
+              });
+            } catch { /* skip failed items silently */ }
+          }
+          this.fetchInventory();
+          this.closeGroceryScanner();
+          this.showToast(`Updated ${count} item(s)`);
+        },
+
+        async onGroceryBarcodeScanned(code) {
+          if (!this.groceryScanOpen || this.groceryScanPaused || this._groceryProcessing || this._scanCooldown) return;
+          this._groceryProcessing = true;
+          this._scanCooldown = true;
+          setTimeout(() => { this._scanCooldown = false; }, 2500);
+
           try {
             const res = await fetch('/api/inventory/barcode/' + encodeURIComponent(code));
             if (res.ok) {
               const item = await res.json();
-              // PATCH immediately with +1 so scanning isn't blocked waiting for OFf
-              const quickQty = parseFloat((item.quantity + 1).toFixed(4));
+              // Add to or update pending list
+              const existing = this.groceryPendingItems.find(p => p.barcode === code);
+              if (existing) {
+                existing.qty = parseFloat((existing.qty + 1).toFixed(4));
+              } else {
+                this.groceryPendingItems.push({ id: item.id, name: item.name, qty: 1, unit: item.unit, barcode: code });
+              }
+              const entry = this.groceryPendingItems.find(p => p.barcode === code);
+              this.showToast(`${item.name} +1 ${item.unit}`, 'success', `${entry.qty} ${item.unit}`);
               this._groceryProcessing = false;
-              try {
-                const patch = await fetch(`/api/inventory/${item.id}`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ quantity: quickQty }),
-                });
-                if (patch.ok) {
-                  this.groceryScanCount++;
-                  this.showToast(`${item.name} +1 ${item.unit}`, 'success', `${quickQty} ${item.unit}`);
-                  this.fetchInventory(); // background refresh, no await
-                  // Refine with OFf quantity in background (no await, non-blocking)
-                  (async () => {
-                    try {
-                      const offPromise = fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json').then(r => r.json());
-                      const offData = await Promise.race([offPromise, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 3000))]);
-                      if (offData && offData.status === 1 && offData.product) {
-                        const parsed = this.parseOffQuantity(offData.product);
-                        if (parsed) {
-                          const targetUnit = item.preferred_unit || item.unit;
-                          const converted = this.convertUnits(parsed.qty, parsed.unit, targetUnit);
-                          if (converted !== null && converted !== 1) {
-                            // Re-PATCH with accurate quantity
-                            const accurateQty = parseFloat((item.quantity + converted).toFixed(4));
-                            const p2 = await fetch(`/api/inventory/${item.id}`, {
-                              method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ quantity: accurateQty }),
-                            });
-                            if (p2.ok) {
-                              const displayQty = Number.isInteger(converted) ? converted : parseFloat(converted.toFixed(2));
-                              const displayNew = Number.isInteger(accurateQty) ? accurateQty : parseFloat(accurateQty.toFixed(2));
-                              this.showToast(`${item.name} +${displayQty} ${targetUnit}`, 'success', `${displayNew} ${item.unit}`);
-                              this.fetchInventory();
-                            }
-                          }
+
+              // OFf refinement in background (non-blocking)
+              (async () => {
+                try {
+                  const offPromise = fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json').then(r => r.json());
+                  const offData = await Promise.race([offPromise, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 3000))]);
+                  if (offData && offData.status === 1 && offData.product) {
+                    const parsed = this.parseOffQuantity(offData.product);
+                    if (parsed) {
+                      const targetUnit = item.preferred_unit || item.unit;
+                      const converted = this.convertUnits(parsed.qty, parsed.unit, targetUnit);
+                      if (converted !== null && converted !== 1) {
+                        const pendingEntry = this.groceryPendingItems.find(p => p.barcode === code);
+                        if (pendingEntry && pendingEntry.qty === 1) {
+                          pendingEntry.qty = parseFloat(converted.toFixed(4));
+                          pendingEntry.unit = targetUnit;
                         }
                       }
-                    } catch { /* silent — +1 patch already applied */ }
-                  })();
-                } else {
-                  this.showToast(`Failed to update ${item.name}`, 'error');
-                }
-              } catch {
-                this.showToast(`Failed to update ${item.name}`, 'error');
-              }
+                    }
+                  }
+                } catch { /* silent */ }
+              })();
               return;
             }
           } catch { /* fall through to new item flow */ }
 
-          // Not in inventory — look up OFf and pause for confirmation
+          // Not in inventory — pause for unknown item form
           this._groceryProcessing = false;
           this.groceryScanPaused = true;
           let prefill = { barcode: code, quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1 };
@@ -976,13 +998,13 @@
             }
           } catch { /* silent */ }
 
-          // Try to pre-fill location from existing inventory item with same name
+          // Location pre-fill from existing inventory
           if (prefill.name) {
             try {
-              const inv = await fetch('/api/inventory/?name=' + encodeURIComponent(prefill.name));
-              if (inv.ok) {
-                const items = await inv.json();
-                if (items.length > 0 && items[0].location) prefill.location = items[0].location;
+              const invRes = await fetch('/api/inventory/?name=' + encodeURIComponent(prefill.name));
+              if (invRes.ok) {
+                const invData = await invRes.json();
+                if (invData && invData.length > 0 && invData[0].location) prefill.location = invData[0].location;
               }
             } catch { /* silent */ }
           }
@@ -999,7 +1021,6 @@
               body: JSON.stringify(this.groceryItemForm),
             });
             if (res.ok) {
-              this.groceryScanCount++;
               this.showToast(`Added ${this.groceryItemForm.name || 'item'} to inventory`);
               this.fetchInventory(); // background refresh, no await
             } else {
