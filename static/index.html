@@ -689,48 +689,11 @@
                 const p = data.product;
                 if (p.product_name) prefill.name = p.product_name;
 
-                // Map Open Food Facts unit strings to our valid units
-                const offUnitMap = {
-                  'g': 'g', 'gram': 'g', 'grams': 'g',
-                  'kg': 'kg', 'kilogram': 'kg', 'kilograms': 'kg',
-                  'oz': 'oz', 'ounce': 'oz', 'ounces': 'oz',
-                  'lb': 'lb', 'lbs': 'lb', 'pound': 'lb', 'pounds': 'lb',
-                  'ml': 'ml', 'milliliter': 'ml', 'milliliters': 'ml', 'millilitre': 'ml',
-                  'l': 'L', 'L': 'L', 'liter': 'L', 'liters': 'L', 'litre': 'L', 'litres': 'L',
-                  'cl': 'ml', // centiliters → convert to ml below
-                };
-
-                let qty = null, unit = null;
-
-                // Prefer structured fields
-                if (p.product_quantity && p.product_quantity_unit) {
-                  const rawUnit = p.product_quantity_unit.trim().toLowerCase();
-                  const mapped = offUnitMap[rawUnit] || offUnitMap[p.product_quantity_unit.trim()];
-                  if (mapped) {
-                    qty = parseFloat(p.product_quantity);
-                    unit = mapped;
-                    if (rawUnit === 'cl') qty = qty * 10; // cl → ml
-                  }
-                }
-
-                // Fallback: parse freeform quantity string e.g. "500 g", "1.5 L"
-                if ((qty === null || unit === null) && p.quantity) {
-                  const m = p.quantity.trim().match(/^([\d.,]+)\s*([a-zA-Z]+)/);
-                  if (m) {
-                    const rawUnit = m[2].trim().toLowerCase();
-                    const mapped = offUnitMap[rawUnit] || offUnitMap[m[2].trim()];
-                    if (mapped) {
-                      qty = parseFloat(m[1].replace(',', '.'));
-                      unit = mapped;
-                      if (rawUnit === 'cl') qty = qty * 10;
-                    }
-                  }
-                }
-
-                if (qty !== null && unit !== null && !isNaN(qty)) {
-                  prefill.quantity = qty;
-                  prefill.unit = unit;
-                  prefill.preferred_unit = unit;
+                const parsed = this.parseOffQuantity(p);
+                if (parsed) {
+                  prefill.quantity = parsed.qty;
+                  prefill.unit = parsed.unit;
+                  prefill.preferred_unit = parsed.unit;
                 }
               }
             }
@@ -739,6 +702,41 @@
           }
           this.openAddItem();
           Object.assign(this.itemForm, prefill);
+        },
+
+        parseOffQuantity(product) {
+          const offUnitMap = {
+            'g': 'g', 'gram': 'g', 'grams': 'g',
+            'kg': 'kg', 'kilogram': 'kg', 'kilograms': 'kg',
+            'oz': 'oz', 'ounce': 'oz', 'ounces': 'oz',
+            'lb': 'lb', 'lbs': 'lb', 'pound': 'lb', 'pounds': 'lb',
+            'ml': 'ml', 'milliliter': 'ml', 'milliliters': 'ml', 'millilitre': 'ml',
+            'l': 'L', 'L': 'L', 'liter': 'L', 'liters': 'L', 'litre': 'L', 'litres': 'L',
+            'cl': 'ml',
+          };
+          let qty = null, unit = null;
+          if (product.product_quantity && product.product_quantity_unit) {
+            const rawUnit = product.product_quantity_unit.trim().toLowerCase();
+            const mapped = offUnitMap[rawUnit] || offUnitMap[product.product_quantity_unit.trim()];
+            if (mapped) {
+              qty = parseFloat(product.product_quantity);
+              unit = mapped;
+              if (rawUnit === 'cl') qty = qty * 10;
+            }
+          }
+          if ((qty === null || unit === null) && product.quantity) {
+            const m = product.quantity.trim().match(/^([\d.,]+)\s*([a-zA-Z]+)/);
+            if (m) {
+              const rawUnit = m[2].trim().toLowerCase();
+              const mapped = offUnitMap[rawUnit] || offUnitMap[m[2].trim()];
+              if (mapped) {
+                qty = parseFloat(m[1].replace(',', '.'));
+                unit = mapped;
+                if (rawUnit === 'cl') qty = qty * 10;
+              }
+            }
+          }
+          return (qty !== null && unit !== null && !isNaN(qty)) ? { qty, unit } : null;
         },
 
         showToast(msg) {
