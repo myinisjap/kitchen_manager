@@ -522,9 +522,11 @@
         },
 
         openScanner(mode) {
+          if (this._codeReader) this.closeScanner();
           this.scannerMode = mode;
           this.scannerOpen = true;
           this.$nextTick(() => {
+            if (!this.scannerOpen) return; // closed before nextTick fired
             const hints = new Map();
             this._codeReader = new ZXing.BrowserMultiFormatReader(hints);
             this._codeReader.decodeFromConstraints(
@@ -537,8 +539,12 @@
               }
             ).catch((err) => {
               this.closeScanner();
-              if (err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
-                this.showToast('Camera access denied — enter barcode manually');
+              const knownErrors = ['NotAllowedError', 'PermissionDeniedError', 'NotFoundError', 'NotReadableError', 'OverconstrainedError'];
+              if (err && knownErrors.includes(err.name)) {
+                const msg = (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')
+                  ? 'Camera access denied — enter barcode manually'
+                  : 'Camera unavailable — enter barcode manually';
+                this.showToast(msg);
               }
             });
           });
@@ -550,15 +556,18 @@
             this._codeReader = null;
           }
           this.scannerOpen = false;
+          this.scannerMode = '';
         },
 
         async onBarcodeScanned(code) {
+          if (!this.scannerOpen) return; // guard against duplicate ZXing callbacks
+          const mode = this.scannerMode;
           this.closeScanner();
-          if (this.scannerMode === 'fill') {
+          if (mode === 'fill') {
             this.itemForm.barcode = code;
             return;
           }
-          // scannerMode === 'find': look up in our inventory first
+          // mode === 'find': look up in our inventory first
           try {
             const res = await fetch('/api/inventory/barcode/' + encodeURIComponent(code));
             if (res.ok) {
