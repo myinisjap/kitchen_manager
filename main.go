@@ -33,6 +33,20 @@ func main() {
 	handlers.RegisterCalendar(mux, db)
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
+	var handler http.Handler = mux
+
+	if os.Getenv("OAUTH_ENABLED") == "true" {
+		sessionManager = newSessionManager()
+		oauthCfg := newOAuthConfig()
+		allowed := allowedEmails()
+
+		mux.HandleFunc("/auth/login", handleLogin(oauthCfg))
+		mux.HandleFunc("/auth/callback", handleCallback(oauthCfg, allowed))
+		mux.HandleFunc("/auth/logout", handleLogout)
+
+		handler = sessionManager.LoadAndSave(authMiddleware(mux))
+	}
+
 	if os.Getenv("SELF_SIGNED_TLS") == "true" {
 		if err := ensureCert(certFile, keyFile); err != nil {
 			log.Fatal("tls cert:", err)
@@ -48,10 +62,10 @@ func main() {
 			})))
 		}()
 		log.Println("HTTPS listening on", httpsAddr)
-		log.Fatal(http.ListenAndServeTLS(httpsAddr, certFile, keyFile, mux))
+		log.Fatal(http.ListenAndServeTLS(httpsAddr, certFile, keyFile, handler))
 	} else {
 		log.Println("HTTP listening on", httpAddr)
-		log.Fatal(http.ListenAndServe(httpAddr, mux))
+		log.Fatal(http.ListenAndServe(httpAddr, handler))
 	}
 }
 
