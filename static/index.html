@@ -508,8 +508,19 @@
 
   <!-- Toast notification -->
   <div x-show="toast" x-transition
-       class="fixed top-16 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm px-4 py-2 rounded-full z-30 shadow-lg"
-       x-text="toast"></div>
+       :class="{
+         'bg-green-600': toastStyle === 'success',
+         'bg-red-600':   toastStyle === 'error',
+         'bg-gray-900':  toastStyle === ''
+       }"
+       class="fixed top-16 left-1/2 -translate-x-1/2 text-white text-sm px-4 py-2 rounded-full z-30 shadow-lg flex items-center gap-2">
+    <span x-show="toastStyle === 'success'">✓</span>
+    <span x-show="toastStyle === 'error'">✕</span>
+    <span x-text="toast"></span>
+    <span x-show="toastStyle === 'success' && toastBadge"
+          x-text="toastBadge"
+          class="bg-white/20 rounded-full px-2 py-0.5 text-xs font-semibold ml-1"></span>
+  </div>
 
   <script>
     function app() {
@@ -524,6 +535,8 @@
         ],
         modal: null,
         toast: '',
+        toastStyle: '',
+        toastBadge: '',
 
         // Inventory
         inventoryItems: [],
@@ -971,9 +984,11 @@
           this.groceryItemForm = { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' };
         },
 
-        showToast(msg) {
+        showToast(msg, style = '', badge = '') {
           this.toast = msg;
-          setTimeout(() => this.toast = '', 2500);
+          this.toastStyle = style;
+          this.toastBadge = badge;
+          setTimeout(() => { this.toast = ''; this.toastStyle = ''; this.toastBadge = ''; }, 2500);
         },
 
         // --- Inventory ---
