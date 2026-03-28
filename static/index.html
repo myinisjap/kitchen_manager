@@ -739,6 +739,27 @@
           return (qty !== null && unit !== null && !isNaN(qty)) ? { qty, unit } : null;
         },
 
+        unitDimension(unit) {
+          const dims = {
+            g: 'mass', kg: 'mass', oz: 'mass', lb: 'mass',
+            ml: 'volume', L: 'volume', cup: 'volume', tbsp: 'volume', tsp: 'volume',
+            piece: 'count', clove: 'count', can: 'count', jar: 'count', bunch: 'count',
+          };
+          return dims[unit] || null;
+        },
+
+        convertUnits(qty, fromUnit, toUnit) {
+          if (fromUnit === toUnit) return qty;
+          const toBaseG = { g: 1, kg: 1000, oz: 28.3495, lb: 453.592 };
+          const toBaseML = { ml: 1, L: 1000, cup: 236.588, tbsp: 14.787, tsp: 4.929 };
+          const dimFrom = this.unitDimension(fromUnit);
+          const dimTo = this.unitDimension(toUnit);
+          if (!dimFrom || dimFrom !== dimTo || dimFrom === 'count') return null;
+          if (dimFrom === 'mass') return qty * toBaseG[fromUnit] / toBaseG[toUnit];
+          if (dimFrom === 'volume') return qty * toBaseML[fromUnit] / toBaseML[toUnit];
+          return null;
+        },
+
         showToast(msg) {
           this.toast = msg;
           setTimeout(() => this.toast = '', 2500);
