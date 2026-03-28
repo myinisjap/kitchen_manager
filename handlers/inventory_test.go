@@ -943,4 +943,23 @@ func TestGetInventoryItemByBarcode(t *testing.T) {
 	if w2.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w2.Code, w2.Body.String())
 	}
+
+	// Second item with different barcode should not be returned
+	_, err = db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Butter',250,'g','','Fridge',50,'','1234567890123')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req3 := httptest.NewRequest(http.MethodGet, "/api/inventory/barcode/1234567890123", nil)
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("expected 200 for second barcode, got %d: %s", w3.Code, w3.Body.String())
+	}
+	var item3 map[string]any
+	if err := json.Unmarshal(w3.Body.Bytes(), &item3); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if item3["name"] != "Butter" {
+		t.Errorf("expected Butter, got %v", item3["name"])
+	}
 }
