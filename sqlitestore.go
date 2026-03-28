@@ -9,8 +9,8 @@ import (
 )
 
 // sqliteStore implements the scs/v2 Store interface using the existing SQLite
-// database. Session tokens are HMAC-signed with SESSION_SECRET so they cannot
-// be forged, and sessions survive server restarts.
+// database. Session tokens are HMAC-signed with SESSION_SECRET so that a
+// database read leak does not expose usable session tokens, and sessions survive server restarts.
 type sqliteStore struct {
 	db  *sql.DB
 	key []byte // 32-byte HMAC key derived from SESSION_SECRET

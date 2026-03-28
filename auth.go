@@ -23,7 +23,7 @@ func newSessionManager() *scs.SessionManager {
 		log.Fatal("SESSION_SECRET env var is required when OAUTH_ENABLED=true")
 	}
 	key, err := hex.DecodeString(secret)
-	if err != nil || len(key) < 32 {
+	if err != nil || len(key) != 32 {
 		log.Fatal("SESSION_SECRET must be a 64-character hex string (32 bytes); generate with: openssl rand -hex 32")
 	}
 	sm := scs.New()
