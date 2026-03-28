@@ -829,7 +829,7 @@
               }
               try {
                 const codes = await detector.detect(video);
-                if (codes.length > 0) { lastScanErrorToast = 0; this.onGroceryBarcodeScanned(codes[0].rawValue); return; }
+                if (codes.length > 0) { lastScanErrorToast = 0; this.onGroceryBarcodeScanned(codes[0].rawValue); }
               } catch {
                 const now = Date.now();
                 if (now - lastScanErrorToast > 2000) {
