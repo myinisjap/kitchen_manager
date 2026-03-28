@@ -560,9 +560,11 @@
         _scannerActive: false,
         _scanRaf: null,
         groceryScanOpen: false,
-        groceryScanCount: 0,
         groceryScanPaused: false,
+        groceryScanReview: false,
+        groceryPendingItems: [],
         _groceryProcessing: false,
+        _scanCooldown: false,
         groceryNewItem: null, // prefill object when paused for unknown item
         groceryCameraError: '',
         groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' },
