@@ -830,7 +830,7 @@
                 const now = Date.now();
                 if (now - lastScanErrorToast > 2000) {
                   lastScanErrorToast = now;
-                  this.showToast("Couldn't read barcode");
+                  this.showToast("Couldn't read barcode", 'error');
                 }
               }
               this._scanRaf = requestAnimationFrame(scan);
@@ -844,7 +844,7 @@
                 const now = Date.now();
                 if (now - lastScanErrorToast > 2000) {
                   lastScanErrorToast = now;
-                  this.showToast("Couldn't read barcode");
+                  this.showToast("Couldn't read barcode", 'error');
                 }
               }
             });
@@ -907,13 +907,14 @@
                 if (patch.ok) {
                   this.groceryScanCount++;
                   const displayQty = Number.isInteger(addQty) ? addQty : parseFloat(addQty.toFixed(2));
-                  this.showToast(`${item.name} +${displayQty} ${addUnit}`);
+                  const displayNew = Number.isInteger(newQty) ? newQty : parseFloat(newQty.toFixed(2));
+                  this.showToast(`${item.name} +${displayQty} ${addUnit}`, 'success', `${displayNew} ${item.unit}`);
                   this.fetchInventory(); // background refresh, no await
                 } else {
-                  this.showToast(`Failed to update ${item.name}`);
+                  this.showToast(`Failed to update ${item.name}`, 'error');
                 }
               } catch {
-                this.showToast(`Failed to update ${item.name}`);
+                this.showToast(`Failed to update ${item.name}`, 'error');
                 this._groceryProcessing = false;
               }
               this._groceryProcessing = false;
@@ -970,10 +971,10 @@
               this.showToast(`Added ${this.groceryItemForm.name || 'item'} to inventory`);
               this.fetchInventory(); // background refresh, no await
             } else {
-              this.showToast('Failed to add item');
+              this.showToast('Failed to add item', 'error');
             }
           } catch {
-            this.showToast('Failed to add item');
+            this.showToast('Failed to add item', 'error');
           }
           this.skipGroceryNewItem();
         },
