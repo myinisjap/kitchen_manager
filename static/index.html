@@ -298,8 +298,11 @@
 
     <!-- Camera -->
     <div class="relative overflow-hidden" :class="groceryScanPaused ? 'h-48' : 'flex-1'">
-      <video id="grocery-scanner-video" class="absolute inset-0 w-full h-full object-cover" playsinline></video>
-      <div x-show="!groceryScanPaused" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+      <video id="grocery-scanner-video" class="absolute inset-0 w-full h-full object-cover" playsinline x-show="!groceryCameraError"></video>
+      <div x-show="groceryCameraError" class="absolute inset-0 flex items-center justify-center bg-black">
+        <p class="text-red-400 text-sm text-center px-6" x-text="groceryCameraError"></p>
+      </div>
+      <div x-show="!groceryScanPaused && !groceryCameraError" class="absolute inset-0 flex items-center justify-center pointer-events-none">
         <div class="w-64 h-40 border-2 border-white/70 rounded-lg"></div>
       </div>
       <div x-show="groceryScanPaused" class="absolute inset-0 bg-black/60 flex items-center justify-center">
@@ -326,7 +329,13 @@
             <label class="block text-xs text-gray-500 mb-1">Unit</label>
             <select x-model="groceryItemForm.unit" class="w-full border rounded-lg px-3 py-2 text-sm">
               <option value="">—</option>
-              <template x-for="u in allUnits" :key="u"><option :value="u" x-text="u"></option></template>
+              <template x-for="dim in ['mass','volume','count']" :key="dim">
+                <optgroup :label="dim">
+                  <template x-for="u in (unitGroups[dim] || [])" :key="u">
+                    <option :value="u" x-text="u"></option>
+                  </template>
+                </optgroup>
+              </template>
             </select>
           </div>
         </div>
@@ -537,6 +546,7 @@
         groceryScanCount: 0,
         groceryScanPaused: false,
         groceryNewItem: null, // prefill object when paused for unknown item
+        groceryCameraError: '',
         groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' },
         itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' },
 
@@ -766,6 +776,7 @@
           this.groceryScanCount = 0;
           this.groceryScanPaused = false;
           this.groceryNewItem = null;
+          this.groceryCameraError = '';
           await this.$nextTick();
           await this._startGroceryCamera();
         },
@@ -783,7 +794,7 @@
             await new Promise(resolve => { video.onloadedmetadata = resolve; });
             video.play();
           } catch {
-            this.showToast('Camera access denied');
+            this.groceryCameraError = 'Camera access denied. Please allow camera access and try again.';
             return;
           }
 
@@ -833,22 +844,24 @@
               let addQty = 1;
               let addUnit = item.unit;
               try {
-                const off = await fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json');
-                if (off.ok) {
-                  const data = await off.json();
-                  if (data.status === 1 && data.product) {
-                    const parsed = this.parseOffQuantity(data.product);
-                    if (parsed) {
-                      const targetUnit = item.preferred_unit || item.unit;
-                      const converted = this.convertUnits(parsed.qty, parsed.unit, targetUnit);
-                      if (converted !== null) {
-                        addQty = converted;
-                        addUnit = targetUnit;
-                      } else {
-                        // dimension mismatch — fall back to +1 in item's unit
-                        addQty = 1;
-                        addUnit = item.unit;
-                      }
+                const offPromise = fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json').then(r => r.json());
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
+                let offData = null;
+                try {
+                  offData = await Promise.race([offPromise, timeoutPromise]);
+                } catch { /* fallback to +1 */ }
+                if (offData && offData.status === 1 && offData.product) {
+                  const parsed = this.parseOffQuantity(offData.product);
+                  if (parsed) {
+                    const targetUnit = item.preferred_unit || item.unit;
+                    const converted = this.convertUnits(parsed.qty, parsed.unit, targetUnit);
+                    if (converted !== null) {
+                      addQty = converted;
+                      addUnit = targetUnit;
+                    } else {
+                      // dimension mismatch — fall back to +1 in item's unit
+                      addQty = 1;
+                      addUnit = item.unit;
                     }
                   }
                 }
