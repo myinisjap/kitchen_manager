@@ -212,7 +212,7 @@
       <h2 class="text-lg font-bold" x-text="editingItem ? 'Edit Item' : 'Add Item'"></h2>
       <div class="relative">
         <input x-model="itemForm.name"
-               @input="fetchSuggestions()"
+               @input="clearTimeout(_suggestionTimer); _suggestionTimer = setTimeout(() => fetchSuggestions(), 250)"
                @keydown.escape="showSuggestions = false"
                @blur="setTimeout(() => showSuggestions = false, 150)"
                placeholder="Name *"
@@ -421,6 +421,7 @@
         unitGroups: {},
         suggestions: [],
         showSuggestions: false,
+        _suggestionTimer: null,
         itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1 },
 
         // Shopping
@@ -464,9 +465,15 @@
         async fetchSuggestions() {
           const q = this.itemForm.name;
           if (!q) { this.suggestions = []; this.showSuggestions = false; return; }
-          const res = await fetch('/api/inventory/suggestions?q=' + encodeURIComponent(q));
-          this.suggestions = await res.json();
-          this.showSuggestions = this.suggestions.length > 0;
+          try {
+            const res = await fetch('/api/inventory/suggestions?q=' + encodeURIComponent(q));
+            if (!res.ok) { this.suggestions = []; this.showSuggestions = false; return; }
+            this.suggestions = await res.json();
+            this.showSuggestions = this.suggestions.length > 0;
+          } catch {
+            this.suggestions = [];
+            this.showSuggestions = false;
+          }
         },
 
         selectSuggestion(s) {
@@ -500,10 +507,14 @@
         openAddItem() {
           this.editingItem = null;
           this.itemForm = { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1 };
+          this.suggestions = [];
+          this.showSuggestions = false;
           this.modal = 'item';
         },
 
         editItem(item) {
+          this.suggestions = [];
+          this.showSuggestions = false;
           this.editingItem = item;
           this.itemForm = { ...item, preferred_unit: item.preferred_unit || '' };
           this.modal = 'item';
