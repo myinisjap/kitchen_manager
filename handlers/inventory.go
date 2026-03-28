@@ -112,9 +112,9 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 		var rows *sql.Rows
 		var err error
 		if q == "" {
-			rows, err = db.Query(`SELECT name, unit, preferred_unit, location, low_threshold FROM inventory GROUP BY name ORDER BY name LIMIT 10`)
+			rows, err = db.Query(`SELECT name, MAX(unit), MAX(preferred_unit), MAX(location), MAX(low_threshold) FROM inventory GROUP BY name ORDER BY name LIMIT 10`)
 		} else {
-			rows, err = db.Query(`SELECT name, unit, preferred_unit, location, low_threshold FROM inventory WHERE name LIKE ? GROUP BY name ORDER BY name LIMIT 10`, q+"%")
+			rows, err = db.Query(`SELECT name, MAX(unit), MAX(preferred_unit), MAX(location), MAX(low_threshold) FROM inventory WHERE name LIKE ? GROUP BY name ORDER BY name LIMIT 10`, q+"%")
 		}
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
