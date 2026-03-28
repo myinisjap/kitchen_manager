@@ -799,6 +799,7 @@
           }
 
           this._scannerActive = true;
+          let lastScanErrorToast = 0;
 
           if (typeof BarcodeDetector !== 'undefined') {
             const detector = new BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code','itf','codabar'] });
@@ -809,15 +810,28 @@
               }
               try {
                 const codes = await detector.detect(video);
-                if (codes.length > 0) { this.onGroceryBarcodeScanned(codes[0].rawValue); return; }
-              } catch { /* ignore */ }
+                if (codes.length > 0) { lastScanErrorToast = 0; this.onGroceryBarcodeScanned(codes[0].rawValue); return; }
+              } catch {
+                const now = Date.now();
+                if (now - lastScanErrorToast > 2000) {
+                  lastScanErrorToast = now;
+                  this.showToast("Couldn't read barcode");
+                }
+              }
               this._scanRaf = requestAnimationFrame(scan);
             };
             this._scanRaf = requestAnimationFrame(scan);
           } else {
             this._codeReader = new ZXing.BrowserMultiFormatReader();
             this._codeReader.decodeFromVideoElementContinuously(video, (result, err) => {
-              if (result && !this.groceryScanPaused) this.onGroceryBarcodeScanned(result.getText());
+              if (result && !this.groceryScanPaused) { lastScanErrorToast = 0; this.onGroceryBarcodeScanned(result.getText()); return; }
+              if (err) {
+                const now = Date.now();
+                if (now - lastScanErrorToast > 2000) {
+                  lastScanErrorToast = now;
+                  this.showToast("Couldn't read barcode");
+                }
+              }
             });
           }
         },
