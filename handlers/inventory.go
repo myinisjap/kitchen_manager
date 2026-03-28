@@ -107,6 +107,46 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 		WriteJSON(w, http.StatusOK, items)
 	})
 
+	mux.HandleFunc("GET /api/inventory/suggestions", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		var rows *sql.Rows
+		var err error
+		if q == "" {
+			rows, err = db.Query(`SELECT DISTINCT name, unit, preferred_unit, location, low_threshold FROM inventory ORDER BY name LIMIT 10`)
+		} else {
+			rows, err = db.Query(`SELECT DISTINCT name, unit, preferred_unit, location, low_threshold FROM inventory WHERE name LIKE ? ORDER BY name LIMIT 10`, q+"%")
+		}
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer rows.Close()
+		var suggestions []map[string]any
+		for rows.Next() {
+			var name, unit, preferredUnit, location string
+			var lowThreshold float64
+			if err := rows.Scan(&name, &unit, &preferredUnit, &location, &lowThreshold); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			suggestions = append(suggestions, map[string]any{
+				"name":           name,
+				"unit":           unit,
+				"preferred_unit": preferredUnit,
+				"location":       location,
+				"low_threshold":  lowThreshold,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if suggestions == nil {
+			suggestions = []map[string]any{}
+		}
+		WriteJSON(w, http.StatusOK, suggestions)
+	})
+
 	mux.HandleFunc("GET /api/inventory/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathIDFromPattern(r, "id")
 		if !ok {

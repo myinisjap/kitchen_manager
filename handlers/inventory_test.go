@@ -815,3 +815,71 @@ func TestWeeklyShoppingUnitConversion(t *testing.T) {
 		t.Error("expected Pasta in shopping list")
 	}
 }
+
+func TestInventorySuggestions(t *testing.T) {
+	mux, db := newMux(t)
+
+	// Insert two items
+	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Pasta',500,'g','kg','Pantry',100,'','')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Pasta Sauce',3,'jar','','Fridge',2,'','')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// prefix "past" should return both
+	req := httptest.NewRequest(http.MethodGet, "/api/inventory/suggestions?q=past", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var results []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &results); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 results for q=past, got %d", len(results))
+	}
+	// verify fields present on first result
+	found := false
+	for _, r := range results {
+		if r["name"] == "Pasta" {
+			found = true
+			if r["unit"] != "g" {
+				t.Errorf("expected unit g, got %v", r["unit"])
+			}
+			if r["location"] != "Pantry" {
+				t.Errorf("expected location Pantry, got %v", r["location"])
+			}
+		}
+	}
+	if !found {
+		t.Error("Pasta not found in suggestions")
+	}
+
+	// prefix "pasta s" should return only Pasta Sauce
+	req2 := httptest.NewRequest(http.MethodGet, "/api/inventory/suggestions?q=pasta+s", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	var results2 []map[string]any
+	json.Unmarshal(w2.Body.Bytes(), &results2)
+	if len(results2) != 1 {
+		t.Errorf("expected 1 result for q=pasta s, got %d", len(results2))
+	}
+	if results2[0]["name"] != "Pasta Sauce" {
+		t.Errorf("expected Pasta Sauce, got %v", results2[0]["name"])
+	}
+
+	// no q → all items
+	req3 := httptest.NewRequest(http.MethodGet, "/api/inventory/suggestions", nil)
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	var results3 []map[string]any
+	json.Unmarshal(w3.Body.Bytes(), &results3)
+	if len(results3) != 2 {
+		t.Errorf("expected 2 results for no q, got %d\", len(results3))", len(results3))
+	}
+}
