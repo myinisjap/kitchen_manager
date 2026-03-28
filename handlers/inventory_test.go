@@ -880,6 +880,6 @@ func TestInventorySuggestions(t *testing.T) {
 	var results3 []map[string]any
 	json.Unmarshal(w3.Body.Bytes(), &results3)
 	if len(results3) != 2 {
-		t.Errorf("expected 2 results for no q, got %d\", len(results3))", len(results3))
+		t.Errorf("expected 2 results for no q, got %d", len(results3))
 	}
 }
