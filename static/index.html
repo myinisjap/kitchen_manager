@@ -545,6 +545,7 @@
         groceryScanOpen: false,
         groceryScanCount: 0,
         groceryScanPaused: false,
+        _groceryProcessing: false,
         groceryNewItem: null, // prefill object when paused for unknown item
         groceryCameraError: '',
         groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' },
@@ -775,6 +776,7 @@
           this.groceryScanOpen = true;
           this.groceryScanCount = 0;
           this.groceryScanPaused = false;
+          this._groceryProcessing = false;
           this.groceryNewItem = null;
           this.groceryCameraError = '';
           await this.$nextTick();
@@ -825,7 +827,7 @@
             this._codeReader = new ZXing.BrowserMultiFormatReader();
             this._codeReader.decodeFromVideoElementContinuously(video, (result, err) => {
               if (result && !this.groceryScanPaused) { lastScanErrorToast = 0; this.onGroceryBarcodeScanned(result.getText()); return; }
-              if (err) {
+              if (err && !(err instanceof ZXing.NotFoundException)) {
                 const now = Date.now();
                 if (now - lastScanErrorToast > 2000) {
                   lastScanErrorToast = now;
@@ -847,7 +849,8 @@
         },
 
         async onGroceryBarcodeScanned(code) {
-          if (!this.groceryScanOpen || this.groceryScanPaused) return;
+          if (!this.groceryScanOpen || this.groceryScanPaused || this._groceryProcessing) return;
+          this._groceryProcessing = true;
 
           // Check inventory first
           try {
@@ -890,34 +893,39 @@
                 });
                 if (patch.ok) {
                   this.groceryScanCount++;
-                  this.showToast(`${item.name} +${addQty} ${addUnit}`);
+                  const displayQty = Number.isInteger(addQty) ? addQty : parseFloat(addQty.toFixed(2));
+                  this.showToast(`${item.name} +${displayQty} ${addUnit}`);
+                  this.fetchInventory(); // background refresh, no await
                 } else {
                   this.showToast(`Failed to update ${item.name}`);
                 }
               } catch {
                 this.showToast(`Failed to update ${item.name}`);
+                this._groceryProcessing = false;
               }
+              this._groceryProcessing = false;
               return;
             }
           } catch { /* fall through to new item flow */ }
 
           // Not in inventory — look up OFf and pause for confirmation
+          this._groceryProcessing = false;
           this.groceryScanPaused = true;
           let prefill = { barcode: code, quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1 };
 
           try {
-            const off = await fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json');
-            if (off.ok) {
-              const data = await off.json();
-              if (data.status === 1 && data.product) {
-                const p = data.product;
-                if (p.product_name) prefill.name = p.product_name;
-                const parsed = this.parseOffQuantity(p);
-                if (parsed) {
-                  prefill.quantity = parsed.qty;
-                  prefill.unit = parsed.unit;
-                  prefill.preferred_unit = parsed.unit;
-                }
+            const offPromise = fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json`).then(r => r.json());
+            const offTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
+            let offData = null;
+            try { offData = await Promise.race([offPromise, offTimeout]); } catch { /* silent fallback */ }
+            if (offData && offData.status === 1 && offData.product) {
+              const p = offData.product;
+              if (p.product_name) prefill.name = p.product_name;
+              const parsed = this.parseOffQuantity(p);
+              if (parsed) {
+                prefill.quantity = parsed.qty;
+                prefill.unit = parsed.unit;
+                prefill.preferred_unit = parsed.unit;
               }
             }
           } catch { /* silent */ }
@@ -947,6 +955,7 @@
             if (res.ok) {
               this.groceryScanCount++;
               this.showToast(`Added ${this.groceryItemForm.name || 'item'} to inventory`);
+              this.fetchInventory(); // background refresh, no await
             } else {
               this.showToast('Failed to add item');
             }
