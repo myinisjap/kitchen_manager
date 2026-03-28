@@ -760,6 +760,181 @@
           return null;
         },
 
+        async openGroceryScanner() {
+          if (this._scannerActive) this.closeScanner();
+          this.groceryScanOpen = true;
+          this.groceryScanCount = 0;
+          this.groceryScanPaused = false;
+          this.groceryNewItem = null;
+          await this.$nextTick();
+          await this._startGroceryCamera();
+        },
+
+        async _startGroceryCamera() {
+          if (!this.groceryScanOpen) return;
+          const video = document.getElementById('grocery-scanner-video');
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+            });
+            if (!this.groceryScanOpen) { stream.getTracks().forEach(t => t.stop()); return; }
+            this._stream = stream;
+            video.srcObject = stream;
+            await new Promise(resolve => { video.onloadedmetadata = resolve; });
+            video.play();
+          } catch {
+            this.showToast('Camera access denied');
+            return;
+          }
+
+          this._scannerActive = true;
+
+          if (typeof BarcodeDetector !== 'undefined') {
+            const detector = new BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code','itf','codabar'] });
+            const scan = async () => {
+              if (!this._scannerActive || this.groceryScanPaused) {
+                if (this._scannerActive) this._scanRaf = requestAnimationFrame(scan);
+                return;
+              }
+              try {
+                const codes = await detector.detect(video);
+                if (codes.length > 0) { this.onGroceryBarcodeScanned(codes[0].rawValue); return; }
+              } catch { /* ignore */ }
+              this._scanRaf = requestAnimationFrame(scan);
+            };
+            this._scanRaf = requestAnimationFrame(scan);
+          } else {
+            this._codeReader = new ZXing.BrowserMultiFormatReader();
+            this._codeReader.decodeFromVideoElementContinuously(video, (result, err) => {
+              if (result && !this.groceryScanPaused) this.onGroceryBarcodeScanned(result.getText());
+            });
+          }
+        },
+
+        closeGroceryScanner() {
+          this.groceryScanOpen = false;
+          this.groceryScanPaused = false;
+          this.groceryNewItem = null;
+          this._scannerActive = false;
+          if (this._scanRaf) { cancelAnimationFrame(this._scanRaf); this._scanRaf = null; }
+          if (this._codeReader) { this._codeReader.reset(); this._codeReader = null; }
+          if (this._stream) { this._stream.getTracks().forEach(t => t.stop()); this._stream = null; }
+        },
+
+        async onGroceryBarcodeScanned(code) {
+          if (!this.groceryScanOpen || this.groceryScanPaused) return;
+
+          // Check inventory first
+          try {
+            const res = await fetch('/api/inventory/barcode/' + encodeURIComponent(code));
+            if (res.ok) {
+              const item = await res.json();
+              // Determine increment amount from OFf
+              let addQty = 1;
+              let addUnit = item.unit;
+              try {
+                const off = await fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json');
+                if (off.ok) {
+                  const data = await off.json();
+                  if (data.status === 1 && data.product) {
+                    const parsed = this.parseOffQuantity(data.product);
+                    if (parsed) {
+                      const targetUnit = item.preferred_unit || item.unit;
+                      const converted = this.convertUnits(parsed.qty, parsed.unit, targetUnit);
+                      if (converted !== null) {
+                        addQty = converted;
+                        addUnit = targetUnit;
+                      } else {
+                        // dimension mismatch — fall back to +1 in item's unit
+                        addQty = 1;
+                        addUnit = item.unit;
+                      }
+                    }
+                  }
+                }
+              } catch { /* silent — use +1 default */ }
+
+              const newQty = parseFloat((item.quantity + addQty).toFixed(4));
+              try {
+                const patch = await fetch(`/api/inventory/${item.id}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ quantity: newQty }),
+                });
+                if (patch.ok) {
+                  this.groceryScanCount++;
+                  this.showToast(`${item.name} +${addQty} ${addUnit}`);
+                } else {
+                  this.showToast(`Failed to update ${item.name}`);
+                }
+              } catch {
+                this.showToast(`Failed to update ${item.name}`);
+              }
+              return;
+            }
+          } catch { /* fall through to new item flow */ }
+
+          // Not in inventory — look up OFf and pause for confirmation
+          this.groceryScanPaused = true;
+          let prefill = { barcode: code, quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1 };
+
+          try {
+            const off = await fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json');
+            if (off.ok) {
+              const data = await off.json();
+              if (data.status === 1 && data.product) {
+                const p = data.product;
+                if (p.product_name) prefill.name = p.product_name;
+                const parsed = this.parseOffQuantity(p);
+                if (parsed) {
+                  prefill.quantity = parsed.qty;
+                  prefill.unit = parsed.unit;
+                  prefill.preferred_unit = parsed.unit;
+                }
+              }
+            }
+          } catch { /* silent */ }
+
+          // Try to pre-fill location from existing inventory item with same name
+          if (prefill.name) {
+            try {
+              const inv = await fetch('/api/inventory/?name=' + encodeURIComponent(prefill.name));
+              if (inv.ok) {
+                const items = await inv.json();
+                if (items.length > 0 && items[0].location) prefill.location = items[0].location;
+              }
+            } catch { /* silent */ }
+          }
+
+          this.groceryNewItem = prefill;
+          this.groceryItemForm = { name: prefill.name || '', quantity: prefill.quantity, unit: prefill.unit, preferred_unit: prefill.preferred_unit, location: prefill.location, expiration_date: '', low_threshold: 1, barcode: code };
+        },
+
+        async confirmGroceryNewItem() {
+          try {
+            const res = await fetch('/api/inventory/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(this.groceryItemForm),
+            });
+            if (res.ok) {
+              this.groceryScanCount++;
+              this.showToast(`Added ${this.groceryItemForm.name || 'item'} to inventory`);
+            } else {
+              this.showToast('Failed to add item');
+            }
+          } catch {
+            this.showToast('Failed to add item');
+          }
+          this.skipGroceryNewItem();
+        },
+
+        skipGroceryNewItem() {
+          this.groceryNewItem = null;
+          this.groceryScanPaused = false;
+          this.groceryItemForm = { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' };
+        },
+
         showToast(msg) {
           this.toast = msg;
           setTimeout(() => this.toast = '', 2500);
