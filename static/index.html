@@ -366,7 +366,7 @@
     <div x-show="groceryScanReview" class="flex-1 flex flex-col bg-white">
       <div class="flex-1 overflow-y-auto p-4">
         <div x-show="groceryPendingItems.length === 0" class="text-center text-gray-400 py-8 text-sm">No items to update</div>
-        <template x-for="(pending, i) in groceryPendingItems" :key="pending.barcode">
+        <template x-for="(pending, i) in groceryPendingItems" :key="i">
           <div class="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
             <div>
               <span class="font-medium text-gray-800 text-sm" x-text="pending.name"></span>
