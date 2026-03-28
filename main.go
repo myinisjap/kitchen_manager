@@ -26,10 +26,6 @@ func main() {
 	}
 	defer db.Close()
 
-	if err := ensureCert(certFile, keyFile); err != nil {
-		log.Fatal("tls cert:", err)
-	}
-
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db)
 	handlers.RegisterShopping(mux, db)
@@ -37,24 +33,28 @@ func main() {
 	handlers.RegisterCalendar(mux, db)
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
-	// HTTP → HTTPS redirect
-	go func() {
-		log.Println("HTTP redirect listening on", httpAddr)
-		log.Fatal(http.ListenAndServe(httpAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			host, _, err := parseHost(r.Host)
-			if err != nil {
-				host = r.Host
-			}
-			http.Redirect(w, r, "https://"+host+httpsAddr+r.RequestURI, http.StatusMovedPermanently)
-		})))
-	}()
-
-	log.Println("HTTPS listening on", httpsAddr)
-	log.Fatal(http.ListenAndServeTLS(httpsAddr, certFile, keyFile, mux))
+	if os.Getenv("SELF_SIGNED_TLS") == "true" {
+		if err := ensureCert(certFile, keyFile); err != nil {
+			log.Fatal("tls cert:", err)
+		}
+		go func() {
+			log.Println("HTTP redirect listening on", httpAddr)
+			log.Fatal(http.ListenAndServe(httpAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				host, _, err := parseHost(r.Host)
+				if err != nil {
+					host = r.Host
+				}
+				http.Redirect(w, r, "https://"+host+httpsAddr+r.RequestURI, http.StatusMovedPermanently)
+			})))
+		}()
+		log.Println("HTTPS listening on", httpsAddr)
+		log.Fatal(http.ListenAndServeTLS(httpsAddr, certFile, keyFile, mux))
+	} else {
+		log.Println("HTTP listening on", httpAddr)
+		log.Fatal(http.ListenAndServe(httpAddr, mux))
+	}
 }
 
-// parseHost splits host:port, returning just the host. If there is no port,
-// returns the whole string and no error.
 func parseHost(hostport string) (string, string, error) {
 	host, port, err := net.SplitHostPort(hostport)
 	return host, port, err
