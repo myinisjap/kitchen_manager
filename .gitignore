@@ -1,0 +1,4 @@
+.env
+kitchen.db
+cert.pem
+key.pem
