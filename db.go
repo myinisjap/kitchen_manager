@@ -68,6 +68,14 @@ func createSchema() error {
 		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
 		servings  INTEGER NOT NULL DEFAULT 1
 	);
+
+	CREATE TABLE IF NOT EXISTS sessions (
+		token  TEXT PRIMARY KEY,
+		data   BLOB NOT NULL,
+		expiry DATETIME NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expiry);
 	`)
 	if err != nil {
 		return err
@@ -80,7 +88,8 @@ func createSchema() error {
 	var cols []string
 	for rows.Next() {
 		var cid int
-		var name, colType, notNull, dfltValue, pk string
+		var name, colType, notNull, pk string
+		var dfltValue sql.NullString
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
 			rows.Close()
 			return err

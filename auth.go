@@ -1,10 +1,10 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -18,7 +18,16 @@ import (
 var sessionManager *scs.SessionManager
 
 func newSessionManager() *scs.SessionManager {
+	secret := os.Getenv("SESSION_SECRET")
+	if secret == "" {
+		log.Fatal("SESSION_SECRET env var is required when OAUTH_ENABLED=true")
+	}
+	key, err := hex.DecodeString(secret)
+	if err != nil || len(key) < 32 {
+		log.Fatal("SESSION_SECRET must be a 64-character hex string (32 bytes); generate with: openssl rand -hex 32")
+	}
 	sm := scs.New()
+	sm.Store = newSQLiteStore(db, key)
 	sm.Lifetime = 24 * time.Hour
 	sm.Cookie.HttpOnly = true
 	sm.Cookie.SameSite = http.SameSiteLaxMode
@@ -87,13 +96,13 @@ func handleCallback(oauthCfg *oauth2.Config, allowed map[string]bool) http.Handl
 		}
 		sessionManager.Remove(r.Context(), "oauth_state")
 
-		token, err := oauthCfg.Exchange(context.Background(), r.URL.Query().Get("code"))
+		token, err := oauthCfg.Exchange(r.Context(), r.URL.Query().Get("code"))
 		if err != nil {
 			http.Error(w, "token exchange failed", http.StatusInternalServerError)
 			return
 		}
 
-		client := oauthCfg.Client(context.Background(), token)
+		client := oauthCfg.Client(r.Context(), token)
 		resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
 		if err != nil {
 			http.Error(w, "userinfo fetch failed", http.StatusInternalServerError)
@@ -101,11 +110,21 @@ func handleCallback(oauthCfg *oauth2.Config, allowed map[string]bool) http.Handl
 		}
 		defer resp.Body.Close()
 
+		if resp.StatusCode != http.StatusOK {
+			http.Error(w, "userinfo fetch failed", http.StatusInternalServerError)
+			return
+		}
+
 		var info struct {
 			Email string `json:"email"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 			http.Error(w, "userinfo decode failed", http.StatusInternalServerError)
+			return
+		}
+
+		if info.Email == "" {
+			http.Error(w, "could not determine email", http.StatusInternalServerError)
 			return
 		}
 
@@ -120,6 +139,10 @@ func handleCallback(oauthCfg *oauth2.Config, allowed map[string]bool) http.Handl
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	sessionManager.Destroy(r.Context())
 	http.Redirect(w, r, "/auth/login", http.StatusFound)
 }
