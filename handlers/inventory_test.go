@@ -908,3 +908,39 @@ func TestInventorySuggestions(t *testing.T) {
 		t.Errorf("expected 0 results for q=xyz, got %d", len(results4))
 	}
 }
+
+func TestGetInventoryItemByBarcode(t *testing.T) {
+	mux, db := newMux(t)
+
+	// Insert item with a known barcode
+	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Olive Oil',1,'L','','Pantry',1,'','5000157024671')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Found: exact barcode match → 200 + correct item
+	req := httptest.NewRequest(http.MethodGet, "/api/inventory/barcode/5000157024671", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var item map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &item); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if item["name"] != "Olive Oil" {
+		t.Errorf("expected name Olive Oil, got %v", item["name"])
+	}
+	if item["barcode"] != "5000157024671" {
+		t.Errorf("expected barcode 5000157024671, got %v", item["barcode"])
+	}
+
+	// Not found: unknown barcode → 404
+	req2 := httptest.NewRequest(http.MethodGet, "/api/inventory/barcode/9999999999999", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w2.Code, w2.Body.String())
+	}
+}

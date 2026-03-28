@@ -147,6 +147,25 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB) {
 		WriteJSON(w, http.StatusOK, suggestions)
 	})
 
+	mux.HandleFunc("GET /api/inventory/barcode/{code}", func(w http.ResponseWriter, r *http.Request) {
+		code := r.PathValue("code")
+		if code == "" {
+			WriteError(w, http.StatusBadRequest, "missing barcode")
+			return
+		}
+		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit FROM inventory WHERE barcode=?`, code)
+		item, err := scanInventoryRow(row)
+		if err == sql.ErrNoRows {
+			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, item)
+	})
+
 	mux.HandleFunc("GET /api/inventory/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathIDFromPattern(r, "id")
 		if !ok {
