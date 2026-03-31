@@ -4,25 +4,57 @@ A self-hosted kitchen management app for tracking pantry inventory, planning mea
 
 
 ## Features
+<details>
+<summary>
+Pantry / Inventory — Track items with quantities, units, locations, expiry dates, and low-stock thresholds. Barcode scanning via phone camera.
+</summary>
 
-- **Pantry / Inventory** — Track items with quantities, units, locations, expiry dates, and low-stock thresholds. Barcode scanning via phone camera.
 ![example_screenshots/pantry.png](example_screenshots/pantry.png)
 
-- **Shopping List** — Manual items, auto-generated from low-stock thresholds, pulled from recipes, or from the weekly meal calendar.
+</details>
+
+<details>
+<summary>
+Shopping List — Manual items, auto-generated from low-stock thresholds, pulled from recipes, or from the weekly meal calendar.
+</summary>
+
 ![example_screenshots/shopping.png](example_screenshots/shopping.png)
 
-- **Recipes** — Import recipes from URLs (JSON-LD structured data extraction), paste HTML, or add manually. Ingredients auto-link to inventory items by name.
+</details>
+
+<details>
+<summary>
+Recipes — Import recipes from URLs (JSON-LD structured data extraction), paste HTML, or add manually. Ingredients auto-link to inventory items by name.
+</summary>
+
 ![example_screenshots/recipes.png](example_screenshots/recipes.png)
 
-- **Meal Calendar** — Schedule recipes on a weekly calendar. View, cook, and track meals. Cooking a recipe deducts ingredients from inventory.
+</details>
+
+<details>
+<summary>
+Meal Calendar — Schedule recipes on a weekly calendar. View, cook, and track meals. Cooking a recipe deducts ingredients from inventory.
+</summary>
+
 ![example_screenshots/calendar.png](example_screenshots/calendar.png)
 
-- **Meal History** — Log of cooked meals with ingredient deductions.
+</details>
+<details>
+<summary>
+Meal History — Log of cooked meals with ingredient deductions.
+</summary>
+
 ![example_screenshots/history.png](example_screenshots/history.png)
 
-- **Expiry Tracking** — See items expiring soon across the pantry.
-- **WebSocket sync** — Real-time updates across multiple browser sessions.
-- **Google OAuth** — Optional authentication with an email allowlist.
+</details>
+
+<br>
+
+**Expiry Tracking** — See items expiring soon across the pantry.
+
+**WebSocket sync** — Real-time updates across multiple browser sessions.
+
+**Google OAuth** — Optional authentication with an email allowlist.
 
 
 
