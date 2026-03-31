@@ -26,11 +26,19 @@ func main() {
 	}
 	defer db.Close()
 
+	hub := handlers.NewHub()
+	go hub.Run()
+
 	mux := http.NewServeMux()
-	handlers.RegisterInventory(mux, db)
-	handlers.RegisterShopping(mux, db)
-	handlers.RegisterRecipes(mux, db)
-	handlers.RegisterCalendar(mux, db)
+	handlers.RegisterInventory(mux, db, hub)
+	handlers.RegisterShopping(mux, db, hub)
+	handlers.RegisterRecipes(mux, db, hub)
+	handlers.RegisterRecipeImport(mux)
+	handlers.RegisterCalendar(mux, db, hub)
+	handlers.RegisterHistory(mux, db)
+	handlers.RegisterSettings(mux, db)
+	handlers.RegisterMeals(mux, db)
+	mux.HandleFunc("GET /ws", handlers.ServeWs(hub))
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
 	var handler http.Handler = mux

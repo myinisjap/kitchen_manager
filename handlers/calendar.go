@@ -8,7 +8,17 @@ import (
 	"kitchen_manager/services"
 )
 
-func RegisterCalendar(mux *http.ServeMux, db *sql.DB) {
+func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
+	var wsHub *Hub
+	if len(hub) > 0 {
+		wsHub = hub[0]
+	}
+	broadcastCalendar := func() {
+		if wsHub != nil {
+			wsHub.Broadcast("calendar_updated")
+		}
+	}
+
 	mux.HandleFunc("POST /api/calendar/", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Date     string `json:"date"`
@@ -51,6 +61,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB) {
 			"id": id, "date": input.Date, "meal_slot": input.MealSlot,
 			"recipe_id": input.RecipeID, "servings": input.Servings,
 		})
+		broadcastCalendar()
 	})
 
 	mux.HandleFunc("GET /api/calendar/week", func(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +122,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+		broadcastCalendar()
 	})
 
 	mux.HandleFunc("POST /api/calendar/generate-weekly-shopping", func(w http.ResponseWriter, r *http.Request) {
@@ -150,5 +162,11 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB) {
 			items = []map[string]any{}
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"week_start": startStr, "items": items})
+		if len(items) > 0 {
+			if wsHub != nil {
+				wsHub.Broadcast("shopping_updated")
+			}
+		}
+		broadcastCalendar()
 	})
 }

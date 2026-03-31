@@ -2,3 +2,9 @@
 kitchen.db
 cert.pem
 key.pem
+kitchen_manager
+Caddyfile
+.omc/
+.claude/
+.superpowers/
+docs/superpowers/

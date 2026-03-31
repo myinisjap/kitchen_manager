@@ -6,6 +6,10 @@ services:
       - kitchen_data:/data
     restart: unless-stopped
 
+  splash:
+    image: scrapinghub/splash
+    restart: unless-stopped
+
   caddy:
     image: caddy:2-alpine
     ports:

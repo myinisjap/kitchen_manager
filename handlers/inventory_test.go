@@ -30,7 +30,22 @@ func newTestDB(t *testing.T) *sql.DB {
 		expiration_date TEXT NOT NULL DEFAULT '',
 		low_threshold REAL NOT NULL DEFAULT 1,
 		barcode TEXT NOT NULL DEFAULT '',
-		preferred_unit TEXT NOT NULL DEFAULT ''
+		preferred_unit TEXT NOT NULL DEFAULT '',
+		unit_cost_cents INTEGER NOT NULL DEFAULT 0,
+		quantity_per_scan REAL NOT NULL DEFAULT 1
+	);
+	CREATE TABLE IF NOT EXISTS inventory_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		inventory_id INTEGER NOT NULL REFERENCES inventory(id),
+		item_name TEXT NOT NULL DEFAULT '',
+		changed_at TEXT NOT NULL,
+		changed_by TEXT NOT NULL DEFAULT 'system',
+		change_type TEXT NOT NULL,
+		quantity_before REAL,
+		quantity_after REAL,
+		unit TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL DEFAULT '',
+		recipe_id INTEGER REFERENCES recipes(id)
 	);
 	CREATE TABLE IF NOT EXISTS shopping_list (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +78,28 @@ func newTestDB(t *testing.T) *sql.DB {
 		meal_slot TEXT NOT NULL DEFAULT 'dinner',
 		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
 		servings INTEGER NOT NULL DEFAULT 1
+	);
+	CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL DEFAULT ''
+	);
+	CREATE TABLE IF NOT EXISTS meal_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
+		recipe_name TEXT NOT NULL DEFAULT '',
+		cooked_at TEXT NOT NULL,
+		servings_made INTEGER NOT NULL DEFAULT 1,
+		total_cost_cents INTEGER,
+		notes TEXT NOT NULL DEFAULT ''
+	);
+	CREATE TABLE IF NOT EXISTS meal_history_ingredients (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		meal_history_id INTEGER NOT NULL REFERENCES meal_history(id),
+		inventory_id INTEGER REFERENCES inventory(id),
+		ingredient_name TEXT NOT NULL DEFAULT '',
+		quantity_used REAL NOT NULL DEFAULT 0,
+		unit TEXT NOT NULL DEFAULT '',
+		cost_cents INTEGER
 	);`)
 	if err != nil {
 		t.Fatal(err)

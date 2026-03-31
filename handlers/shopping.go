@@ -8,7 +8,17 @@ import (
 	"kitchen_manager/units"
 )
 
-func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
+func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
+	var wsHub *Hub
+	if len(hub) > 0 {
+		wsHub = hub[0]
+	}
+	broadcastShopping := func() {
+		if wsHub != nil {
+			wsHub.Broadcast("shopping_updated")
+		}
+	}
+
 	mux.HandleFunc("POST /api/shopping/generate-from-thresholds", func(w http.ResponseWriter, r *http.Request) {
 		added, err := services.GenerateFromThresholds(db)
 		if err != nil {
@@ -16,6 +26,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"added": added})
+		broadcastShopping()
 	})
 
 	mux.HandleFunc("DELETE /api/shopping/checked", func(w http.ResponseWriter, r *http.Request) {
@@ -24,6 +35,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"deleted": true})
+		broadcastShopping()
 	})
 
 	mux.HandleFunc("POST /api/shopping/", func(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +72,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
 			"quantity_needed": item.QuantityNeeded, "unit": item.Unit,
 			"checked": false, "source": item.Source,
 		})
+		broadcastShopping()
 	})
 
 	mux.HandleFunc("GET /api/shopping/", func(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +133,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		WriteJSON(w, http.StatusOK, item)
+		broadcastShopping()
 	})
 
 	mux.HandleFunc("DELETE /api/shopping/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +153,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+		broadcastShopping()
 	})
 }
 

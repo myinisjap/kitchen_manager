@@ -5,11 +5,22 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"kitchen_manager/units"
 )
 
-func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
+func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
+	var wsHub *Hub
+	if len(hub) > 0 {
+		wsHub = hub[0]
+	}
+	broadcastRecipes := func() {
+		if wsHub != nil {
+			wsHub.Broadcast("recipes_updated")
+		}
+	}
+
 	mux.HandleFunc("POST /api/recipes/", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Name         string `json:"name"`
@@ -45,8 +56,13 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
 		}
 		recipeID, _ := res.LastInsertId()
 		for _, ing := range input.Ingredients {
+			ingName := strings.ToLower(strings.TrimSpace(ing.Name))
+			invID := ing.InventoryID
+			if invID == nil {
+				invID = resolveInventoryID(db, ingName)
+			}
 			if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
-				recipeID, ing.InventoryID, ing.Name, ing.Quantity, ing.Unit); err != nil {
+				recipeID, invID, ingName, ing.Quantity, ing.Unit); err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -57,6 +73,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		WriteJSON(w, http.StatusCreated, recipe)
+		broadcastRecipes()
 	})
 
 	mux.HandleFunc("GET /api/recipes/", func(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +162,21 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
 		WriteJSON(w, http.StatusOK, recipe)
 	})
 
+	mux.HandleFunc("GET /api/recipes/{id}/future-calendar", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := pathIDFromPattern(r, "id")
+		if !ok {
+			WriteError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		today := time.Now().Format("2006-01-02")
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM meal_calendar WHERE recipe_id=? AND date>=?`, id, today).Scan(&count); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]any{"count": count})
+	})
+
 	mux.HandleFunc("DELETE /api/recipes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathIDFromPattern(r, "id")
 		if !ok {
@@ -165,6 +197,22 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// Delete meal_history_ingredients for all meals of this recipe
+		if _, err := tx.Exec(`DELETE FROM meal_history_ingredients WHERE meal_history_id IN (SELECT id FROM meal_history WHERE recipe_id=?)`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if _, err := tx.Exec(`DELETE FROM meal_history WHERE recipe_id=?`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if _, err := tx.Exec(`DELETE FROM meal_calendar WHERE recipe_id=?`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		if _, err := tx.Exec(`DELETE FROM recipe_ingredients WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
 			WriteError(w, http.StatusInternalServerError, err.Error())
@@ -180,6 +228,90 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+		broadcastRecipes()
+	})
+
+	mux.HandleFunc("PUT /api/recipes/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := pathIDFromPattern(r, "id")
+		if !ok {
+			WriteError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		var input struct {
+			Name         string `json:"name"`
+			Description  string `json:"description"`
+			Instructions string `json:"instructions"`
+			Tags         string `json:"tags"`
+			Servings     int    `json:"servings"`
+			Ingredients  []struct {
+				InventoryID *int64  `json:"inventory_id"`
+				Name        string  `json:"name"`
+				Quantity    float64 `json:"quantity"`
+				Unit        string  `json:"unit"`
+			} `json:"ingredients"`
+		}
+		if err := ReadJSON(r, &input); err != nil || input.Name == "" {
+			WriteError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		if input.Servings == 0 {
+			input.Servings = 1
+		}
+		for _, ing := range input.Ingredients {
+			if ing.Unit != "" && !units.IsValid(units.Unit(ing.Unit)) {
+				WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid unit %q for ingredient %q", ing.Unit, ing.Name))
+				return
+			}
+		}
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM recipes WHERE id=?`, id).Scan(&exists); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if exists == 0 {
+			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if _, err := tx.Exec(`UPDATE recipes SET name=?,description=?,instructions=?,tags=?,servings=? WHERE id=?`,
+			input.Name, input.Description, input.Instructions, input.Tags, input.Servings, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if _, err := tx.Exec(`DELETE FROM recipe_ingredients WHERE recipe_id=?`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, ing := range input.Ingredients {
+			ingName := strings.ToLower(strings.TrimSpace(ing.Name))
+			invID := ing.InventoryID
+			if invID == nil {
+				invID = resolveInventoryID(db, ingName)
+			}
+			if _, err := tx.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
+				id, invID, ingName, ing.Quantity, ing.Unit); err != nil {
+				tx.Rollback()
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		recipe, err := getRecipeWithIngredients(db, id)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, recipe)
+		broadcastRecipes()
 	})
 
 	mux.HandleFunc("POST /api/recipes/{id}/add-to-shopping-list", func(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +382,23 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"added": added})
+		if added > 0 {
+			if wsHub != nil {
+				wsHub.Broadcast("shopping_updated")
+			}
+		}
 	})
+}
+
+// resolveInventoryID returns an inventory ID for the given ingredient name by
+// case-insensitive name match, or nil if no match is found.
+func resolveInventoryID(db *sql.DB, name string) *int64 {
+	var id int64
+	err := db.QueryRow(`SELECT id FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1`, name).Scan(&id)
+	if err != nil {
+		return nil
+	}
+	return &id
 }
 
 func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {

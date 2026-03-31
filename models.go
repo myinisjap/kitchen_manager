@@ -52,3 +52,41 @@ type MealEntry struct {
 	RecipeID int64  `json:"recipe_id"`
 	Servings int    `json:"servings"`
 }
+
+// InventoryHistoryRow is one row in the inventory audit log.
+type InventoryHistoryRow struct {
+	ID             int64    `json:"id"`
+	InventoryID    int64    `json:"inventory_id"`
+	ItemName       string   `json:"item_name"`
+	ChangedAt      string   `json:"changed_at"`
+	ChangedBy      string   `json:"changed_by"`
+	ChangeType     string   `json:"change_type"`
+	QuantityBefore *float64 `json:"quantity_before"`
+	QuantityAfter  *float64 `json:"quantity_after"`
+	Unit           string   `json:"unit"`
+	Source         string   `json:"source"`
+	RecipeID       *int64   `json:"recipe_id"`
+}
+
+// MealHistory is a logged cooking event.
+type MealHistory struct {
+	ID             int64                  `json:"id"`
+	RecipeID       int64                  `json:"recipe_id"`
+	RecipeName     string                 `json:"recipe_name"`
+	CookedAt       string                 `json:"cooked_at"`
+	ServingsMade   int                    `json:"servings_made"`
+	TotalCostCents *int64                 `json:"total_cost_cents"`
+	Notes          string                 `json:"notes"`
+	Ingredients    []MealHistoryIngredient `json:"ingredients"`
+}
+
+// MealHistoryIngredient is one ingredient row in a logged meal.
+type MealHistoryIngredient struct {
+	ID             int64    `json:"id"`
+	MealHistoryID  int64    `json:"meal_history_id"`
+	InventoryID    *int64   `json:"inventory_id"`
+	IngredientName string   `json:"ingredient_name"`
+	QuantityUsed   float64  `json:"quantity_used"`
+	Unit           string   `json:"unit"`
+	CostCents      *int64   `json:"cost_cents"`
+}

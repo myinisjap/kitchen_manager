@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"strings"
 	_ "modernc.org/sqlite"
 )
 
@@ -76,6 +77,58 @@ func createSchema() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expiry);
+
+	CREATE TABLE IF NOT EXISTS inventory_history (
+		id               INTEGER PRIMARY KEY AUTOINCREMENT,
+		inventory_id     INTEGER NOT NULL,
+		item_name        TEXT    NOT NULL,
+		changed_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+		changed_by       TEXT,
+		change_type      TEXT    NOT NULL,
+		quantity_before  REAL,
+		quantity_after   REAL,
+		unit             TEXT    NOT NULL DEFAULT '',
+		source           TEXT
+	);
+
+	CREATE INDEX IF NOT EXISTS inventory_history_item_idx
+		ON inventory_history(inventory_id, changed_at);
+
+	CREATE INDEX IF NOT EXISTS inventory_history_changed_at_idx
+		ON inventory_history(changed_at);
+
+	CREATE TABLE IF NOT EXISTS settings (
+		key   TEXT PRIMARY KEY,
+		value TEXT NOT NULL DEFAULT ''
+	);
+
+	INSERT OR IGNORE INTO settings (key, value) VALUES ('default_servings', '2');
+
+	CREATE TABLE IF NOT EXISTS meal_history (
+		id               INTEGER PRIMARY KEY AUTOINCREMENT,
+		recipe_id        INTEGER NOT NULL REFERENCES recipes(id),
+		recipe_name      TEXT    NOT NULL DEFAULT '',
+		cooked_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		servings_made    INTEGER NOT NULL DEFAULT 1,
+		total_cost_cents INTEGER,
+		notes            TEXT    NOT NULL DEFAULT ''
+	);
+
+	CREATE INDEX IF NOT EXISTS meal_history_recipe_idx
+		ON meal_history(recipe_id, cooked_at);
+
+	CREATE INDEX IF NOT EXISTS meal_history_cooked_at_idx
+		ON meal_history(cooked_at);
+
+	CREATE TABLE IF NOT EXISTS meal_history_ingredients (
+		id              INTEGER PRIMARY KEY AUTOINCREMENT,
+		meal_history_id INTEGER NOT NULL REFERENCES meal_history(id),
+		inventory_id    INTEGER REFERENCES inventory(id),
+		ingredient_name TEXT    NOT NULL,
+		quantity_used   REAL    NOT NULL,
+		unit            TEXT    NOT NULL DEFAULT '',
+		cost_cents      INTEGER
+	);
 	`)
 	if err != nil {
 		return err
@@ -113,5 +166,27 @@ func createSchema() error {
 			return err
 		}
 	}
+
+	// Migration: unit_cost_cents on inventory
+	if _, err := db.Exec(`ALTER TABLE inventory ADD COLUMN unit_cost_cents INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+
+	// Migration: recipe_id on inventory_history (for meal cooking source)
+	if _, err := db.Exec(`ALTER TABLE inventory_history ADD COLUMN recipe_id INTEGER REFERENCES recipes(id)`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+
+	// Migration: quantity_per_scan on inventory
+	if _, err := db.Exec(`ALTER TABLE inventory ADD COLUMN quantity_per_scan REAL NOT NULL DEFAULT 1`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+
 	return nil
 }

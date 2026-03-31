@@ -44,6 +44,11 @@ cp .env.example .env  # fill in values
 docker compose up -d
 ```
 
+**Redeploy production (after code changes):**
+```bash
+docker compose down && docker compose up -d --build
+```
+
 ## Environment Variables
 
 | Variable | Default | Purpose |

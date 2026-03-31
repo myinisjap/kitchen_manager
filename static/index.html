@@ -34,13 +34,43 @@
           </template>
         </select>
         <button @click="openScanner('find')" class="border border-gray-300 text-gray-600 px-3 py-2 rounded-lg text-sm font-medium">📷 Scan</button>
+        <button @click="openRemoveStockScanner()" class="border border-orange-400 text-orange-600 px-3 py-2 rounded-lg text-sm font-medium">−1 Scan</button>
         <button @click="openAddItem()" class="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium">+ Add Item</button>
       </div>
 
-      <!-- Expiring soon banner -->
+      <!-- Expiring soon / expired collapsible -->
       <template x-if="expiringItems.length > 0">
-        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4 text-sm text-yellow-800">
-          ⚠️ <strong x-text="expiringItems.length"></strong> items expiring within 7 days
+        <div class="mb-4">
+          <button @click="expiryOpen = !expiryOpen"
+                  class="w-full flex items-center justify-between bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-sm text-yellow-800 font-medium">
+            <span>⚠️ <strong x-text="expiringItems.filter(i => i.expiration_date <= new Date().toISOString().split('T')[0]).length"></strong> expired &bull; <strong x-text="expiringItems.filter(i => i.expiration_date > new Date().toISOString().split('T')[0]).length"></strong> expiring soon</span>
+            <span x-text="expiryOpen ? '▲' : '▼'"></span>
+          </button>
+          <div x-show="expiryOpen" class="mt-1 space-y-1">
+            <template x-for="item in expiringItems" :key="item.id">
+              <div class="bg-white rounded-xl shadow-sm border p-3 flex items-start justify-between">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium text-gray-900 truncate" x-text="item.name"></span>
+                    <template x-if="item.expiration_date <= new Date().toISOString().split('T')[0]">
+                      <span class="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-medium">Expired</span>
+                    </template>
+                    <template x-if="item.expiration_date > new Date().toISOString().split('T')[0]">
+                      <span class="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-medium">Exp: <span x-text="item.expiration_date"></span></span>
+                    </template>
+                  </div>
+                  <div class="text-sm text-gray-500 mt-0.5">
+                    <span x-text="item.quantity"></span> <span x-text="item.unit"></span>
+                    &bull; <span x-text="item.location || 'No location'"></span>
+                  </div>
+                </div>
+                <div class="flex gap-2 ml-2">
+                  <button @click="editItem(item)" class="text-blue-600 text-sm font-medium">Edit</button>
+                  <button @click="deleteItem(item.id)" class="text-red-500 text-sm">✕</button>
+                </div>
+              </div>
+            </template>
+          </div>
         </div>
       </template>
 
@@ -113,13 +143,16 @@
 
     <!-- ===== RECIPES TAB ===== -->
     <section x-show="activeTab === 'recipes'">
-      <div class="flex gap-2 my-4">
-        <input x-model="recipeTagFilter" @input.debounce.300ms="fetchRecipes()" type="text" placeholder="Filter by tag..." class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+      <div class="flex flex-wrap gap-2 my-4">
+        <input x-model="recipeTagFilter" @input.debounce.300ms="fetchRecipes()" type="text" placeholder="Filter by tag..." class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm" />
         <label class="flex items-center gap-1 text-sm text-gray-600 whitespace-nowrap">
           <input type="checkbox" x-model="recipeAvailableOnly" @change="fetchRecipes()" class="accent-green-600" />
           Have ingredients
         </label>
-        <button @click="openAddRecipe()" class="bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-medium">+ Add</button>
+        <div class="flex gap-2">
+          <button @click="openImportRecipe()" class="border border-gray-300 text-gray-600 rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap">↓ Import</button>
+          <button @click="openAddRecipe()" class="bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-medium whitespace-nowrap">+ Add</button>
+        </div>
       </div>
 
       <div class="space-y-3">
@@ -169,14 +202,20 @@
                  x-text="day.label"></div>
             <div class="p-3 space-y-2">
               <template x-for="slot in ['breakfast','lunch','dinner']" :key="slot">
-                <div class="flex items-center gap-2">
-                  <span class="text-xs text-gray-400 w-16 capitalize" x-text="slot"></span>
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-xs text-gray-400 w-16 shrink-0 capitalize" x-text="slot"></span>
                   <template x-if="getCalendarEntry(day.date, slot)">
-                    <div class="flex-1 flex items-center justify-between bg-green-50 rounded-lg px-2 py-1">
-                      <span class="text-sm text-green-800"
+                    <div class="flex-1 flex items-center bg-green-50 rounded-lg px-2 py-1 gap-1 min-w-0">
+                      <span class="text-sm text-green-800 truncate min-w-0 flex-1"
                             x-text="getRecipeName(getCalendarEntry(day.date, slot).recipe_id)"></span>
-                      <button @click="deleteCalendarEntry(getCalendarEntry(day.date, slot).id)"
-                              class="text-red-400 text-xs ml-2">✕</button>
+                      <div class="flex items-center gap-1 shrink-0">
+                        <button @click="viewRecipe(recipes.find(r => r.id === getCalendarEntry(day.date, slot).recipe_id))"
+                                class="text-blue-600 text-xs font-medium px-1">👁</button>
+                        <button @click="cookIt(recipes.find(r => r.id === getCalendarEntry(day.date, slot).recipe_id), getCalendarEntry(day.date, slot).servings)"
+                                class="text-green-700 text-xs font-medium px-1">🍳</button>
+                        <button @click="deleteCalendarEntry(getCalendarEntry(day.date, slot).id)"
+                                class="text-red-400 text-xs px-1">✕</button>
+                      </div>
                     </div>
                   </template>
                   <template x-if="!getCalendarEntry(day.date, slot)">
@@ -189,6 +228,116 @@
               </template>
             </div>
           </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- ===== HISTORY TAB ===== -->
+    <section x-show="activeTab === 'history'">
+      <div class="my-4">
+        <h2 class="text-base font-semibold text-gray-700 mb-2">Inventory Change History</h2>
+        <div class="space-y-2">
+          <template x-for="entry in historyItems" :key="entry.id">
+            <div class="bg-white rounded-xl shadow-sm border p-3">
+              <div class="flex items-start justify-between">
+                <div>
+                  <span class="font-medium text-gray-900 text-sm" x-text="entry.item_name"></span>
+                  <span class="ml-2 text-xs px-1.5 py-0.5 rounded"
+                        :class="{
+                          'bg-green-100 text-green-700': entry.change_type === 'add',
+                          'bg-blue-100 text-blue-700': entry.change_type === 'restock',
+                          'bg-red-100 text-red-700': entry.change_type === 'deduct' || entry.change_type === 'delete',
+                          'bg-gray-100 text-gray-700': entry.change_type === 'edit',
+                        }"
+                        x-text="entry.change_type"></span>
+                </div>
+                <span class="text-xs text-gray-400" x-text="entry.changed_at ? entry.changed_at.split('T')[0] : ''"></span>
+              </div>
+              <div class="text-sm text-gray-500 mt-0.5">
+                <template x-if="entry.quantity_before !== null && entry.quantity_after !== null">
+                  <span x-text="entry.quantity_before + ' → ' + entry.quantity_after + ' ' + entry.unit"></span>
+                </template>
+                <template x-if="entry.source">
+                  <span class="ml-2 text-xs text-gray-400" x-text="'via ' + entry.source"></span>
+                </template>
+              </div>
+            </div>
+          </template>
+          <template x-if="historyItems.length === 0">
+            <p class="text-center text-gray-400 py-8">No history yet.</p>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== MEALS TAB ===== -->
+    <section x-show="activeTab === 'meals'">
+      <div class="my-4 space-y-4">
+
+        <!-- Stats -->
+        <template x-if="mealsStats">
+          <div class="bg-white rounded-xl shadow-sm border p-4">
+            <h3 class="font-semibold text-gray-800 text-sm mb-3">This Week / Month</h3>
+            <div class="grid grid-cols-2 gap-3 text-center">
+              <div class="bg-green-50 rounded-lg p-2">
+                <div class="text-xl font-bold text-green-700" x-text="mealsStats.total_meals_this_week"></div>
+                <div class="text-xs text-gray-500">Meals this week</div>
+              </div>
+              <div class="bg-blue-50 rounded-lg p-2">
+                <div class="text-xl font-bold text-blue-700" x-text="mealsStats.total_meals_this_month"></div>
+                <div class="text-xs text-gray-500">Meals this month</div>
+              </div>
+              <template x-if="mealsStats.total_spend_this_week_cents !== null">
+                <div class="bg-yellow-50 rounded-lg p-2">
+                  <div class="text-xl font-bold text-yellow-700" x-text="'$' + (mealsStats.total_spend_this_week_cents / 100).toFixed(2)"></div>
+                  <div class="text-xs text-gray-500">Spend this week</div>
+                </div>
+              </template>
+              <template x-if="mealsStats.total_spend_this_month_cents !== null">
+                <div class="bg-purple-50 rounded-lg p-2">
+                  <div class="text-xl font-bold text-purple-700" x-text="'$' + (mealsStats.total_spend_this_month_cents / 100).toFixed(2)"></div>
+                  <div class="text-xs text-gray-500">Spend this month</div>
+                </div>
+              </template>
+            </div>
+            <template x-if="mealsStats.most_cooked && mealsStats.most_cooked.length > 0">
+              <div class="mt-3">
+                <div class="text-xs text-gray-500 mb-1 font-medium">Most Cooked</div>
+                <template x-for="mc in mealsStats.most_cooked" :key="mc.recipe_id">
+                  <div class="flex justify-between text-sm py-0.5">
+                    <span class="text-gray-700" x-text="mc.recipe_name"></span>
+                    <span class="text-gray-400" x-text="mc.count + 'x'"></span>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Meal list -->
+        <h3 class="font-semibold text-gray-700 text-sm">Recent Meals</h3>
+        <template x-for="meal in meals" :key="meal.id">
+          <div class="bg-white rounded-xl shadow-sm border p-3">
+            <div class="flex items-start justify-between">
+              <div>
+                <span class="font-medium text-gray-900 text-sm" x-text="meal.recipe_name"></span>
+                <span class="ml-2 text-xs text-gray-400" x-text="meal.servings_made + ' serving' + (meal.servings_made !== 1 ? 's' : '')"></span>
+              </div>
+              <span class="text-xs text-gray-400" x-text="meal.cooked_at ? meal.cooked_at.split('T')[0] : ''"></span>
+            </div>
+            <template x-if="meal.total_cost_cents !== null">
+              <div class="text-xs text-gray-500 mt-0.5">Cost: $<span x-text="(meal.total_cost_cents / 100).toFixed(2)"></span></div>
+            </template>
+            <template x-if="meal.notes">
+              <div class="text-xs text-gray-500 mt-0.5 italic" x-text="meal.notes"></div>
+            </template>
+          </div>
+        </template>
+        <template x-if="meals.length === 0">
+          <p class="text-center text-gray-400 py-8">No meals logged yet.</p>
+        </template>
+        <template x-if="mealsTotal > meals.length">
+          <button @click="loadMoreMeals()" class="w-full text-sm text-blue-600 underline py-2">Load more</button>
         </template>
       </div>
     </section>
@@ -275,6 +424,11 @@
                 title="Scan barcode">
           📷
         </button>
+      </div>
+      <div class="flex gap-2 items-center">
+        <label class="text-sm text-gray-600 whitespace-nowrap">Qty per scan:</label>
+        <input x-model.number="itemForm.quantity_per_scan" type="number" min="0" step="any" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+        <span class="text-sm text-gray-400" x-text="itemForm.unit"></span>
       </div>
       <div class="flex gap-2 pt-2">
         <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Cancel</button>
@@ -367,12 +521,12 @@
       <div class="flex-1 overflow-y-auto p-4">
         <div x-show="groceryPendingItems.length === 0" class="text-center text-gray-400 py-8 text-sm">No items to update</div>
         <template x-for="(pending, i) in groceryPendingItems" :key="i">
-          <div class="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
-            <div>
-              <span class="font-medium text-gray-800 text-sm" x-text="pending.name"></span>
-              <span class="text-gray-500 text-sm ml-2" x-text="'+' + pending.qty + ' ' + pending.unit"></span>
-            </div>
-            <button @click="groceryPendingItems.splice(i, 1)" class="text-gray-400 hover:text-red-500 text-lg leading-none px-2">✕</button>
+          <div class="flex items-center gap-3 py-3 border-b border-gray-100 last:border-0">
+            <span class="flex-1 font-medium text-gray-800 text-sm" x-text="pending.name"></span>
+            <span class="text-xs text-gray-400" x-text="pending.unit"></span>
+            <input type="number" x-model.number="pending.qty" min="0" step="any"
+                   class="w-20 border rounded-lg px-2 py-1 text-sm text-center" />
+            <button @click="groceryPendingItems.splice(i, 1)" class="text-gray-400 hover:text-red-500 text-lg leading-none">✕</button>
           </div>
         </template>
       </div>
@@ -408,6 +562,23 @@
     </div>
   </div>
 
+  <!-- Remove Stock Scanner Modal -->
+  <div x-show="removeStockScanOpen" class="fixed inset-0 bg-black z-50 flex flex-col">
+    <div class="flex items-center justify-between p-4">
+      <span class="text-white text-sm font-medium">Remove Stock (scan to deduct 1)</span>
+      <button @click="closeRemoveStockScanner()" class="text-white text-sm border border-white/40 rounded-lg px-3 py-1.5">Done</button>
+    </div>
+    <div class="flex-1 relative overflow-hidden">
+      <video id="remove-stock-video" class="absolute inset-0 w-full h-full object-cover" playsinline></video>
+      <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div class="w-64 h-40 border-2 border-orange-400/70 rounded-lg"></div>
+      </div>
+    </div>
+    <div class="p-4 text-center">
+      <p class="text-white/70 text-sm">Scan item to subtract 1 from inventory</p>
+    </div>
+  </div>
+
   <!-- Add Shopping Item Modal -->
   <div x-show="modal === 'shopping'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
     <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4">
@@ -433,15 +604,69 @@
     </div>
   </div>
 
+  <!-- Import Recipe Modal -->
+  <div x-show="modal === 'recipeImport'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+      <h2 class="text-lg font-bold">Import Recipe</h2>
+
+      <!-- Tab switcher -->
+      <div class="flex gap-1 bg-gray-100 rounded-lg p-1">
+        <button @click="recipeImportTab = 'url'"
+                :class="recipeImportTab === 'url' ? 'bg-white shadow text-gray-900' : 'text-gray-500'"
+                class="flex-1 rounded-md py-1.5 text-sm font-medium transition-colors">URL</button>
+        <button @click="recipeImportTab = 'paste'"
+                :class="recipeImportTab === 'paste' ? 'bg-white shadow text-gray-900' : 'text-gray-500'"
+                class="flex-1 rounded-md py-1.5 text-sm font-medium transition-colors">Paste</button>
+        <button @click="recipeImportTab = 'pdf'"
+                :class="recipeImportTab === 'pdf' ? 'bg-white shadow text-gray-900' : 'text-gray-500'"
+                class="flex-1 rounded-md py-1.5 text-sm font-medium transition-colors">PDF</button>
+      </div>
+
+      <!-- URL tab -->
+      <div x-show="recipeImportTab === 'url'" class="space-y-2">
+        <input x-model="recipeImportUrl" type="url" placeholder="https://www.example.com/recipe"
+               class="w-full border rounded-lg px-3 py-2 text-sm"
+               @keydown.enter="importRecipeFromUrl()" />
+        <p class="text-xs text-gray-400">Fetches the page and copies the text into the Instructions field for you to review.</p>
+      </div>
+
+      <!-- Paste tab -->
+      <div x-show="recipeImportTab === 'paste'" class="space-y-2">
+        <textarea x-model="recipeImportText" rows="8" placeholder="Paste recipe text here..."
+                  class="w-full border rounded-lg px-3 py-2 text-sm font-mono text-xs"></textarea>
+        <p class="text-xs text-gray-400">Paste any recipe text. It will be placed in the Instructions field.</p>
+      </div>
+
+      <!-- PDF tab -->
+      <div x-show="recipeImportTab === 'pdf'" class="space-y-2">
+        <input type="file" accept=".pdf" @change="recipeImportFile = $event.target.files[0]"
+               class="w-full text-sm text-gray-600" />
+        <p class="text-xs text-gray-400">Extracts text from a PDF (max 10 MB). Text-based PDFs only.</p>
+      </div>
+
+      <p x-show="recipeImportError" x-text="recipeImportError" class="text-sm text-red-600"></p>
+
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Cancel</button>
+        <button @click="runRecipeImport()"
+                :disabled="recipeImporting"
+                class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50">
+          <span x-show="!recipeImporting">Import</span>
+          <span x-show="recipeImporting">Fetching...</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Add Recipe Modal -->
   <div x-show="modal === 'recipe'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
     <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-      <h2 class="text-lg font-bold">Add Recipe</h2>
-      <input x-model="recipeForm.name" placeholder="Recipe name *" class="w-full border rounded-lg px-3 py-2 text-sm" />
-      <input x-model="recipeForm.description" placeholder="Short description" class="w-full border rounded-lg px-3 py-2 text-sm" />
-      <textarea x-model="recipeForm.instructions" placeholder="Instructions" rows="3" class="w-full border rounded-lg px-3 py-2 text-sm"></textarea>
-      <input x-model="recipeForm.tags" placeholder="Tags (comma-separated: breakfast,quick)" class="w-full border rounded-lg px-3 py-2 text-sm" />
-      <input x-model.number="recipeForm.servings" type="number" placeholder="Servings" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <h2 class="text-lg font-bold" x-text="recipeForm.id ? 'Edit Recipe' : 'Add Recipe'"></h2>
+      <input id="recipe-name" x-model="recipeForm.name" placeholder="Recipe name *" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <input id="recipe-desc" x-model="recipeForm.description" placeholder="Short description" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <textarea id="recipe-instructions" x-model="recipeForm.instructions" placeholder="Instructions" rows="3" class="w-full border rounded-lg px-3 py-2 text-sm"></textarea>
+      <input id="recipe-tags" x-model="recipeForm.tags" placeholder="Tags (comma-separated: breakfast,quick)" class="w-full border rounded-lg px-3 py-2 text-sm" />
+      <input id="recipe-servings" x-model.number="recipeForm.servings" type="number" placeholder="Servings" class="w-full border rounded-lg px-3 py-2 text-sm" />
 
       <h3 class="font-semibold text-sm text-gray-700">Ingredients</h3>
       <template x-for="(ing, idx) in recipeForm.ingredients" :key="idx">
@@ -450,13 +675,26 @@
           <input x-model.number="ing.quantity" type="number" placeholder="Qty" class="w-16 border rounded-lg px-2 py-1.5 text-sm" />
           <select x-model="ing.unit" class="w-24 border rounded-lg px-2 py-1.5 text-sm">
             <option value="">Unit</option>
-            <template x-for="dim in ['mass','volume','count']" :key="dim">
-              <optgroup :label="dim">
-                <template x-for="u in (unitGroups[dim] || [])" :key="u">
-                  <option :value="u" x-text="u"></option>
-                </template>
-              </optgroup>
-            </template>
+            <optgroup label="mass">
+              <option value="g">g</option>
+              <option value="kg">kg</option>
+              <option value="oz">oz</option>
+              <option value="lb">lb</option>
+            </optgroup>
+            <optgroup label="volume">
+              <option value="ml">ml</option>
+              <option value="L">L</option>
+              <option value="cup">cup</option>
+              <option value="tbsp">tbsp</option>
+              <option value="tsp">tsp</option>
+            </optgroup>
+            <optgroup label="count">
+              <option value="piece">piece</option>
+              <option value="clove">clove</option>
+              <option value="can">can</option>
+              <option value="jar">jar</option>
+              <option value="bunch">bunch</option>
+            </optgroup>
           </select>
           <button @click="recipeForm.ingredients.splice(idx, 1)" class="text-red-400 text-sm px-1">✕</button>
         </div>
@@ -499,11 +737,73 @@
           <p class="text-sm text-gray-700 whitespace-pre-wrap" x-text="selectedRecipe?.instructions"></p>
         </div>
       </template>
-      <div class="flex gap-2 pt-2">
-        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Close</button>
-        <button @click="addRecipeToShoppingList(selectedRecipe)" class="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-medium">
-          + Missing items to shopping list
+      <div class="flex items-center gap-2 pt-2">
+        <label class="text-sm text-gray-600 whitespace-nowrap">Servings:</label>
+        <button @click="recipeViewServings = Math.max(1, recipeViewServings - 1)" class="border rounded px-2 py-1 text-sm">−</button>
+        <span class="text-sm font-medium w-6 text-center" x-text="recipeViewServings"></span>
+        <button @click="recipeViewServings++" class="border rounded px-2 py-1 text-sm">+</button>
+      </div>
+
+      <!-- Schedule on calendar -->
+      <div class="border rounded-lg p-3 space-y-2">
+        <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Schedule</p>
+        <div class="flex gap-2">
+          <input x-model="recipeViewDate" type="date" class="flex-1 border rounded-lg px-3 py-2 text-sm" />
+          <select x-model="recipeViewSlot" class="border rounded-lg px-3 py-2 text-sm">
+            <option value="breakfast">Breakfast</option>
+            <option value="lunch">Lunch</option>
+            <option value="dinner">Dinner</option>
+          </select>
+        </div>
+        <button @click="addRecipeToCalendar(selectedRecipe, recipeViewServings)"
+                :disabled="!recipeViewDate"
+                class="w-full bg-purple-600 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-40">
+          📅 Add to Calendar
         </button>
+      </div>
+
+      <div class="flex gap-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm">Close</button>
+        <button @click="editRecipe(selectedRecipe)" class="flex-1 border border-gray-400 rounded-lg py-2 text-sm font-medium">✏️ Edit</button>
+        <button @click="addRecipeToShoppingList(selectedRecipe, recipeViewServings)" class="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-medium">+ List</button>
+        <button @click="cookIt(selectedRecipe, recipeViewServings)" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">🍳</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cook It Confirmation Modal -->
+  <div x-show="modal === 'cookItConfirm'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4" x-show="cookItConfirm">
+      <h2 class="text-lg font-bold">Confirm Cook It</h2>
+      <template x-if="cookItConfirm">
+        <div class="space-y-3">
+          <p class="text-sm text-gray-600">
+            Cooking <strong x-text="cookItConfirm.recipe.name"></strong>
+            (<span x-text="cookItConfirm.servings"></span> serving<span x-show="cookItConfirm.servings !== 1">s</span>).
+            The following will be removed from inventory:
+          </p>
+          <ul class="divide-y text-sm">
+            <template x-for="ing in (cookItConfirm.recipe.ingredients || [])" :key="ing.id">
+              <li class="py-1.5 flex justify-between gap-2">
+                <span x-text="ing.name" class="text-gray-800"></span>
+                <span class="text-gray-500 shrink-0">
+                  <span x-text="ing.inventory_id
+                    ? ((ing.quantity * cookItConfirm.servings / (cookItConfirm.recipe.servings || 1)).toFixed(2).replace(/\.?0+$/, ''))
+                    : '—'"></span>
+                  <span x-show="ing.inventory_id" x-text="' ' + ing.unit" class="ml-0.5"></span>
+                  <span x-show="!ing.inventory_id" class="text-xs text-gray-400">(not linked)</span>
+                </span>
+              </li>
+            </template>
+          </ul>
+          <p x-show="!(cookItConfirm.recipe.ingredients || []).some(i => i.inventory_id)" class="text-xs text-amber-600">
+            No ingredients are linked to inventory — nothing will be deducted.
+          </p>
+        </div>
+      </template>
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null; cookItConfirm = null" class="flex-1 border rounded-lg py-2 text-sm">Cancel</button>
+        <button @click="confirmCookIt()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">✓ Confirm</button>
       </div>
     </div>
   </div>
@@ -535,20 +835,28 @@
   <!-- Tailwind safelist: keeps dynamically-applied classes from being purged -->
   <div class="hidden bg-green-600 bg-red-600"></div>
 
-  <!-- Toast notification -->
-  <div x-show="toast" x-transition
-       :class="{
-         'bg-green-600': toastStyle === 'success',
-         'bg-red-600':   toastStyle === 'error',
-         'bg-gray-900':  toastStyle === ''
-       }"
-       class="fixed top-28 left-1/2 -translate-x-1/2 text-white text-sm px-4 py-2 rounded-full z-50 shadow-lg flex items-center gap-2">
-    <span x-show="toastStyle === 'success'">✓</span>
-    <span x-show="toastStyle === 'error'">✕</span>
-    <span x-text="toast"></span>
-    <span x-show="toastStyle === 'success' && toastBadge"
-          x-text="toastBadge"
-          class="bg-white/20 rounded-full px-2 py-0.5 text-xs font-semibold ml-1"></span>
+  <!-- Toast notification (outer div centers, inner div animates to avoid transform conflict) -->
+  <div class="fixed top-28 left-0 right-0 flex justify-center z-50 pointer-events-none">
+    <div x-show="toast"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 scale-95"
+         x-transition:enter-end="opacity-100 scale-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 scale-100"
+         x-transition:leave-end="opacity-0 scale-95"
+         :class="{
+           'bg-green-600': toastStyle === 'success',
+           'bg-red-600':   toastStyle === 'error',
+           'bg-gray-900':  toastStyle === ''
+         }"
+         class="text-white text-sm px-4 py-2 rounded-full shadow-lg flex items-center gap-2 pointer-events-auto">
+      <span x-show="toastStyle === 'success'">✓</span>
+      <span x-show="toastStyle === 'error'">✕</span>
+      <span x-text="toast"></span>
+      <span x-show="toastStyle === 'success' && toastBadge"
+            x-text="toastBadge"
+            class="bg-white/20 rounded-full px-2 py-0.5 text-xs font-semibold ml-1"></span>
+    </div>
   </div>
 
   <script>
@@ -561,6 +869,8 @@
           { id: 'shopping', label: 'Shopping', icon: '🛒' },
           { id: 'recipes', label: 'Recipes', icon: '📖' },
           { id: 'calendar', label: 'Calendar', icon: '📅' },
+          { id: 'history', label: 'History', icon: '📜' },
+          { id: 'meals', label: 'Meals', icon: '🍳' },
         ],
         modal: null,
         toast: '',
@@ -571,6 +881,7 @@
         // Inventory
         inventoryItems: [],
         expiringItems: [],
+        expiryOpen: false,
         inventorySearch: '',
         inventoryLocation: '',
         locations: [],
@@ -593,8 +904,12 @@
         _scanCooldown: false,
         groceryNewItem: null, // prefill object when paused for unknown item
         groceryCameraError: '',
-        groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' },
-        itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' },
+        removeStockScanOpen: false,
+        _removeStockStream: null,
+        _removeStockRaf: null,
+        _removeStockActive: false,
+        groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '', quantity_per_scan: 1 },
+        itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '', quantity_per_scan: 1 },
 
         // Shopping
         shoppingItems: [],
@@ -605,7 +920,29 @@
         recipeTagFilter: '',
         recipeAvailableOnly: false,
         selectedRecipe: null,
-        recipeForm: { name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] },
+        recipeViewServings: 2,
+        recipeForm: { id: null, name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] },
+        recipeViewDate: '',
+        recipeViewSlot: 'dinner',
+        recipeImportTab: 'url',
+        recipeImportUrl: '',
+        recipeImportFile: null,
+        recipeImportText: '',
+        recipeImporting: false,
+        recipeImportError: '',
+
+        // History
+        historyItems: [],
+        historyStatsData: null,
+
+        // Meals
+        meals: [],
+        mealsTotal: 0,
+        mealsOffset: 0,
+        mealsStats: null,
+        mealStatsLoaded: false,
+        cookItServings: 2,
+        cookItConfirm: null,
 
         // Calendar
         calendarEntries: [],
@@ -624,14 +961,39 @@
           const sRes = await fetch('/api/inventory/suggestions');
           const allItems = await sRes.json();
           this.locations = [...new Set(allItems.map(i => i.location).filter(Boolean))];
+          this.initWebSocket();
         },
 
         async switchTab(tab) {
           this.activeTab = tab;
+          window.scrollTo({ top: 0, behavior: 'instant' });
           if (tab === 'inventory') { await this.fetchInventory(); await this.fetchExpiring(); }
           if (tab === 'shopping') await this.fetchShoppingList();
           if (tab === 'recipes') await this.fetchRecipes();
-          if (tab === 'calendar') await this.fetchCalendar();
+          if (tab === 'calendar') { await this.fetchCalendar(); await this.fetchRecipes(); }
+          if (tab === 'history') await this.fetchHistory();
+          if (tab === 'meals') { await this.fetchMeals(); await this.fetchMealStats(); }
+        },
+
+        initWebSocket() {
+          let delay = 1000;
+          const connect = () => {
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(`${proto}://${location.host}/ws`);
+            ws.onmessage = (e) => {
+              try {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'inventory_updated') { this.fetchInventory(); this.fetchExpiring(); }
+                if (msg.type === 'shopping_updated') this.fetchShoppingList();
+                if (msg.type === 'recipes_updated') this.fetchRecipes();
+                if (msg.type === 'calendar_updated') this.fetchCalendar();
+              } catch {}
+            };
+            ws.onopen = () => { delay = 1000; };
+            ws.onclose = () => { setTimeout(connect, delay); delay = Math.min(delay * 2, 30000); };
+            ws.onerror = () => ws.close();
+          };
+          connect();
         },
 
         async fetchSuggestions() {
@@ -944,14 +1306,15 @@
             if (res.ok) {
               const item = await res.json();
               // Add to or update pending list
+              const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
               const existing = this.groceryPendingItems.find(p => p.barcode === code);
               if (existing) {
-                existing.qty = parseFloat((existing.qty + 1).toFixed(4));
+                existing.qty = parseFloat((existing.qty + scanQty).toFixed(4));
               } else {
-                this.groceryPendingItems.push({ id: item.id, name: item.name, qty: 1, unit: item.unit, barcode: code });
+                this.groceryPendingItems.push({ id: item.id, name: item.name, qty: scanQty, unit: item.unit, barcode: code });
               }
               const entry = this.groceryPendingItems.find(p => p.barcode === code);
-              this.showToast(`${item.name} +1 ${item.unit}`, 'success', `${entry.qty} ${item.unit}`);
+              this.showToast(`${item.name} +${scanQty} ${item.unit}`, 'success', `${entry.qty} ${item.unit}`);
               this._groceryProcessing = false;
 
               // OFf refinement in background (non-blocking)
@@ -1014,7 +1377,7 @@
           }
 
           this.groceryNewItem = prefill;
-          this.groceryItemForm = { name: prefill.name || '', quantity: prefill.quantity, unit: prefill.unit, preferred_unit: prefill.preferred_unit, location: prefill.location, expiration_date: '', low_threshold: 1, barcode: code };
+          this.groceryItemForm = { name: prefill.name || '', quantity: prefill.quantity, unit: prefill.unit, preferred_unit: prefill.preferred_unit, location: prefill.location, expiration_date: '', low_threshold: 1, barcode: code, quantity_per_scan: prefill.quantity || 1 };
         },
 
         async confirmGroceryNewItem() {
@@ -1066,7 +1429,7 @@
 
         openAddItem() {
           this.editingItem = null;
-          this.itemForm = { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '' };
+          this.itemForm = { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 1, barcode: '', quantity_per_scan: 1 };
           this.suggestions = [];
           this.showSuggestions = false;
           this.modal = 'item';
@@ -1169,38 +1532,190 @@
         },
 
         openAddRecipe() {
-          this.recipeForm = { name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] };
+          this.recipeForm = { id: null, name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] };
           this.modal = 'recipe';
+        },
+
+        editRecipe(recipe) {
+          this.recipeForm = {
+            id: recipe.id,
+            name: recipe.name,
+            description: recipe.description || '',
+            instructions: recipe.instructions || '',
+            tags: recipe.tags || '',
+            servings: recipe.servings || 2,
+            ingredients: (recipe.ingredients || []).map(i => ({
+              inventory_id: i.inventory_id || null,
+              name: i.name,
+              quantity: i.quantity,
+              unit: i.unit || '',
+            })),
+          };
+          this.modal = 'recipe';
+        },
+
+        openImportRecipe() {
+          this.recipeImportTab = 'url';
+          this.recipeImportUrl = '';
+          this.recipeImportFile = null;
+          this.recipeImportText = '';
+          this.recipeImporting = false;
+          this.recipeImportError = '';
+          this.modal = 'recipeImport';
+        },
+
+        async runRecipeImport() {
+          this.recipeImportError = '';
+          if (this.recipeImportTab === 'paste') {
+            const text = this.recipeImportText.trim();
+            if (!text) return;
+            this.recipeForm = { id: null, name: '', description: '', instructions: text, tags: '', servings: 2, ingredients: [] };
+            this.modal = 'recipe';
+            return;
+          }
+          if (this.recipeImportTab === 'url') {
+            if (!this.recipeImportUrl) return;
+            this.recipeImporting = true;
+            try {
+              const res = await fetch('/api/recipes/import/url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: this.recipeImportUrl }),
+              });
+              const data = await res.json();
+              if (!res.ok) {
+                this.recipeImportError = (data.error || 'Import failed') + ' — try the Paste tab instead.';
+                return;
+              }
+              this._applyImportData(data);
+            } catch (e) {
+              this.recipeImportError = 'Network error — try the Paste tab instead.';
+            } finally {
+              this.recipeImporting = false;
+            }
+            return;
+          }
+          if (this.recipeImportTab === 'pdf') {
+            if (!this.recipeImportFile) return;
+            this.recipeImporting = true;
+            try {
+              const fd = new FormData();
+              fd.append('file', this.recipeImportFile);
+              const res = await fetch('/api/recipes/import/pdf', { method: 'POST', body: fd });
+              const data = await res.json();
+              if (!res.ok) { this.recipeImportError = data.error || 'Import failed'; return; }
+              this._applyImportData(data);
+            } catch (e) {
+              this.recipeImportError = 'Network error';
+            } finally {
+              this.recipeImporting = false;
+            }
+          }
+        },
+
+        _applyImportData(data) {
+          if (data.recipe) {
+            const rec = data.recipe;
+            const ingredients = (rec.ingredients || []).map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit, inventory_id: null }));
+            this.recipeForm = {
+              id: null,
+              name: rec.name || '',
+              description: rec.description || '',
+              instructions: rec.instructions || '',
+              tags: rec.tags || '',
+              servings: rec.servings || 2,
+              ingredients: [],
+            };
+            this.modal = 'recipe';
+            this.$nextTick(() => { this.recipeForm.ingredients = ingredients; });
+          } else {
+            this.recipeForm = { id: null, name: '', description: '', instructions: data.text || '', tags: '', servings: 2, ingredients: [] };
+            this.modal = 'recipe';
+          }
         },
 
         async saveRecipe() {
           if (!this.recipeForm.name) return;
-          await fetch('/api/recipes/', {
-            method: 'POST',
+          const isEdit = !!this.recipeForm.id;
+          await fetch(isEdit ? `/api/recipes/${this.recipeForm.id}` : '/api/recipes/', {
+            method: isEdit ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.recipeForm),
           });
           this.modal = null;
           await this.fetchRecipes();
-          this.showToast('Recipe saved');
+          this.showToast(isEdit ? 'Recipe updated' : 'Recipe saved');
         },
 
         viewRecipe(recipe) {
           this.selectedRecipe = recipe;
+          this.recipeViewServings = recipe.servings || 2;
+          this.recipeViewDate = new Date().toISOString().split('T')[0];
+          this.recipeViewSlot = 'dinner';
           this.modal = 'viewRecipe';
         },
 
-        async addRecipeToShoppingList(recipe) {
-          const res = await fetch(`/api/recipes/${recipe.id}/add-to-shopping-list`, { method: 'POST' });
+        async addRecipeToCalendar(recipe, servings) {
+          if (!this.recipeViewDate) return;
+          await fetch('/api/calendar/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: this.recipeViewDate, meal_slot: this.recipeViewSlot, recipe_id: recipe.id, servings }),
+          });
+          this.modal = null;
+          await this.fetchCalendar();
+          this.showToast(`Added to calendar: ${this.recipeViewDate}`);
+        },
+
+        async addRecipeToShoppingList(recipe, servings) {
+          const s = servings || recipe.servings || 1;
+          const res = await fetch(`/api/recipes/${recipe.id}/add-to-shopping-list?servings=${s}`, { method: 'POST' });
           const data = await res.json();
           this.modal = null;
           this.showToast(`Added ${data.added} missing ingredient(s) to shopping list`);
           await this.fetchShoppingList();
         },
 
+        cookIt(recipe, servings) {
+          const s = servings || recipe.servings || 1;
+          this.cookItConfirm = { recipe, servings: s };
+          this.modal = 'cookItConfirm';
+        },
+
+        async confirmCookIt() {
+          const { recipe, servings } = this.cookItConfirm;
+          const res = await fetch('/api/meals', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ recipe_id: recipe.id, servings_made: servings }),
+          });
+          if (res.ok) {
+            this.modal = null;
+            this.cookItConfirm = null;
+            this.showToast(`Cooked ${recipe.name} (${servings} serving${servings !== 1 ? 's' : ''})`, 'success');
+            await this.fetchInventory();
+            await this.fetchExpiring();
+          } else {
+            this.showToast('Failed to log meal', 'error');
+          }
+        },
+
         async deleteRecipe(id) {
-          if (!confirm('Delete this recipe?')) return;
-          await fetch(`/api/recipes/${id}`, { method: 'DELETE' });
+          let msg = 'Delete this recipe?';
+          try {
+            const res = await fetch(`/api/recipes/${id}/future-calendar`);
+            if (res.ok) {
+              const { count } = await res.json();
+              if (count > 0) msg = `This recipe is scheduled ${count} time${count !== 1 ? 's' : ''} on the calendar. Delete anyway?`;
+            }
+          } catch (e) { /* fall through to plain confirm */ }
+          if (!confirm(msg)) return;
+          const delRes = await fetch(`/api/recipes/${id}`, { method: 'DELETE' });
+          if (!delRes.ok) {
+            const body = await delRes.text();
+            this.showToast(`Failed to delete: ${body}`, 'error');
+            return;
+          }
           await this.fetchRecipes();
           this.showToast('Recipe deleted');
         },
@@ -1295,6 +1810,123 @@
           this.showToast(`Added ${data.items.length} item(s) to shopping list`);
           await this.fetchShoppingList();
           this.activeTab = 'shopping';
+        },
+
+        // --- Remove Stock Scanner ---
+        async openRemoveStockScanner() {
+          this.removeStockScanOpen = true;
+          this._removeStockActive = false;
+          await this.$nextTick();
+          const video = document.getElementById('remove-stock-video');
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+            });
+            if (!this.removeStockScanOpen) { stream.getTracks().forEach(t => t.stop()); return; }
+            this._removeStockStream = stream;
+            video.srcObject = stream;
+            await video.play();
+          } catch {
+            this.removeStockScanOpen = false;
+            this.showToast('Camera unavailable', 'error');
+            return;
+          }
+          this._removeStockActive = true;
+          let cooldown = false;
+          if (typeof BarcodeDetector !== 'undefined') {
+            const detector = new BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39'] });
+            const scan = async () => {
+              if (!this._removeStockActive) return;
+              if (!cooldown) {
+                try {
+                  const codes = await detector.detect(video);
+                  if (codes.length > 0) {
+                    cooldown = true;
+                    await this.onRemoveStockScanned(codes[0].rawValue);
+                    setTimeout(() => { cooldown = false; }, 2000);
+                  }
+                } catch {}
+              }
+              this._removeStockRaf = requestAnimationFrame(scan);
+            };
+            this._removeStockRaf = requestAnimationFrame(scan);
+          } else {
+            this._codeReader = new ZXing.BrowserMultiFormatReader();
+            this._codeReader.decodeFromVideoElementContinuously(video, async (result) => {
+              if (result && !cooldown) {
+                cooldown = true;
+                await this.onRemoveStockScanned(result.getText());
+                setTimeout(() => { cooldown = false; }, 2000);
+              }
+            });
+          }
+        },
+
+        closeRemoveStockScanner() {
+          this._removeStockActive = false;
+          if (this._removeStockRaf) { cancelAnimationFrame(this._removeStockRaf); this._removeStockRaf = null; }
+          if (this._codeReader) { this._codeReader.reset(); this._codeReader = null; }
+          if (this._removeStockStream) { this._removeStockStream.getTracks().forEach(t => t.stop()); this._removeStockStream = null; }
+          this.removeStockScanOpen = false;
+        },
+
+        async onRemoveStockScanned(code) {
+          try {
+            const res = await fetch('/api/inventory/barcode/' + encodeURIComponent(code));
+            if (!res.ok) { this.showToast('Item not found', 'error'); return; }
+            const item = await res.json();
+            const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
+            const newQty = Math.max(0, parseFloat((item.quantity - scanQty).toFixed(4)));
+            const patch = await fetch(`/api/inventory/${item.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ quantity: newQty }),
+            });
+            if (patch.ok) {
+              this.showToast(`${item.name}: ${item.quantity} → ${newQty} ${item.unit}`, 'success');
+              this.fetchInventory();
+            } else {
+              this.showToast('Update failed', 'error');
+            }
+          } catch {
+            this.showToast('Scan error', 'error');
+          }
+        },
+
+        // --- History ---
+        async fetchHistory() {
+          const res = await fetch('/api/history?limit=50');
+          if (res.ok) {
+            const data = await res.json();
+            this.historyItems = data.rows || [];
+          }
+        },
+
+        // --- Meals ---
+        async fetchMeals() {
+          this.mealsOffset = 0;
+          const res = await fetch('/api/meals?limit=20&offset=0');
+          if (res.ok) {
+            const data = await res.json();
+            this.meals = data.meals;
+            this.mealsTotal = data.total;
+          }
+        },
+
+        async loadMoreMeals() {
+          this.mealsOffset += 20;
+          const res = await fetch(`/api/meals?limit=20&offset=${this.mealsOffset}`);
+          if (res.ok) {
+            const data = await res.json();
+            this.meals = this.meals.concat(data.meals);
+            this.mealsTotal = data.total;
+          }
+        },
+
+        async fetchMealStats() {
+          const tzOffset = -new Date().getTimezoneOffset();
+          const res = await fetch(`/api/meals/stats?tz_offset=${tzOffset}`);
+          if (res.ok) this.mealsStats = await res.json();
         },
       };
     }
