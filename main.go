@@ -7,6 +7,9 @@ import (
 	"os"
 
 	"kitchen_manager/handlers"
+	"kitchen_manager/internal/auth"
+	"kitchen_manager/internal/database"
+	"kitchen_manager/internal/tlscert"
 )
 
 const (
@@ -21,7 +24,8 @@ func main() {
 	if dbPath == "" {
 		dbPath = "./kitchen.db"
 	}
-	if err := openDB(dbPath); err != nil {
+	db, err := database.OpenDB(dbPath)
+	if err != nil {
 		log.Fatal("db open:", err)
 	}
 	defer db.Close()
@@ -53,19 +57,19 @@ func main() {
 		if os.Getenv("OAUTH_ALLOWED_EMAILS") == "" {
 			log.Fatal("OAUTH_ALLOWED_EMAILS must be set when OAUTH_ENABLED=true (comma-separated list of allowed emails)")
 		}
-		sessionManager = newSessionManager()
-		oauthCfg := newOAuthConfig()
-		allowed := allowedEmails()
+		sm := auth.NewSessionManager(db)
+		oauthCfg := auth.NewOAuthConfig()
+		allowed := auth.AllowedEmails()
 
-		mux.HandleFunc("/auth/login", handleLogin(oauthCfg))
-		mux.HandleFunc("/auth/callback", handleCallback(oauthCfg, allowed))
-		mux.HandleFunc("/auth/logout", handleLogout)
+		mux.HandleFunc("/auth/login", auth.HandleLogin(sm, oauthCfg))
+		mux.HandleFunc("/auth/callback", auth.HandleCallback(sm, oauthCfg, allowed))
+		mux.HandleFunc("/auth/logout", auth.HandleLogout(sm))
 
-		handler = sessionManager.LoadAndSave(authMiddleware(mux))
+		handler = sm.LoadAndSave(auth.AuthMiddleware(sm, mux))
 	}
 
 	if os.Getenv("SELF_SIGNED_TLS") == "true" {
-		if err := ensureCert(certFile, keyFile); err != nil {
+		if err := tlscert.EnsureCert(certFile, keyFile); err != nil {
 			log.Fatal("tls cert:", err)
 		}
 		go func() {

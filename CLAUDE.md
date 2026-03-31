@@ -41,12 +41,12 @@ go run .
 **Production (Docker):**
 ```bash
 cp .env.example .env  # fill in values
-docker compose up -d
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
 **Redeploy production (after code changes):**
 ```bash
-docker compose down && docker compose up -d --build
+docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 ## Environment Variables
@@ -64,7 +64,7 @@ docker compose down && docker compose up -d --build
 
 ## Auth
 
-`auth.go` contains the full OAuth flow. When `OAUTH_ENABLED` is unset, the `authMiddleware` is not added and all requests pass through unauthenticated. Sessions are stored in SQLite (`sessions` table) using an HMAC-signed token derived from `SESSION_SECRET` — sessions survive app restarts. Session cookies are managed by `alexedwards/scs`.
+`internal/auth/` contains the full OAuth flow. When `OAUTH_ENABLED` is unset, the auth middleware is not added and all requests pass through unauthenticated. Sessions are stored in SQLite (`sessions` table) using an HMAC-signed token derived from `SESSION_SECRET` — sessions survive app restarts. Session cookies are managed by `alexedwards/scs`.
 
 ## Architecture
 
@@ -75,8 +75,10 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `handlers/` — HTTP request handlers (one file per domain: inventory, shopping, recipes, calendar)
 - `services/` — business logic that spans multiple DB tables (threshold generation, weekly shopping simulation)
 - `units/` — unit enum definitions, dimension validation, and conversion math
-- `models.go` — shared structs used across handlers and services
-- `db.go` — SQLite schema creation and migration (runs on startup)
+- `internal/database/` — SQLite schema creation and migration (runs on startup)
+- `internal/auth/` — OAuth flow, session management, auth middleware
+- `internal/tlscert/` — self-signed TLS certificate generation
+- `deploy/` — Dockerfile, docker-compose.yml, Caddyfile.example
 - `static/index.html` — entire frontend as a single file (~40KB)
 
 **Request flow:** Frontend → Handler → Service (if needed) → Raw SQL → SQLite (`kitchen.db`)
