@@ -32,11 +32,11 @@ func newTestDB(t *testing.T) *sql.DB {
 		barcode TEXT NOT NULL DEFAULT '',
 		preferred_unit TEXT NOT NULL DEFAULT '',
 		unit_cost_cents INTEGER NOT NULL DEFAULT 0,
-		quantity_per_scan REAL NOT NULL DEFAULT 1
+		quantity_per_scan REAL NOT NULL DEFAULT 0
 	);
 	CREATE TABLE IF NOT EXISTS inventory_history (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		inventory_id INTEGER NOT NULL REFERENCES inventory(id),
+		inventory_id INTEGER NOT NULL,
 		item_name TEXT NOT NULL DEFAULT '',
 		changed_at TEXT NOT NULL,
 		changed_by TEXT NOT NULL DEFAULT 'system',
@@ -153,8 +153,8 @@ func TestCreateInventoryItem(t *testing.T) {
 	}
 	var item map[string]any
 	json.NewDecoder(w.Body).Decode(&item)
-	if item["name"] != "Milk" {
-		t.Errorf("want name Milk, got %v", item["name"])
+	if item["name"] != "milk" {
+		t.Errorf("want name milk, got %v", item["name"])
 	}
 	if item["id"] == nil {
 		t.Error("want id, got nil")
@@ -178,7 +178,7 @@ func TestListInventoryItems(t *testing.T) {
 	json.NewDecoder(w2.Body).Decode(&items)
 	found := false
 	for _, item := range items {
-		if item["name"] == "Eggs" {
+		if item["name"] == "eggs" {
 			found = true
 		}
 	}
@@ -252,7 +252,7 @@ func TestGetExpiringSoon(t *testing.T) {
 	json.NewDecoder(w2.Body).Decode(&items)
 	found := false
 	for _, item := range items {
-		if item["name"] == "Yogurt" {
+		if item["name"] == "yogurt" {
 			found = true
 		}
 	}
@@ -374,7 +374,7 @@ func TestGenerateFromThresholds(t *testing.T) {
 	json.NewDecoder(w3.Body).Decode(&items)
 	found := false
 	for _, item := range items {
-		if item["name"] == "ThresholdTest" {
+		if item["name"] == "thresholdtest" {
 			found = true
 		}
 	}
@@ -483,7 +483,7 @@ func TestAddRecipeToShoppingList(t *testing.T) {
 	json.NewDecoder(w3.Body).Decode(&items)
 	found := false
 	for _, item := range items {
-		if item["name"] == "RecipeEgg" {
+		if item["name"] == "recipeegg" {
 			found = true
 		}
 	}
@@ -559,15 +559,15 @@ func TestFullWeeklyPlanningFlow(t *testing.T) {
 	json.Unmarshal(listW.Body.Bytes(), &shoppingItems)
 	foundSauce, foundPasta := false, false
 	for _, item := range shoppingItems {
-		if item["name"] == "Tomato Sauce" {
+		if item["name"] == "tomato sauce" {
 			foundSauce = true
 		}
-		if item["name"] == "Pasta" {
+		if item["name"] == "pasta" {
 			foundPasta = true
 		}
 	}
 	if !foundSauce {
-		t.Error("threshold generation: Tomato Sauce should be in shopping list (below threshold)")
+		t.Error("threshold generation: tomato sauce should be in shopping list (below threshold)")
 	}
 	if foundPasta {
 		t.Error("threshold generation: Pasta should NOT be in shopping list (above threshold)")
@@ -609,22 +609,18 @@ func TestFullWeeklyPlanningFlow(t *testing.T) {
 	weekItems := weekResult["items"].([]any)
 
 	// Verify math:
-	// Pasta: 500g available. Recipe needs 300g per 2 servings (scale=1.0 since servings=2, recipe.servings=2).
-	//   Monday: need 300g, have 500g → shortfall 0, simulated → 200g
-	//   Wednesday: need 300g, have 200g → shortfall 100g, simulated → 0g
-	//   Total pasta needed: 100g
-	// Sauce: 1 jar available. Recipe needs 2 jars per 2 servings (scale=1.0).
-	//   Monday: need 2, have 1 → shortfall 1, simulated → 0
-	//   Wednesday: need 2, have 0 → shortfall 2, simulated → 0
-	//   Total sauce needed: 3 jars
+	// Pasta: 500g available. Recipe needs 300g × 2 occurrences = 600g total.
+	//   600g needed - 500g available = 100g shortfall
+	// Sauce: 1 can available. Recipe needs 2 cans × 2 occurrences = 4 cans total.
+	//   4 needed - 1 available = 3 cans shortfall
 
 	var pastaNeeded, sauceNeeded float64
 	for _, item := range weekItems {
 		m := item.(map[string]any)
 		switch m["name"] {
-		case "Pasta":
+		case "pasta":
 			pastaNeeded += m["quantity_needed"].(float64)
-		case "Tomato Sauce":
+		case "tomato sauce":
 			sauceNeeded += m["quantity_needed"].(float64)
 		}
 	}
@@ -673,13 +669,11 @@ func TestWeeklyShoppingAccountsForInventory(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&result)
 	items := result["items"].([]any)
 
-	// Mon: need 4, have 2 → buy 2, stock=0
-	// Wed: need 4, have 0 → buy 4
-	// Total = 6
+	// 2 recipes × 4 eggs = 8 total needed, 2 in inventory → shortfall = 6
 	total := 0.0
 	for _, item := range items {
 		m := item.(map[string]any)
-		if m["name"] == "CalEgg" {
+		if m["name"] == "calegg" {
 			total += m["quantity_needed"].(float64)
 		}
 	}
@@ -998,5 +992,147 @@ func TestGetInventoryItemByBarcode(t *testing.T) {
 	}
 	if item3["name"] != "Butter" {
 		t.Errorf("expected Butter, got %v", item3["name"])
+	}
+}
+
+func TestDuplicateMergeOnPost(t *testing.T) {
+	db := newTestDB(t)
+	mux := http.NewServeMux()
+	handlers.RegisterInventory(mux, db)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/inventory/", bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w
+	}
+
+	// First insert — should create a new item.
+	w1 := post(`{"name":"whole milk","quantity":2,"unit":"piece","barcode":"1234567890","expiration_date":"2026-06-01"}`)
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w1.Code, w1.Body.String())
+	}
+	var r1 map[string]any
+	json.Unmarshal(w1.Body.Bytes(), &r1)
+	id1 := r1["id"]
+
+	// Second post with same barcode/name/unit/expiration — should merge, not insert.
+	w2 := post(`{"name":"whole milk","quantity":3,"unit":"piece","barcode":"1234567890","expiration_date":"2026-06-01"}`)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 (merge), got %d: %s", w2.Code, w2.Body.String())
+	}
+	var r2 map[string]any
+	json.Unmarshal(w2.Body.Bytes(), &r2)
+	if r2["id"] != id1 {
+		t.Errorf("expected same id %v after merge, got %v", id1, r2["id"])
+	}
+	if r2["quantity"] != 5.0 {
+		t.Errorf("expected merged quantity 5, got %v", r2["quantity"])
+	}
+
+	// Verify only one row exists.
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE name='whole milk'`).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 inventory row after merge, got %d", count)
+	}
+
+	// Post without barcode — should always insert a new row, never merge.
+	w3 := post(`{"name":"whole milk","quantity":1,"unit":"piece","barcode":"","expiration_date":"2026-06-01"}`)
+	if w3.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for no-barcode post, got %d: %s", w3.Code, w3.Body.String())
+	}
+	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE name='whole milk'`).Scan(&count)
+	if count != 2 {
+		t.Errorf("expected 2 rows after no-barcode insert, got %d", count)
+	}
+
+	// Post with same barcode but different expiration — should insert a new row.
+	w4 := post(`{"name":"whole milk","quantity":1,"unit":"piece","barcode":"1234567890","expiration_date":"2026-07-01"}`)
+	if w4.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for different expiry, got %d: %s", w4.Code, w4.Body.String())
+	}
+	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE name='whole milk'`).Scan(&count)
+	if count != 3 {
+		t.Errorf("expected 3 rows after different-expiry insert, got %d", count)
+	}
+}
+
+func TestExpiryFirstDeductionCascade(t *testing.T) {
+	db := newTestDB(t)
+	mux := http.NewServeMux()
+	handlers.RegisterInventory(mux, db)
+
+	// Insert three sibling items with different expiration dates.
+	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,barcode,expiration_date,low_threshold) VALUES ('chicken breast',5,'lb','','2026-05-01',1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id2, id3 int64
+	db.QueryRow(`INSERT INTO inventory (name,quantity,unit,barcode,expiration_date,low_threshold) VALUES ('chicken breast',3,'lb','','2026-06-01',1) RETURNING id`).Scan(&id2)
+	db.QueryRow(`INSERT INTO inventory (name,quantity,unit,barcode,expiration_date,low_threshold) VALUES ('chicken breast',4,'lb','','',1) RETURNING id`).Scan(&id3)
+
+	// Get the id of the earliest-expiring item.
+	var id1 int64
+	db.QueryRow(`SELECT id FROM inventory WHERE expiration_date='2026-05-01'`).Scan(&id1)
+
+	// Patch id2 qty to 0 — cascade deducts from earliest expiry first (id1), then id2.
+	patchURL := "/api/inventory/" + strconv.FormatInt(id2, 10)
+	req := httptest.NewRequest(http.MethodPatch, patchURL, bytes.NewBufferString(`{"quantity":0}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	// Deduction of id2 (qty=3, newQty=0, deduct=3):
+	// Cascade order: id1 (exp 2026-05-01), id2 (exp 2026-06-01), id3 (no exp).
+	// id1 has 5 >= 3 → partial deduct: id1 becomes 5-3=2. id2 untouched by cascade... wait.
+	// Actually cascade deducts from earliest first: id1 qty=5, deduct=3 → id1 becomes 2, done.
+	// id2 and id3 unchanged.
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var qty1, qty2, qty3 float64
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id1).Scan(&qty1)
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id2).Scan(&qty2)
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id3).Scan(&qty3)
+
+	if qty1 != 2 {
+		t.Errorf("expected id1 qty=2 after cascade, got %v", qty1)
+	}
+	if qty2 != 3 {
+		t.Errorf("expected id2 qty=3 (untouched), got %v", qty2)
+	}
+	if qty3 != 4 {
+		t.Errorf("expected id3 qty=4 (untouched), got %v", qty3)
+	}
+
+	// Now deduct the remaining 2 from id1 — cascade: id1(2) fully consumed → deleted, id2 untouched.
+	patchURL1 := "/api/inventory/" + strconv.FormatInt(id1, 10)
+	req2 := httptest.NewRequest(http.MethodPatch, patchURL1, bytes.NewBufferString(`{"quantity":0}`))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	// deduct=2, cascade: id1(2) fully consumed → deleted. id2(3) >= 2 → id2 becomes 1.
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	// id1 should be deleted.
+	var exists int
+	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE id=?`, id1).Scan(&exists)
+	if exists != 0 {
+		t.Errorf("expected id1 deleted after full deduction, got count=%d", exists)
+	}
+	// deduct=2, id1(2) fully consumed → deduct hits 0, id2 untouched.
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id2).Scan(&qty2)
+	if qty2 != 3 {
+		t.Errorf("expected id2 qty=3 (untouched), got %v", qty2)
+	}
+	// id3 (no expiry) untouched.
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id3).Scan(&qty3)
+	if qty3 != 4 {
+		t.Errorf("expected id3 qty=4, got %v", qty3)
 	}
 }

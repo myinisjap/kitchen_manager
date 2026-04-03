@@ -88,9 +88,15 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	}
 	invRows.Close()
 
-	// Step 3: simulate day-by-day depletion
+	// Step 3: sum all ingredient quantities across all recipes, then subtract inventory once.
 	// key: "invID|preferredUnit" for linked ingredients, "name|unit" for unlinked
-	needs := map[string]*ShoppingNeed{}
+	type totalNeed struct {
+		invID *int64
+		name  string
+		unit  string
+		total float64
+	}
+	totals := map[string]*totalNeed{}
 
 	for _, e := range entries {
 		recServings := e.recipeServings
@@ -141,47 +147,46 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 					needed = converted
 				}
 
-				available := simulated[ing.invID.Int64]
-				shortfall := needed - available
-				if shortfall < 0 {
-					shortfall = 0
-				}
-
 				key := fmt.Sprintf("%d|%s", ing.invID.Int64, string(targetUnit))
-				if shortfall > 0 {
-					if needs[key] == nil {
-						v := ing.invID.Int64
-						needs[key] = &ShoppingNeed{
-							InventoryID: &v,
-							Name:        ing.name,
-							Unit:        string(targetUnit),
-						}
+				if totals[key] == nil {
+					v := ing.invID.Int64
+					totals[key] = &totalNeed{
+						invID: &v,
+						name:  ing.name,
+						unit:  string(targetUnit),
 					}
-					needs[key].QuantityNeeded += shortfall
 				}
-
-				// Deduct from simulated inventory in preferred unit
-				remaining := available - needed
-				if remaining < 0 {
-					remaining = 0
-				}
-				simulated[ing.invID.Int64] = remaining
+				totals[key].total += needed
 			} else {
 				// Unlinked ingredient: no conversion, use as-is
-				shortfall := rawNeeded
-				if shortfall < 0 {
-					shortfall = 0
-				}
 				key := ing.name + "|" + ing.unit
-				if shortfall > 0 {
-					if needs[key] == nil {
-						needs[key] = &ShoppingNeed{
-							Name: ing.name,
-							Unit: ing.unit,
-						}
+				if totals[key] == nil {
+					totals[key] = &totalNeed{
+						name: ing.name,
+						unit: ing.unit,
 					}
-					needs[key].QuantityNeeded += shortfall
 				}
+				totals[key].total += rawNeeded
+			}
+		}
+	}
+
+	// Subtract current inventory from totals to get shortfalls
+	needs := map[string]*ShoppingNeed{}
+	for key, t := range totals {
+		var shortfall float64
+		if t.invID != nil {
+			available := simulated[*t.invID]
+			shortfall = t.total - available
+		} else {
+			shortfall = t.total
+		}
+		if shortfall > 0 {
+			needs[key] = &ShoppingNeed{
+				InventoryID:    t.invID,
+				Name:           t.name,
+				Unit:           t.unit,
+				QuantityNeeded: shortfall,
 			}
 		}
 	}

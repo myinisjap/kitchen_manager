@@ -146,6 +146,18 @@ func HandleCallback(sm *scs.SessionManager, oauthCfg *oauth2.Config, allowed map
 	}
 }
 
+// HandleMe returns the currently logged-in email, or empty string if auth is disabled.
+func HandleMe(sm *scs.SessionManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		email := ""
+		if sm != nil {
+			email = sm.GetString(r.Context(), "email")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"email": email})
+	}
+}
+
 // HandleLogout destroys the session and redirects to the login page.
 func HandleLogout(sm *scs.SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

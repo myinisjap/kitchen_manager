@@ -76,10 +76,56 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				return
 			}
 		}
-		if item.QuantityPerScan <= 0 {
-			item.QuantityPerScan = 1
+		if item.QuantityPerScan < 0 {
+			item.QuantityPerScan = 0
 		}
 		item.Name = strings.ToLower(strings.TrimSpace(item.Name))
+
+		// Check for an existing item with identical identifying fields; if found, add quantity instead of inserting.
+		// Only merge when barcode is non-empty to avoid incorrectly merging unrelated items with no barcode.
+		var existingID int64
+		var existingQty float64
+		var err error
+		if item.Barcode != "" {
+			err = db.QueryRow(
+				`SELECT id, quantity FROM inventory WHERE name=? AND unit=? AND location=? AND barcode=? AND expiration_date=? LIMIT 1`,
+				item.Name, item.Unit, item.Location, item.Barcode, item.ExpirationDate,
+			).Scan(&existingID, &existingQty)
+		} else {
+			err = sql.ErrNoRows
+		}
+		if err != nil && err != sql.ErrNoRows {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		if err == nil {
+			// Duplicate found — update quantity on the existing item.
+			newQty := existingQty + item.Quantity
+			if _, err := db.Exec(`UPDATE inventory SET quantity=? WHERE id=?`, newQty, existingID); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			_ = LogHistory(db, nil, LogHistoryParams{
+				InventoryID:    existingID,
+				ItemName:       item.Name,
+				ChangeType:     "add",
+				QuantityBefore: &existingQty,
+				QuantityAfter:  &newQty,
+				Unit:           item.Unit,
+				Source:         "manual",
+			})
+			row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, existingID)
+			updated, err := scanInventoryRow(row)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			WriteJSON(w, http.StatusOK, updated)
+			broadcastInventory()
+			return
+		}
+
 		res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			item.Name, item.Quantity, item.Unit, item.Location, item.ExpirationDate, item.LowThreshold, item.Barcode, item.PreferredUnit, item.UnitCostCents, item.QuantityPerScan)
 		if err != nil {
@@ -297,6 +343,121 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				patch["name"] = strings.ToLower(strings.TrimSpace(nStr))
 			}
 		}
+		newQtyVal, hasQty := patch["quantity"]
+		newQty, isFloat := newQtyVal.(float64)
+		isDeduction := hasQty && isFloat && newQty < qtyBefore
+
+		if isDeduction {
+			// Cascade deduction across all siblings (same name+unit) ordered by earliest expiration first.
+			// Items with no expiration date are consumed last.
+			deduct := qtyBefore - newQty
+
+			sibRows, err := db.Query(
+				`SELECT id, quantity FROM inventory WHERE name=? AND unit=?
+				 ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END ASC,
+				          expiration_date ASC`,
+				nameBefore, unitBefore,
+			)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			type sibRow struct {
+				id  int64
+				qty float64
+			}
+			var sibs []sibRow
+			for sibRows.Next() {
+				var s sibRow
+				if err := sibRows.Scan(&s.id, &s.qty); err != nil {
+					sibRows.Close()
+					WriteError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				sibs = append(sibs, s)
+			}
+			sibRows.Close()
+			if err := sibRows.Err(); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+
+			source := r.URL.Query().Get("source")
+			if source == "" {
+				source = "manual"
+			}
+
+			tx, err := db.Begin()
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+
+			var lastSibID int64
+			for _, s := range sibs {
+				if deduct <= 0 {
+					break
+				}
+				if s.qty <= deduct {
+					deduct -= s.qty
+					zero := 0.0
+					_ = LogHistory(db, tx, LogHistoryParams{
+						InventoryID:    s.id,
+						ItemName:       nameBefore,
+						ChangeType:     "deduct",
+						QuantityBefore: &s.qty,
+						QuantityAfter:  &zero,
+						Unit:           unitBefore,
+						Source:         source,
+					})
+					if _, err := tx.Exec(`DELETE FROM inventory WHERE id=?`, s.id); err != nil {
+						tx.Rollback()
+						WriteError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+				} else {
+					remaining := s.qty - deduct
+					deduct = 0
+					lastSibID = s.id
+					_ = LogHistory(db, tx, LogHistoryParams{
+						InventoryID:    s.id,
+						ItemName:       nameBefore,
+						ChangeType:     "deduct",
+						QuantityBefore: &s.qty,
+						QuantityAfter:  &remaining,
+						Unit:           unitBefore,
+						Source:         source,
+					})
+					if _, err := tx.Exec(`UPDATE inventory SET quantity=? WHERE id=?`, remaining, s.id); err != nil {
+						tx.Rollback()
+						WriteError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+				}
+			}
+
+			if err := tx.Commit(); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+
+			if lastSibID != 0 {
+				row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, lastSibID)
+				item, err := scanInventoryRow(row)
+				if err != nil {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				WriteJSON(w, http.StatusOK, item)
+			} else {
+				// All sibling stock exhausted
+				WriteJSON(w, http.StatusOK, map[string]any{"id": id, "quantity": 0})
+			}
+			broadcastInventory()
+			return
+		}
+
+		// Non-deduction patch: apply fields directly.
 		allowed := []string{"name", "quantity", "unit", "location", "expiration_date", "low_threshold", "barcode", "preferred_unit", "unit_cost_cents", "quantity_per_scan"}
 		for _, field := range allowed {
 			if val, ok := patch[field]; ok {
@@ -320,13 +481,11 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		if source == "" {
 			source = "manual"
 		}
-		if _, hasQty := patch["quantity"]; hasQty {
+		if hasQty {
 			qtyAfter := item["quantity"].(float64)
 			changeType := "edit"
 			if qtyAfter > qtyBefore {
 				changeType = "add"
-			} else if qtyAfter < qtyBefore {
-				changeType = "deduct"
 			}
 			_ = LogHistory(db, nil, LogHistoryParams{
 				InventoryID:    id,

@@ -38,6 +38,7 @@ func main() {
 	handlers.RegisterShopping(mux, db, hub)
 	handlers.RegisterRecipes(mux, db, hub)
 	handlers.RegisterRecipeImport(mux)
+	handlers.RegisterReceipt(mux, db)
 	handlers.RegisterCalendar(mux, db, hub)
 	handlers.RegisterHistory(mux, db)
 	handlers.RegisterSettings(mux, db)
@@ -64,8 +65,11 @@ func main() {
 		mux.HandleFunc("/auth/login", auth.HandleLogin(sm, oauthCfg))
 		mux.HandleFunc("/auth/callback", auth.HandleCallback(sm, oauthCfg, allowed))
 		mux.HandleFunc("/auth/logout", auth.HandleLogout(sm))
+		mux.HandleFunc("GET /api/me", auth.HandleMe(sm))
 
 		handler = sm.LoadAndSave(auth.AuthMiddleware(sm, mux))
+	} else {
+		mux.HandleFunc("GET /api/me", auth.HandleMe(nil))
 	}
 
 	if os.Getenv("SELF_SIGNED_TLS") == "true" {
