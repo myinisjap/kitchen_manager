@@ -98,26 +98,48 @@
 
             <!-- Single-location: render exactly as before -->
             <template x-if="group.locations.length === 1">
-              <div class="p-3 flex items-start justify-between">
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2">
-                    <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
-                    <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
-                      <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
-                    </template>
+              <div>
+                <div class="p-3 flex items-start justify-between">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
+                      <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
+                        <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
+                      </template>
+                    </div>
+                    <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                      <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span>
+                      &bull; <span x-text="group.locations[0].location || 'No location'"></span>
+                      <template x-if="group.locations[0].expiration_date">
+                        <span> &bull; Exp: <span x-text="group.locations[0].expiration_date"></span></span>
+                      </template>
+                    </div>
                   </div>
-                  <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                    <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span>
-                    &bull; <span x-text="group.locations[0].location || 'No location'"></span>
-                    <template x-if="group.locations[0].expiration_date">
-                      <span> &bull; Exp: <span x-text="group.locations[0].expiration_date"></span></span>
-                    </template>
+                  <div class="flex gap-2 ml-2">
+                    <button @click="openDeductModal(group)" class="text-orange-500 text-sm font-medium">−</button>
+                    <button @click="editItem(group.locations[0])" class="text-blue-600 text-sm font-medium">Edit</button>
+                    <button @click="deleteItem(group.locations[0].id)" class="text-red-500 text-sm">✕</button>
+                    <button @click="toggleSkuExpand(group.locations[0].id)" class="text-gray-500 text-sm hover:text-gray-700 dark:hover:text-gray-300" title="Manage barcode aliases">🏷️</button>
                   </div>
                 </div>
-                <div class="flex gap-2 ml-2">
-                  <button @click="openDeductModal(group)" class="text-orange-500 text-sm font-medium">−</button>
-                  <button @click="editItem(group.locations[0])" class="text-blue-600 text-sm font-medium">Edit</button>
-                  <button @click="deleteItem(group.locations[0].id)" class="text-red-500 text-sm">✕</button>
+                <!-- SKU aliases section for single-location items -->
+                <div x-show="expandedSkus[group.locations[0].id]" class="border-t dark:border-gray-700 px-3 py-2">
+                  <p class="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Barcode aliases:</p>
+                  <template x-for="sku in (skusByItem[group.locations[0].id] || [])" :key="sku.id">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded font-mono"
+                            x-text="sku.barcode + ' (scan: ' + sku.quantity_per_scan + ')'"></span>
+                      <button @click="deleteSkuAlias(group.locations[0].id, sku.id)"
+                              class="text-red-400 text-xs hover:text-red-600 ml-2">Remove</button>
+                    </div>
+                  </template>
+                  <form @submit.prevent="addSkuAlias(group.locations[0].id)" class="flex gap-1 mt-2">
+                    <input type="text" x-model="skuNewForm.barcode" placeholder="Barcode"
+                           class="flex-1 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                    <input type="number" x-model.number="skuNewForm.quantity_per_scan" placeholder="Qty/scan"
+                           class="w-20 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                    <button type="submit" class="text-xs bg-green-600 text-white px-2 py-1 rounded">Add</button>
+                  </form>
                 </div>
               </div>
             </template>
@@ -142,6 +164,7 @@
                   </div>
                   <div class="flex items-center gap-2 ml-2">
                     <button @click.stop="openDeductModal(group)" class="text-orange-500 text-sm font-medium">−</button>
+                    <button @click="toggleSkuExpand(group.locations[0].id)" class="text-gray-500 text-sm hover:text-gray-700 dark:hover:text-gray-300" title="Manage barcode aliases">🏷️</button>
                     <span class="text-gray-400 text-sm" x-text="expanded ? '▲' : '▼'"></span>
                   </div>
                 </div>
@@ -162,6 +185,25 @@
                       </div>
                     </div>
                   </template>
+                </div>
+                <!-- SKU aliases section (shown when expanded) -->
+                <div x-show="expandedSkus[group.locations[0].id]" class="border-t dark:border-gray-700 px-3 py-2">
+                  <p class="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Barcode aliases:</p>
+                  <template x-for="sku in (skusByItem[group.locations[0].id] || [])" :key="sku.id">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded font-mono"
+                            x-text="sku.barcode + ' (scan: ' + sku.quantity_per_scan + ')'"></span>
+                      <button @click="deleteSkuAlias(group.locations[0].id, sku.id)"
+                              class="text-red-400 text-xs hover:text-red-600 ml-2">Remove</button>
+                    </div>
+                  </template>
+                  <form @submit.prevent="addSkuAlias(group.locations[0].id)" class="flex gap-1 mt-2">
+                    <input type="text" x-model="skuNewForm.barcode" placeholder="Barcode"
+                           class="flex-1 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                    <input type="number" x-model.number="skuNewForm.quantity_per_scan" placeholder="Qty/scan"
+                           class="w-20 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                    <button type="submit" class="text-xs bg-green-600 text-white px-2 py-1 rounded">Add</button>
+                  </form>
                 </div>
               </div>
             </template>
@@ -681,6 +723,54 @@
     </div>
   </div>
 
+  <!-- SKU Merge Dialog Modal -->
+  <template x-if="hasMergeDialog">
+    <div class="fixed inset-0 bg-black z-50 flex flex-col">
+      <div class="p-4 flex items-center justify-between">
+        <span class="text-white text-sm font-medium">Did you mean this?</span>
+        <button @click="skipMerge()" class="text-white/70 text-sm border border-white/30 rounded-lg px-3 py-1.5">Close</button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 bg-gray-900">
+        <!-- Scanned barcode info -->
+        <div class="bg-gray-800 rounded-lg p-4 mb-4">
+          <p class="text-xs text-gray-400 uppercase mb-1">Scanned barcode</p>
+          <p class="text-white font-mono text-lg" x-text="scannedCode"></p>
+          <p class="text-sm text-gray-300 mt-1" x-text="skuMergeDialog.name || 'Unknown name'"></p>
+          <p class="text-sm text-gray-400 mt-0.5" x-text="skuMergeDialog.quantity && skuMergeDialog.unit ? skuMergeDialog.quantity + ' ' + skuMergeDialog.unit : ''"></p>
+        </div>
+        <!-- Candidate cards -->
+        <template x-if="mergeCandidates">
+          <div class="space-y-2">
+            <template x-for="candidate in skuMergeDialog.candidates" :key="candidate.id">
+              <div class="bg-gray-800 rounded-lg p-3 border border-gray-700 hover:border-gray-600 transition-colors">
+                <div class="flex justify-between items-start">
+                  <div class="flex-1 min-w-0">
+                    <p class="text-white font-medium" x-text="candidate.name || 'Unknown'"></p>
+                    <p class="text-sm text-gray-400 mt-0.5" x-text="(candidate.unit && candidate.quantity) ? candidate.quantity + ' ' + candidate.unit : ''"></p>
+                    <p class="text-xs text-gray-500 mt-0.5" x-text="candidate.location || 'No location'"></p>
+                  </div>
+                  <button @click="mergeWithItem(candidate)"
+                          class="bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-1.5 rounded-lg font-medium">
+                    Merge here
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+        <template x-if="!mergeCandidates">
+          <p class="text-gray-400 text-sm">No matching items found. Create a new item instead?</p>
+        </template>
+      </div>
+      <div class="p-4 bg-gray-800 border-t border-gray-700">
+        <button @click="skipMerge()"
+                class="w-full border border-gray-600 text-gray-300 rounded-lg px-4 py-2 text-sm font-medium hover:bg-gray-700">
+          Create new item instead
+        </button>
+      </div>
+    </div>
+  </template>
+
   <!-- Add Shopping Item Modal -->
   <div x-show="modal === 'shopping'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
     <div class="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4">
@@ -1046,7 +1136,7 @@
         <div class="flex gap-2 pt-1">
           <button @click="receiptItems = null; receiptFile = null; receiptError = ''" class="flex-1 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded-lg py-2 text-sm">← Back</button>
           <button @click="addReceiptToInventory()" class="flex-1 bg-orange-500 text-white rounded-lg py-2 text-sm font-medium"
-                  x-text="'Add ' + receiptItems.filter(i=>i._include).length + ' items to inventory'"></button>
+                  x-text="'Add ' + (receiptItems?.filter(i=>i._include) || []).length + ' items to inventory'"></button>
         </div>
       </div>
     </div>
@@ -1106,6 +1196,15 @@
         itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
         deductModal: null,   // { group, selectedLocationId, qty }
 
+        // SKU alias merge
+        skuMergeDialog: null,  // { barcode, name, quantity, unit, candidates: [], mode: 'find'|'grocery' }
+        scannedCode: '',       // Temporary storage for current scan
+
+        // SKU alias management (inventory row expand)
+        expandedSkus: {},
+        skusByItem: {},
+        skuNewForm: { barcode: '', quantity_per_scan: 1 },
+
         // Auth
         currentUser: null,
 
@@ -1159,15 +1258,47 @@
           localStorage.setItem('km-dark-mode', this.darkMode);
         },
 
+        // Safe navigation helpers for templates
+        safeGet(obj, path, fallback) {
+          if (!obj) return fallback;
+          return this.safeGet(this.parsePath(obj, path), path, fallback);
+        },
+
+        parsePath(obj, path) {
+          if (!path || typeof path !== 'string') return obj;
+          const parts = path.split('.');
+          let result = obj;
+          for (const part of parts) {
+            if (result === null || result === undefined) return null;
+            result = result[part];
+          }
+          return result;
+        },
+
+        // Check if merge dialog is active
+        hasMergeDialog() {
+          return this.skuMergeDialog !== null && this.skuMergeDialog !== undefined;
+        },
+
+        // Check if merge has candidates
+        mergeCandidates() {
+          if (!this.skuMergeDialog) return false;
+          const candidates = this.skuMergeDialog.candidates;
+          return candidates !== null && candidates !== undefined && candidates.length > 0;
+        },
+
         async init() {
           this.calendarWeekStart = this.getMonday(new Date());
+          // Determine base path for API endpoints (empty if running directly, /kitchen-manager if behind Traefik)
+          this.basePath = window.location.pathname.startsWith('/kitchen-manager') ? '/kitchen-manager' : '';
+          this.baseUrl = this.basePath;
           this.fetchMe();
           await this.fetchInventory();
           await this.fetchExpiring();
           await this.fetchShoppingList();
           await this.fetchRecipes();
           await this.fetchCalendar();
-          const uRes = await fetch('/api/units');
+          const uRes = await fetch(this.baseUrl + '/api/units');
           this.unitGroups = await uRes.json();
           this.initWebSocket();
         },
@@ -1187,7 +1318,7 @@
           let delay = 1000;
           const connect = () => {
             const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-            const ws = new WebSocket(`${proto}://${location.host}/ws`);
+            const ws = new WebSocket(`${proto}://${location.host}${this.basePath}/ws`);
             ws.onmessage = (e) => {
               try {
                 const msg = JSON.parse(e.data);
@@ -1208,7 +1339,7 @@
           const q = this.itemForm.name;
           if (!q) { this.suggestions = []; this.showSuggestions = false; return; }
           try {
-            const res = await fetch('/api/inventory/suggestions?q=' + encodeURIComponent(q));
+            const res = await fetch('/kitchen-manager/api/inventory/suggestions?q=' + encodeURIComponent(q));
             if (!res.ok) { this.suggestions = []; this.showSuggestions = false; return; }
             this.suggestions = await res.json();
             this.showSuggestions = this.suggestions.length > 0;
@@ -1289,6 +1420,7 @@
         async onBarcodeScanned(code) {
           if (!this.scannerOpen) return; // guard against duplicate ZXing callbacks
           const mode = this.scannerMode;
+          this.scannedCode = code;
           this.closeScanner();
           if (mode === 'fill') {
             this.itemForm.barcode = code;
@@ -1296,7 +1428,7 @@
           }
           // mode === 'find': look up in our inventory first
           try {
-            const res = await fetch('/api/inventory/barcode/' + encodeURIComponent(code));
+            const res = await fetch('/kitchen-manager/api/inventory/barcode/' + encodeURIComponent(code));
             if (res.ok) {
               const item = await res.json();
               this.editItem(item);
@@ -1307,16 +1439,20 @@
           }
           // Not in inventory — try Open Food Facts
           let prefill = { barcode: code };
+          let scannedName = '', scannedQty = null, scannedUnit = null;
           try {
             const off = await fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code) + '.json');
             if (off.ok) {
               const data = await off.json();
               if (data.status === 1 && data.product) {
                 const p = data.product;
+                if (p.product_name) scannedName = p.product_name;
                 if (p.product_name) prefill.name = p.product_name;
 
                 const parsed = this.parseOffQuantity(p);
                 if (parsed) {
+                  scannedQty = parsed.qty;
+                  scannedUnit = parsed.unit;
                   prefill.quantity = parsed.qty;
                   prefill.unit = parsed.unit;
                   prefill.preferred_unit = parsed.unit;
@@ -1325,6 +1461,28 @@
             }
           } catch {
             // silent fallback — open form with just barcode
+          }
+
+          // Try to find merge candidates via similar search if we have a name
+          if (scannedName && scannedName.trim()) {
+            try {
+              const similarRes = await fetch(this.baseUrl + '/api/inventory/similar?name=' + encodeURIComponent(scannedName));
+              if (similarRes.ok) {
+                const candidates = await similarRes.json();
+                if (candidates && candidates.length > 0) {
+                  // Show merge dialog
+                  this.skuMergeDialog = {
+                    barcode: code,
+                    name: scannedName,
+                    quantity: scannedQty || 1,
+                    unit: scannedUnit || '',
+                    candidates: candidates,
+                    mode: 'find',
+                  };
+                  return;
+                }
+              }
+            } catch {}
           }
           this.openAddItem();
           Object.assign(this.itemForm, prefill);
@@ -1486,11 +1644,11 @@
           let successCount = 0;
           for (const pending of this.groceryPendingItems) {
             try {
-              const cur = await fetch('/api/inventory/barcode/' + encodeURIComponent(pending.barcode));
+              const cur = await fetch('/kitchen-manager/api/inventory/barcode/' + encodeURIComponent(pending.barcode));
               if (!cur.ok) continue;
               const item = await cur.json();
               const newQty = parseFloat((item.quantity + pending.qty).toFixed(4));
-              const patch = await fetch(`/api/inventory/${pending.id}`, {
+              const patch = await fetch(this.baseUrl + '/api/inventory/' + pending.id, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ quantity: newQty }),
@@ -1505,12 +1663,13 @@
 
         async onGroceryBarcodeScanned(code) {
           if (!this.groceryScanOpen || this.groceryScanPaused || this.groceryScanReview || this._groceryProcessing || this._scanCooldown) return;
+          this.scannedCode = code;
           this._groceryProcessing = true;
           this._scanCooldown = true;
           setTimeout(() => { this._scanCooldown = false; }, 2500);
 
           try {
-            const res = await fetch('/api/inventory/barcode/' + encodeURIComponent(code));
+            const res = await fetch('/kitchen-manager/api/inventory/barcode/' + encodeURIComponent(code));
             if (res.ok) {
               const item = await res.json();
               // Add to or update pending list
@@ -1576,12 +1735,35 @@
           // Location pre-fill from existing inventory
           if (prefill.name) {
             try {
-              const invRes = await fetch('/api/inventory/?name=' + encodeURIComponent(prefill.name));
+              const invRes = await fetch('/kitchen-manager/api/inventory/?name=' + encodeURIComponent(prefill.name));
               if (invRes.ok) {
                 const invData = await invRes.json();
                 if (invData && invData.length > 0 && invData[0].location) prefill.location = invData[0].location;
               }
             } catch { /* silent */ }
+          }
+
+          // Try to find merge candidates via similar search if we have a name
+          if (prefill.name && prefill.name.trim()) {
+            try {
+              const similarRes = await fetch(this.baseUrl + '/api/inventory/similar?name=' + encodeURIComponent(prefill.name));
+              if (similarRes.ok) {
+                const candidates = await similarRes.json();
+                if (candidates && candidates.length > 0) {
+                  // Show merge dialog
+                  this.skuMergeDialog = {
+                    barcode: code,
+                    name: prefill.name,
+                    quantity: prefill.quantity || 1,
+                    unit: prefill.unit || '',
+                    candidates: candidates,
+                    mode: 'grocery',
+                  };
+                  this.groceryScanPaused = false;
+                  return;
+                }
+              }
+            } catch {}
           }
 
           this.groceryNewItem = prefill;
@@ -1590,7 +1772,7 @@
 
         async confirmGroceryNewItem() {
           try {
-            const res = await fetch('/api/inventory/', {
+            const res = await fetch('/kitchen-manager/api/inventory/', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(this.groceryItemForm),
@@ -1626,7 +1808,7 @@
           const params = new URLSearchParams();
           if (this.inventorySearch) params.set('name', this.inventorySearch);
           if (this.inventoryLocation) params.set('location', this.inventoryLocation);
-          const res = await fetch('/api/inventory/grouped?' + params);
+          const res = await fetch('/kitchen-manager/api/inventory/grouped?' + params);
           const data = await res.json();
           this.inventoryItems = data;
           if (!this.inventoryLocation) {
@@ -1635,7 +1817,7 @@
         },
 
         async fetchExpiring() {
-          const res = await fetch('/api/inventory/expiring?days=7');
+          const res = await fetch('/kitchen-manager/api/inventory/expiring?days=7');
           this.expiringItems = await res.json();
         },
 
@@ -1652,7 +1834,7 @@
           this.showSuggestions = false;
           // If this is a location stub (from grouped view), fetch the full item
           if (!('preferred_unit' in locOrItem)) {
-            const res = await fetch(`/api/inventory/${locOrItem.id}`);
+            const res = await fetch(this.baseUrl + '/api/inventory/' + locOrItem.id);
             if (!res.ok) return;
             locOrItem = await res.json();
           }
@@ -1675,7 +1857,7 @@
           const loc = group.locations.find(l => l.id === selectedLocationId);
           if (!loc || qty <= 0) return;
           const newQty = Math.max(0, parseFloat((loc.quantity - qty).toFixed(4)));
-          const res = await fetch(`/api/inventory/${selectedLocationId}`, {
+          const res = await fetch(this.baseUrl + '/api/inventory/' + selectedLocationId, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ quantity: newQty, location_id: selectedLocationId }),
@@ -1694,14 +1876,14 @@
         async saveItem() {
           if (!this.itemForm.name) return;
           if (this.editingItem) {
-            await fetch(`/api/inventory/${this.editingItem.id}`, {
+            await fetch(this.baseUrl + '/api/inventory/' + this.editingItem.id, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(this.itemForm),
             });
             this.showToast('Item updated');
           } else {
-            await fetch('/api/inventory/', {
+            await fetch('/kitchen-manager/api/inventory/', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(this.itemForm),
@@ -1715,14 +1897,14 @@
 
         async deleteItem(id) {
           if (!confirm('Delete this item?')) return;
-          await fetch(`/api/inventory/${id}`, { method: 'DELETE' });
+          await fetch(this.baseUrl + '/api/inventory/' + id, { method: 'DELETE' });
           await this.fetchInventory();
           this.showToast('Item deleted');
         },
 
         // --- Shopping ---
         async fetchShoppingList() {
-          const res = await fetch('/api/shopping/?show_checked=true');
+          const res = await fetch('/kitchen-manager/api/shopping/?show_checked=true');
           this.shoppingItems = await res.json();
         },
 
@@ -1733,7 +1915,7 @@
 
         async saveShoppingItem() {
           if (!this.shoppingForm.name) return;
-          await fetch('/api/shopping/', {
+          await fetch('/kitchen-manager/api/shopping/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.shoppingForm),
@@ -1744,7 +1926,7 @@
         },
 
         async toggleShoppingItem(item) {
-          await fetch(`/api/shopping/${item.id}`, {
+          await fetch(this.baseUrl + '/api/shopping/' + item.id, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ checked: !item.checked }),
@@ -1753,18 +1935,18 @@
         },
 
         async deleteShoppingItem(id) {
-          await fetch(`/api/shopping/${id}`, { method: 'DELETE' });
+          await fetch(this.baseUrl + '/api/shopping/' + id, { method: 'DELETE' });
           await this.fetchShoppingList();
         },
 
         async clearCheckedItems() {
-          await fetch('/api/shopping/checked', { method: 'DELETE' });
+          await fetch('/kitchen-manager/api/shopping/checked', { method: 'DELETE' });
           await this.fetchShoppingList();
           this.showToast('Cleared checked items');
         },
 
         async generateFromThresholds() {
-          const res = await fetch('/api/shopping/generate-from-thresholds', { method: 'POST' });
+          const res = await fetch('/kitchen-manager/api/shopping/generate-from-thresholds', { method: 'POST' });
           const data = await res.json();
           await this.fetchShoppingList();
           this.showToast(`Added ${data.added} low-stock items`);
@@ -1772,7 +1954,7 @@
 
         async fetchMe() {
           try {
-            const res = await fetch('/api/me');
+            const res = await fetch('/kitchen-manager/api/me');
             if (res.ok) {
               const data = await res.json();
               this.currentUser = data.email || null;
@@ -1781,8 +1963,8 @@
         },
 
         async logout() {
-          await fetch('/auth/logout', { method: 'POST' });
-          window.location.href = '/auth/login';
+          await fetch(this.baseUrl + '/auth/logout', { method: 'POST' });
+          window.location.href = this.baseUrl + '/auth/login';
         },
 
         openReceiptImport() {
@@ -1800,7 +1982,7 @@
           try {
             const fd = new FormData();
             fd.append('file', this.receiptFile);
-            const res = await fetch('/api/receipt/parse', { method: 'POST', body: fd });
+            const res = await fetch('/kitchen-manager/api/receipt/parse', { method: 'POST', body: fd });
             const data = await res.json();
             if (!res.ok) { this.receiptError = data.error || 'Parsing failed'; return; }
             this.receiptItems = data.items.map(item => ({
@@ -1833,7 +2015,7 @@
               low_threshold: 0,
               quantity_per_scan: qtyPerScan || 0,
             };
-            const res = await fetch('/api/inventory/', {
+            const res = await fetch('/kitchen-manager/api/inventory/', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload),
@@ -1856,7 +2038,7 @@
           const params = new URLSearchParams();
           if (this.recipeTagFilter) params.set('tag', this.recipeTagFilter);
           if (this.recipeAvailableOnly) params.set('available_only', 'true');
-          const res = await fetch('/api/recipes/?' + params);
+          const res = await fetch('/kitchen-manager/api/recipes/?' + params);
           this.recipes = await res.json();
         },
 
@@ -1906,7 +2088,7 @@
             if (!this.recipeImportUrl) return;
             this.recipeImporting = true;
             try {
-              const res = await fetch('/api/recipes/import/url', {
+              const res = await fetch('/kitchen-manager/api/recipes/import/url', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url: this.recipeImportUrl }),
@@ -1930,7 +2112,7 @@
             try {
               const fd = new FormData();
               fd.append('file', this.recipeImportFile);
-              const res = await fetch('/api/recipes/import/pdf', { method: 'POST', body: fd });
+              const res = await fetch('/kitchen-manager/api/recipes/import/pdf', { method: 'POST', body: fd });
               const data = await res.json();
               if (!res.ok) { this.recipeImportError = data.error || 'Import failed'; return; }
               this._applyImportData(data);
@@ -1966,7 +2148,7 @@
         async saveRecipe() {
           if (!this.recipeForm.name) return;
           const isEdit = !!this.recipeForm.id;
-          await fetch(isEdit ? `/api/recipes/${this.recipeForm.id}` : '/api/recipes/', {
+          await fetch(isEdit ? this.baseUrl + '/api/recipes/' + this.recipeForm.id : this.baseUrl + '/api/recipes/', {
             method: isEdit ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.recipeForm),
@@ -1986,7 +2168,7 @@
 
         async addRecipeToCalendar(recipe, servings) {
           if (!this.recipeViewDate) return;
-          await fetch('/api/calendar/', {
+          await fetch('/kitchen-manager/api/calendar/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ date: this.recipeViewDate, meal_slot: this.recipeViewSlot, recipe_id: recipe.id, servings }),
@@ -1998,7 +2180,7 @@
 
         async addRecipeToShoppingList(recipe, servings) {
           const s = servings || recipe.servings || 1;
-          const res = await fetch(`/api/recipes/${recipe.id}/add-to-shopping-list?servings=${s}`, { method: 'POST' });
+          const res = await fetch(this.baseUrl + '/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST' });
           const data = await res.json();
           this.modal = null;
           this.showToast(`Added ${data.added} missing ingredient(s) to shopping list`);
@@ -2013,7 +2195,7 @@
 
         async confirmCookIt() {
           const { recipe, servings } = this.cookItConfirm;
-          const res = await fetch('/api/meals', {
+          const res = await fetch('/kitchen-manager/api/meals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ recipe_id: recipe.id, servings_made: servings }),
@@ -2032,14 +2214,14 @@
         async deleteRecipe(id) {
           let msg = 'Delete this recipe?';
           try {
-            const res = await fetch(`/api/recipes/${id}/future-calendar`);
+            const res = await fetch(this.baseUrl + '/api/recipes/' + id + '/future-calendar');
             if (res.ok) {
               const { count } = await res.json();
               if (count > 0) msg = `This recipe is scheduled ${count} time${count !== 1 ? 's' : ''} on the calendar. Delete anyway?`;
             }
           } catch (e) { /* fall through to plain confirm */ }
           if (!confirm(msg)) return;
-          const delRes = await fetch(`/api/recipes/${id}`, { method: 'DELETE' });
+          const delRes = await fetch(this.baseUrl + '/api/recipes/' + id, { method: 'DELETE' });
           if (!delRes.ok) {
             const body = await delRes.text();
             this.showToast(`Failed to delete: ${body}`, 'error');
@@ -2096,7 +2278,7 @@
 
         async fetchCalendar() {
           const start = this.calendarWeekStart.toISOString().split('T')[0];
-          const res = await fetch(`/api/calendar/week?start=${start}`);
+          const res = await fetch(this.baseUrl + '/api/calendar/week?start=' + start);
           this.calendarEntries = await res.json();
         },
 
@@ -2116,7 +2298,7 @@
 
         async saveCalendarEntry() {
           if (!this.calendarEntryForm.recipe_id) return;
-          await fetch('/api/calendar/', {
+          await fetch('/kitchen-manager/api/calendar/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.calendarEntryForm),
@@ -2127,14 +2309,14 @@
         },
 
         async deleteCalendarEntry(id) {
-          await fetch(`/api/calendar/${id}`, { method: 'DELETE' });
+          await fetch(this.baseUrl + '/api/calendar/' + id, { method: 'DELETE' });
           await this.fetchCalendar();
           this.showToast('Meal removed');
         },
 
         async generateWeeklyShopping() {
           const start = this.calendarWeekStart.toISOString().split('T')[0];
-          const res = await fetch(`/api/calendar/generate-weekly-shopping?start=${start}`, { method: 'POST' });
+          const res = await fetch(this.baseUrl + '/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST' });
           const data = await res.json();
           this.showToast(`Added ${data.items.length} item(s) to shopping list`);
           await this.fetchShoppingList();
@@ -2201,12 +2383,12 @@
 
         async onRemoveStockScanned(code) {
           try {
-            const res = await fetch('/api/inventory/barcode/' + encodeURIComponent(code));
+            const res = await fetch('/kitchen-manager/api/inventory/barcode/' + encodeURIComponent(code));
             if (!res.ok) { this.showToast('Item not found', 'error'); return; }
             const item = await res.json();
             const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
             const newQty = Math.max(0, parseFloat((item.quantity - scanQty).toFixed(4)));
-            const patch = await fetch(`/api/inventory/${item.id}`, {
+            const patch = await fetch(this.baseUrl + '/api/inventory/' + item.id, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ quantity: newQty }),
@@ -2222,9 +2404,134 @@
           }
         },
 
+        // --- SKU Alias Merge ---
+        async mergeWithItem(candidate) {
+          const dialog = this.skuMergeDialog;
+          const scannedUnit = dialog.unit;
+          const targetUnit = candidate.preferred_unit || candidate.unit;
+          let mergeQty = dialog.quantity || 1;
+          let mergeUnit = scannedUnit;
+
+          // Attempt unit conversion
+          if (scannedUnit && targetUnit && scannedUnit !== targetUnit) {
+            const dimScanned = this.unitDimension(scannedUnit);
+            const dimTarget = this.unitDimension(targetUnit);
+            if (dimScanned && dimScanned === dimTarget) {
+              const converted = this.convertUnits(mergeQty, scannedUnit, targetUnit);
+              if (converted !== null) {
+                mergeQty = parseFloat(converted.toFixed(4));
+                mergeUnit = targetUnit;
+              }
+            }
+            // If dimensions differ, POST as-is and let the backend handle it
+          }
+
+          try {
+            const res = await fetch(this.baseUrl + '/api/skus/item/' + candidate.id, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                barcode: dialog.barcode,
+                quantity_per_scan: dialog.quantity || 1,
+                quantity: mergeQty,
+                unit: mergeUnit,
+              }),
+            });
+            if (res.ok) {
+              this.showToast(`Merged "${dialog.name || dialog.barcode}" → ${candidate.name}`, 'success');
+              this.fetchInventory();
+            } else {
+              const err = await res.json();
+              this.showToast(err.error || 'Merge failed', 'error');
+            }
+          } catch {
+            this.showToast('Merge failed', 'error');
+          }
+          this.skuMergeDialog = null;
+          // Resume grocery scanner if in grocery mode
+          if (dialog.mode === 'grocery') {
+            this.groceryScanPaused = false;
+          }
+        },
+
+        skipMerge() {
+          const dialog = this.skuMergeDialog;
+          this.skuMergeDialog = null;
+          if (dialog.mode === 'find') {
+            // Fall through to the normal add-item form
+            this.openAddItem();
+            Object.assign(this.itemForm, {
+              barcode: dialog.barcode,
+              name: dialog.name || '',
+              quantity: dialog.quantity || 0,
+              unit: dialog.unit || '',
+              preferred_unit: dialog.unit || '',
+            });
+          } else if (dialog.mode === 'grocery') {
+            // Fall through to the grocery new-item form
+            this.groceryNewItem = { barcode: dialog.barcode, quantity: dialog.quantity || 1, unit: dialog.unit || '' };
+            this.groceryItemForm = {
+              name: dialog.name || '', quantity: dialog.quantity || 1,
+              unit: dialog.unit || '', preferred_unit: dialog.unit || '',
+              location: '', expiration_date: '', low_threshold: 0,
+              barcode: dialog.barcode, quantity_per_scan: dialog.quantity || 1,
+            };
+            this.groceryScanPaused = true;
+          }
+        },
+
+        async toggleSkuExpand(itemId) {
+          if (this.expandedSkus[itemId]) {
+            this.expandedSkus[itemId] = false;
+            return;
+          }
+          try {
+            const res = await fetch(this.baseUrl + '/api/skus/item/' + itemId);
+            if (res.ok) this.skusByItem[itemId] = await res.json();
+          } catch { /* silent */ }
+          this.expandedSkus[itemId] = true;
+          this.skuNewForm = { barcode: '', quantity_per_scan: 1 };
+        },
+
+        async addSkuAlias(itemId) {
+          if (!this.skuNewForm.barcode) return;
+          try {
+            const res = await fetch(this.baseUrl + '/api/skus/item/' + itemId, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                barcode: this.skuNewForm.barcode,
+                quantity_per_scan: this.skuNewForm.quantity_per_scan,
+                quantity: 0,
+                unit: '',
+              }),
+            });
+            if (res.ok) {
+              this.showToast('Alias added');
+              // Refresh the SKU list in place without toggling visibility
+              const listRes = await fetch(this.baseUrl + '/api/skus/item/' + itemId);
+              if (listRes.ok) this.skusByItem[itemId] = await listRes.json();
+              this.skuNewForm = { barcode: '', quantity_per_scan: 1 };
+            } else {
+              const err = await res.json();
+              this.showToast(err.error || 'Failed', 'error');
+            }
+          } catch { this.showToast('Failed', 'error'); }
+        },
+
+        async deleteSkuAlias(itemId, skuId) {
+          try {
+            const res = await fetch(this.baseUrl + '/api/skus/' + skuId, { method: 'DELETE' });
+            if (res.ok) {
+              this.skusByItem[itemId] = (this.skusByItem[itemId] || []).filter(s => s.id !== skuId);
+              this.showToast('Alias removed');
+            }
+          } catch { this.showToast('Failed', 'error'); }
+        },
+
         // --- History ---
         async fetchHistory() {
-          const res = await fetch('/api/history?limit=50');
+          const res = await fetch('/kitchen-manager/api/history?limit=50');
           if (res.ok) {
             const data = await res.json();
             this.historyItems = data.rows || [];
@@ -2234,7 +2541,7 @@
         // --- Meals ---
         async fetchMeals() {
           this.mealsOffset = 0;
-          const res = await fetch('/api/meals?limit=20&offset=0');
+          const res = await fetch('/kitchen-manager/api/meals?limit=20&offset=0');
           if (res.ok) {
             const data = await res.json();
             this.meals = data.meals;
@@ -2244,7 +2551,7 @@
 
         async loadMoreMeals() {
           this.mealsOffset += 20;
-          const res = await fetch(`/api/meals?limit=20&offset=${this.mealsOffset}`);
+          const res = await fetch(this.baseUrl + '/api/meals?limit=20&offset=' + this.mealsOffset);
           if (res.ok) {
             const data = await res.json();
             this.meals = this.meals.concat(data.meals);
@@ -2254,7 +2561,7 @@
 
         async fetchMealStats() {
           const tzOffset = -new Date().getTimezoneOffset();
-          const res = await fetch(`/api/meals/stats?tz_offset=${tzOffset}`);
+          const res = await fetch(this.baseUrl + '/api/meals/stats?tz_offset=' + tzOffset);
           if (res.ok) this.mealsStats = await res.json();
         },
       };
