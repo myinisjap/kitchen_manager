@@ -145,8 +145,11 @@
                   <form @submit.prevent="addSkuAlias(group.locations[0].id)" class="flex gap-1 mt-2">
                     <input type="text" x-model="skuNewForm.barcode" placeholder="Barcode"
                            class="flex-1 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
-                    <input type="number" x-model.number="skuNewForm.quantity_per_scan" placeholder="Qty/scan"
-                           class="w-20 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                    <div class="flex items-center border rounded-lg dark:border-gray-600 overflow-hidden">
+                      <input type="number" x-model.number="skuNewForm.quantity_per_scan" placeholder="Qty"
+                             class="w-16 px-2 py-1 text-xs dark:bg-gray-700 dark:text-gray-100 border-0 outline-none" />
+                      <span class="text-xs text-gray-500 dark:text-gray-400 pr-2" x-text="group.unit"></span>
+                    </div>
                     <button type="submit" class="text-xs bg-green-600 text-white px-2 py-1 rounded">Add</button>
                   </form>
                 </div>
@@ -218,8 +221,11 @@
                   <form @submit.prevent="addSkuAlias(group.locations[0].id)" class="flex gap-1 mt-2">
                     <input type="text" x-model="skuNewForm.barcode" placeholder="Barcode"
                            class="flex-1 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
-                    <input type="number" x-model.number="skuNewForm.quantity_per_scan" placeholder="Qty/scan"
-                           class="w-20 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                    <div class="flex items-center border rounded-lg dark:border-gray-600 overflow-hidden">
+                      <input type="number" x-model.number="skuNewForm.quantity_per_scan" placeholder="Qty"
+                             class="w-16 px-2 py-1 text-xs dark:bg-gray-700 dark:text-gray-100 border-0 outline-none" />
+                      <span class="text-xs text-gray-500 dark:text-gray-400 pr-2" x-text="group.unit"></span>
+                    </div>
                     <button type="submit" class="text-xs bg-green-600 text-white px-2 py-1 rounded">Add</button>
                   </form>
                 </div>
