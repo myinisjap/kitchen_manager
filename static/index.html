@@ -122,13 +122,22 @@
                     <button @click="toggleSkuExpand(group.locations[0].id)" class="text-gray-500 text-sm hover:text-gray-700 dark:hover:text-gray-300" title="Manage barcode aliases">🏷️</button>
                   </div>
                 </div>
-                <!-- SKU aliases section for single-location items -->
+                <!-- Barcodes section for single-location items -->
                 <div x-show="expandedSkus[group.locations[0].id]" class="border-t dark:border-gray-700 px-3 py-2">
-                  <p class="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Barcode aliases:</p>
+                  <p class="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Barcodes:</p>
+                  <!-- Primary barcode -->
+                  <template x-if="group.locations[0].barcode">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded font-mono"
+                            x-text="group.locations[0].barcode"></span>
+                      <span class="text-xs text-gray-400 ml-2">primary</span>
+                    </div>
+                  </template>
+                  <!-- Alias barcodes -->
                   <template x-for="sku in (skusByItem[group.locations[0].id] || [])" :key="sku.id">
                     <div class="flex items-center justify-between mb-1">
                       <span class="text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded font-mono"
-                            x-text="sku.barcode + ' (scan: ' + sku.quantity_per_scan + ')'"></span>
+                            x-text="sku.barcode + ' (×' + sku.quantity_per_scan + ')'"></span>
                       <button @click="deleteSkuAlias(group.locations[0].id, sku.id)"
                               class="text-red-400 text-xs hover:text-red-600 ml-2">Remove</button>
                     </div>
@@ -186,13 +195,22 @@
                     </div>
                   </template>
                 </div>
-                <!-- SKU aliases section (shown when expanded) -->
+                <!-- Barcodes section (shown when expanded) -->
                 <div x-show="expandedSkus[group.locations[0].id]" class="border-t dark:border-gray-700 px-3 py-2">
-                  <p class="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Barcode aliases:</p>
+                  <p class="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Barcodes:</p>
+                  <!-- Primary barcode -->
+                  <template x-if="group.locations[0].barcode">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded font-mono"
+                            x-text="group.locations[0].barcode"></span>
+                      <span class="text-xs text-gray-400 ml-2">primary</span>
+                    </div>
+                  </template>
+                  <!-- Alias barcodes -->
                   <template x-for="sku in (skusByItem[group.locations[0].id] || [])" :key="sku.id">
                     <div class="flex items-center justify-between mb-1">
                       <span class="text-xs bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded font-mono"
-                            x-text="sku.barcode + ' (scan: ' + sku.quantity_per_scan + ')'"></span>
+                            x-text="sku.barcode + ' (×' + sku.quantity_per_scan + ')'"></span>
                       <button @click="deleteSkuAlias(group.locations[0].id, sku.id)"
                               class="text-red-400 text-xs hover:text-red-600 ml-2">Remove</button>
                     </div>
