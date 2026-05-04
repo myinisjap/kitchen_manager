@@ -339,7 +339,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		locFilter := r.URL.Query().Get("location")
 		nameFilter := r.URL.Query().Get("name")
 
-		q := `SELECT name, unit, preferred_unit, low_threshold, SUM(quantity) AS total_quantity, json_group_array(json_object('id', id, 'location', location, 'quantity', quantity, 'expiration_date', expiration_date, 'barcode', barcode)) AS locations_json FROM inventory WHERE 1=1`
+		q := `SELECT name, unit, MAX(preferred_unit) AS preferred_unit, MAX(low_threshold) AS low_threshold, SUM(quantity) AS total_quantity, json_group_array(json_object('id', id, 'location', location, 'quantity', quantity, 'expiration_date', expiration_date, 'barcode', barcode)) AS locations_json FROM inventory WHERE 1=1`
 		args := []any{}
 		if locFilter != "" {
 			q += ` AND location=?`
