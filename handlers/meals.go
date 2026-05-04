@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"kitchen_manager/internal/auth"
 )
 
 func RegisterMeals(mux *http.ServeMux, db *sql.DB) {
@@ -130,6 +132,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB) {
 						Unit:           ing.Unit,
 						Source:         "meal_cooked",
 						RecipeID:       &recID,
+						ChangedBy:      auth.EmailFromContext(r.Context()),
 					})
 					if unitCostCents.Valid && unitCostCents.Int64 > 0 {
 						c := int64(math.Round(qtyUsed * float64(unitCostCents.Int64)))

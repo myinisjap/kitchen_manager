@@ -191,5 +191,18 @@ func createSchema(db *sql.DB) error {
 		}
 	}
 
+	// Migration: inventory_skus table for barcode aliases
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS inventory_skus (
+		id                INTEGER PRIMARY KEY AUTOINCREMENT,
+		inventory_id      INTEGER NOT NULL REFERENCES inventory(id) ON DELETE CASCADE,
+		barcode           TEXT    NOT NULL UNIQUE,
+		quantity_per_scan REAL    NOT NULL DEFAULT 1
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS inventory_skus_barcode_idx ON inventory_skus(barcode)`); err != nil {
+		return err
+	}
+
 	return nil
 }

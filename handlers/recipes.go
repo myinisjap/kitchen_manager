@@ -447,10 +447,14 @@ func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
 
 func recipeIsAvailable(db *sql.DB, recipe map[string]any) (bool, error) {
 	ings := recipe["ingredients"].([]map[string]any)
+	if len(ings) == 0 {
+		return false, nil
+	}
 	for _, ing := range ings {
 		invID, hasInvID := ing["inventory_id"]
 		if !hasInvID || invID == nil {
-			continue
+			// Unlinked ingredient — treat as not in inventory
+			return false, nil
 		}
 		var invQty float64
 		var invUnit string

@@ -16,18 +16,23 @@ type LogHistoryParams struct {
 	Unit           string
 	Source         string // "manual", "barcode_add", "barcode_remove", "meal_cooked", "threshold", etc.
 	RecipeID       *int64
+	ChangedBy      string // email of the user making the change, empty if auth disabled
 }
 
 // LogHistory writes a single row to inventory_history inside an optional transaction.
 // Pass tx=nil to use db directly.
 func LogHistory(db *sql.DB, tx *sql.Tx, p LogHistoryParams) error {
-	q := `INSERT INTO inventory_history (inventory_id, item_name, change_type, quantity_before, quantity_after, unit, source, recipe_id)
-		  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	var changedBy any
+	if p.ChangedBy != "" {
+		changedBy = p.ChangedBy
+	}
+	q := `INSERT INTO inventory_history (inventory_id, item_name, change_type, quantity_before, quantity_after, unit, source, recipe_id, changed_by)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	var err error
 	if tx != nil {
-		_, err = tx.Exec(q, p.InventoryID, p.ItemName, p.ChangeType, p.QuantityBefore, p.QuantityAfter, p.Unit, p.Source, p.RecipeID)
+		_, err = tx.Exec(q, p.InventoryID, p.ItemName, p.ChangeType, p.QuantityBefore, p.QuantityAfter, p.Unit, p.Source, p.RecipeID, changedBy)
 	} else {
-		_, err = db.Exec(q, p.InventoryID, p.ItemName, p.ChangeType, p.QuantityBefore, p.QuantityAfter, p.Unit, p.Source, p.RecipeID)
+		_, err = db.Exec(q, p.InventoryID, p.ItemName, p.ChangeType, p.QuantityBefore, p.QuantityAfter, p.Unit, p.Source, p.RecipeID, changedBy)
 	}
 	return err
 }

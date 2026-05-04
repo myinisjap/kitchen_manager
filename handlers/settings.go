@@ -2,11 +2,36 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strconv"
 )
 
 func RegisterSettings(mux *http.ServeMux, db *sql.DB) {
+	mux.HandleFunc("GET /api/backup", func(w http.ResponseWriter, r *http.Request) {
+		dbPath := os.Getenv("DB_PATH")
+		if dbPath == "" {
+			dbPath = "./kitchen.db"
+		}
+		f, err := os.Open(dbPath)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "could not open database")
+			return
+		}
+		defer f.Close()
+		stat, err := f.Stat()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, "could not stat database")
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", `attachment; filename="kitchen.db"`)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
+		io.Copy(w, f)
+	})
+
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`SELECT key, value FROM settings`)
 		if err != nil {

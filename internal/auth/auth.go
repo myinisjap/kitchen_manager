@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -63,7 +64,19 @@ func AllowedEmails() map[string]bool {
 	return m
 }
 
-// AuthMiddleware requires an authenticated session for all non-/auth/ routes.
+type contextKey string
+
+const emailContextKey contextKey = "email"
+
+// EmailFromContext returns the authenticated user's email stored in ctx,
+// or "" if auth is disabled or the value is absent.
+func EmailFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(emailContextKey).(string)
+	return v
+}
+
+// AuthMiddleware requires an authenticated session for all non-/auth/ routes,
+// and injects the user's email into the request context.
 func AuthMiddleware(sm *scs.SessionManager, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Auth routes are always exempt
@@ -73,10 +86,12 @@ func AuthMiddleware(sm *scs.SessionManager, next http.Handler) http.Handler {
 		}
 		email := sm.GetString(r.Context(), "email")
 		if email == "" {
-			http.Redirect(w, r, "/auth/login", http.StatusFound)
+			baseURL := os.Getenv("BASE_URL")
+			http.Redirect(w, r, baseURL+"/", http.StatusFound)
 			return
 		}
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), emailContextKey, email)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -146,12 +161,16 @@ func HandleCallback(sm *scs.SessionManager, oauthCfg *oauth2.Config, allowed map
 	}
 }
 
-// HandleMe returns the currently logged-in email, or empty string if auth is disabled.
+// HandleMe returns the currently logged-in email. When app auth is disabled,
+// falls back to the X-Forwarded-User header injected by Traefik forward-auth.
 func HandleMe(sm *scs.SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		email := ""
 		if sm != nil {
 			email = sm.GetString(r.Context(), "email")
+		}
+		if email == "" {
+			email = r.Header.Get("X-Forwarded-User")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"email": email})
@@ -166,6 +185,7 @@ func HandleLogout(sm *scs.SessionManager) http.HandlerFunc {
 			return
 		}
 		sm.Destroy(r.Context())
-		http.Redirect(w, r, "/auth/login", http.StatusFound)
+		baseURL := os.Getenv("BASE_URL")
+		http.Redirect(w, r, baseURL+"/", http.StatusFound)
 	}
 }

@@ -536,6 +536,10 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					locID := int64(locIDFloat)
 					var s sibRow
 					err := db.QueryRow(`SELECT id, quantity FROM inventory WHERE id=?`, locID).Scan(&s.id, &s.qty)
+					if err == sql.ErrNoRows {
+						WriteError(w, http.StatusNotFound, "location not found")
+						return
+					}
 					if err != nil {
 						WriteError(w, http.StatusInternalServerError, err.Error())
 						return

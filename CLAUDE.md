@@ -78,7 +78,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `internal/database/` — SQLite schema creation and migration (runs on startup)
 - `internal/auth/` — OAuth flow, session management, auth middleware
 - `internal/tlscert/` — self-signed TLS certificate generation
-- `deploy/` — Dockerfile, docker-compose.yml, Caddyfile.example
+- `deploy/` — Dockerfile, docker-compose.yml (Traefik reverse proxy, not Caddy)
 - `static/index.html` — entire frontend as a single file (~40KB)
 
 **Request flow:** Frontend → Handler → Service (if needed) → Raw SQL → SQLite (`kitchen.db`)
@@ -96,6 +96,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Testing:** Tests use in-memory SQLite (not mocks). `handlers/inventory_test.go` builds the schema in-process; `units/units_test.go` tests conversion logic directly.
 
 **Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units).
+
+**Reverse proxy (Traefik):** The app runs at `/kitchen-manager` behind Traefik's `stripprefix` middleware. Auth redirects must use absolute URLs via `BASE_URL` (not relative paths like `/auth/login`) so the browser preserves the path prefix.
 
 ## Database Schema Notes
 
