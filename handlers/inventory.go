@@ -130,6 +130,55 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 
+		// No primary barcode match — check if barcode is a SKU alias.
+		if item.Barcode != "" {
+			var skuInvID int64
+			skuErr := db.QueryRow(`SELECT inventory_id FROM inventory_skus WHERE barcode=?`, item.Barcode).Scan(&skuInvID)
+			if skuErr == nil {
+				// Load parent item's current quantity and unit.
+				var parentQty float64
+				var parentUnit, parentName string
+				if e := db.QueryRow(`SELECT quantity, unit, name FROM inventory WHERE id=?`, skuInvID).Scan(&parentQty, &parentUnit, &parentName); e != nil {
+					WriteError(w, http.StatusInternalServerError, e.Error())
+					return
+				}
+				// Convert incoming quantity to parent's unit if possible.
+				addQty := item.Quantity
+				if item.Unit != "" && parentUnit != "" && item.Unit != parentUnit {
+					if converted, convErr := units.Convert(addQty, units.Unit(item.Unit), units.Unit(parentUnit)); convErr == nil {
+						addQty = converted
+					}
+				}
+				newQty := parentQty + addQty
+				if _, e := db.Exec(`UPDATE inventory SET quantity=? WHERE id=?`, newQty, skuInvID); e != nil {
+					WriteError(w, http.StatusInternalServerError, e.Error())
+					return
+				}
+				_ = LogHistory(db, nil, LogHistoryParams{
+					InventoryID:    skuInvID,
+					ItemName:       parentName,
+					ChangeType:     "add",
+					QuantityBefore: &parentQty,
+					QuantityAfter:  &newQty,
+					ChangedBy:      auth.EmailFromContext(r.Context()),
+					Unit:           parentUnit,
+					Source:         "receipt_merge",
+				})
+				row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, skuInvID)
+				updated, e := scanInventoryRow(row)
+				if e != nil {
+					WriteError(w, http.StatusInternalServerError, e.Error())
+					return
+				}
+				WriteJSON(w, http.StatusOK, updated)
+				broadcastInventory()
+				return
+			} else if skuErr != sql.ErrNoRows {
+				WriteError(w, http.StatusInternalServerError, skuErr.Error())
+				return
+			}
+		}
+
 		res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			item.Name, item.Quantity, item.Unit, item.Location, item.ExpirationDate, item.LowThreshold, item.Barcode, item.PreferredUnit, item.UnitCostCents, item.QuantityPerScan)
 		if err != nil {

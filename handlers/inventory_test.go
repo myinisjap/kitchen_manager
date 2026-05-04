@@ -1563,3 +1563,62 @@ func TestDeductWithLocationID(t *testing.T) {
 		t.Errorf("pantry quantity: want 10 (no cascade), got %v", pantryResult["quantity"])
 	}
 }
+
+func TestReceiptImportMergesViaSkuAlias(t *testing.T) {
+	mux, _ := newMux(t)
+
+	// Create an inventory item (500g flour)
+	body := `{"name":"flour","quantity":500,"unit":"g","preferred_unit":"g"}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create item: want 201, got %d: %s", w.Code, w.Body)
+	}
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int64(created["id"].(float64))
+	idStr := strconv.FormatInt(id, 10)
+
+	// Add a SKU alias barcode
+	skuBody := `{"barcode":"FLOUR-ALIAS-001","quantity_per_scan":500,"quantity":0,"unit":""}`
+	req2 := httptest.NewRequest("POST", "/api/skus/item/"+idStr, bytes.NewBufferString(skuBody))
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("create sku alias: want 201, got %d: %s", w2.Code, w2.Body)
+	}
+
+	// POST to /api/inventory/ with the alias barcode — should merge, not insert
+	importBody := `{"name":"flour","quantity":250,"unit":"g","preferred_unit":"g","barcode":"FLOUR-ALIAS-001"}`
+	req3 := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(importBody))
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("receipt import via alias: want 200, got %d: %s", w3.Code, w3.Body)
+	}
+	var result map[string]any
+	json.NewDecoder(w3.Body).Decode(&result)
+	if result["quantity"] != 750.0 {
+		t.Errorf("merged quantity: want 750, got %v", result["quantity"])
+	}
+	if result["id"].(float64) != float64(id) {
+		t.Errorf("expected same item id %d, got %v", id, result["id"])
+	}
+
+	// Verify no duplicate item was created
+	req4 := httptest.NewRequest("GET", "/api/inventory/grouped", nil)
+	w4 := httptest.NewRecorder()
+	mux.ServeHTTP(w4, req4)
+	var groups []map[string]any
+	json.NewDecoder(w4.Body).Decode(&groups)
+	flourCount := 0
+	for _, g := range groups {
+		if g["name"] == "flour" {
+			flourCount++
+		}
+	}
+	if flourCount != 1 {
+		t.Errorf("expected 1 flour group, got %d", flourCount)
+	}
+}
