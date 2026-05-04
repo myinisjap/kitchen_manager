@@ -93,27 +93,79 @@
 
       <!-- Item list -->
       <div class="space-y-2">
-        <template x-for="item in inventoryItems" :key="item.id">
-          <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700 p-3 flex items-start justify-between">
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2">
-                <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="item.name"></span>
-                <template x-if="item.low_threshold > 0 && item.quantity <= item.low_threshold">
-                  <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
-                </template>
+        <template x-for="group in inventoryItems" :key="group.name + '|' + group.unit">
+          <div x-data="{ expanded: false }" class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700">
+
+            <!-- Single-location: render exactly as before -->
+            <template x-if="group.locations.length === 1">
+              <div class="p-3 flex items-start justify-between">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
+                    <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
+                      <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
+                    </template>
+                  </div>
+                  <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                    <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span>
+                    &bull; <span x-text="group.locations[0].location || 'No location'"></span>
+                    <template x-if="group.locations[0].expiration_date">
+                      <span> &bull; Exp: <span x-text="group.locations[0].expiration_date"></span></span>
+                    </template>
+                  </div>
+                </div>
+                <div class="flex gap-2 ml-2">
+                  <button @click="openDeductModal(group)" class="text-orange-500 text-sm font-medium">−</button>
+                  <button @click="editItem(group.locations[0])" class="text-blue-600 text-sm font-medium">Edit</button>
+                  <button @click="deleteItem(group.locations[0].id)" class="text-red-500 text-sm">✕</button>
+                </div>
               </div>
-              <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                <span x-text="item.quantity"></span> <span x-text="item.unit"></span>
-                &bull; <span x-text="item.location || 'No location'"></span>
-                <template x-if="item.expiration_date">
-                  <span> &bull; Exp: <span x-text="item.expiration_date"></span></span>
-                </template>
+            </template>
+
+            <!-- Multi-location: collapsible header + per-location rows -->
+            <template x-if="group.locations.length > 1">
+              <div>
+                <!-- Header row -->
+                <div class="p-3 flex items-start justify-between cursor-pointer" @click="expanded = !expanded">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
+                      <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
+                        <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
+                      </template>
+                      <span class="text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded"
+                            x-text="group.locations.length + ' locations'"></span>
+                    </div>
+                    <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                      <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span> total
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2 ml-2">
+                    <button @click.stop="openDeductModal(group)" class="text-orange-500 text-sm font-medium">−</button>
+                    <span class="text-gray-400 text-sm" x-text="expanded ? '▲' : '▼'"></span>
+                  </div>
+                </div>
+                <!-- Per-location rows (collapsed by default) -->
+                <div x-show="expanded" class="border-t dark:border-gray-700 divide-y dark:divide-gray-700">
+                  <template x-for="loc in group.locations" :key="loc.id">
+                    <div class="px-3 py-2 flex items-center justify-between">
+                      <div class="text-sm text-gray-600 dark:text-gray-300 flex-1 min-w-0">
+                        <span x-text="loc.location || 'No location'"></span>
+                        &bull; <span x-text="loc.quantity"></span> <span x-text="group.unit"></span>
+                        <template x-if="loc.expiration_date">
+                          <span class="text-xs text-gray-400 dark:text-gray-500"> · Exp: <span x-text="loc.expiration_date"></span></span>
+                        </template>
+                      </div>
+                      <div class="flex gap-2 ml-2">
+                        <button @click="editItem(loc)" class="text-blue-600 text-xs">Edit</button>
+                        <button @click="deleteItem(loc.id)" class="text-red-400 text-xs">✕</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
               </div>
-            </div>
-            <div class="flex gap-2 ml-2">
-              <button @click="editItem(item)" class="text-blue-600 text-sm font-medium">Edit</button>
-              <button @click="deleteItem(item.id)" class="text-red-500 text-sm">✕</button>
-            </div>
+            </template>
+
           </div>
         </template>
         <template x-if="inventoryItems.length === 0">
@@ -452,6 +504,38 @@
         <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
         <button @click="saveItem()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Deduct Stock Modal -->
+  <div x-show="modal === 'deduct'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div x-show="deductModal" class="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4">
+      <h2 class="text-lg font-bold dark:text-gray-100">Deduct Stock</h2>
+      <template x-if="deductModal">
+        <div class="space-y-4">
+          <p class="text-sm text-gray-600 dark:text-gray-300" x-text="deductModal.group.name"></p>
+          <!-- Location picker (only shown for multi-location groups) -->
+          <template x-if="deductModal.group.locations.length > 1">
+            <div>
+              <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Location</label>
+              <select x-model.number="deductModal.selectedLocationId" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+                <template x-for="loc in deductModal.group.locations" :key="loc.id">
+                  <option :value="loc.id" x-text="(loc.location || 'No location') + ' · ' + loc.quantity + ' ' + deductModal.group.unit + (loc.expiration_date ? ' · exp ' + loc.expiration_date : '')"></option>
+                </template>
+              </select>
+            </div>
+          </template>
+          <div>
+            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Quantity to deduct</label>
+            <input x-model.number="deductModal.qty" type="number" min="0" step="any"
+                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+          </div>
+          <div class="flex gap-2 pt-2">
+            <button @click="modal = null; deductModal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
+            <button @click="confirmDeduct()" class="flex-1 bg-orange-500 text-white rounded-lg py-2 text-sm font-medium">Deduct</button>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 
@@ -1020,6 +1104,7 @@
         _removeStockActive: false,
         groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
         itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
+        deductModal: null,   // { group, selectedLocationId, qty }
 
         // Auth
         currentUser: null,
@@ -1084,9 +1169,6 @@
           await this.fetchCalendar();
           const uRes = await fetch('/api/units');
           this.unitGroups = await uRes.json();
-          const sRes = await fetch('/api/inventory/suggestions');
-          const allItems = await sRes.json();
-          this.locations = [...new Set(allItems.map(i => i.location).filter(Boolean))];
           this.initWebSocket();
         },
 
@@ -1544,8 +1626,12 @@
           const params = new URLSearchParams();
           if (this.inventorySearch) params.set('name', this.inventorySearch);
           if (this.inventoryLocation) params.set('location', this.inventoryLocation);
-          const res = await fetch('/api/inventory/?' + params);
-          this.inventoryItems = await res.json();
+          const res = await fetch('/api/inventory/grouped?' + params);
+          const data = await res.json();
+          this.inventoryItems = data;
+          if (!this.inventoryLocation) {
+            this.locations = [...new Set(data.flatMap(g => g.locations.map(l => l.location)).filter(Boolean))];
+          }
         },
 
         async fetchExpiring() {
@@ -1561,12 +1647,48 @@
           this.modal = 'item';
         },
 
-        editItem(item) {
+        async editItem(locOrItem) {
           this.suggestions = [];
           this.showSuggestions = false;
-          this.editingItem = item;
-          this.itemForm = { ...item, preferred_unit: item.preferred_unit || '' };
+          // If this is a location stub (from grouped view), fetch the full item
+          if (!('unit' in locOrItem)) {
+            const res = await fetch(`/api/inventory/${locOrItem.id}`);
+            if (!res.ok) return;
+            locOrItem = await res.json();
+          }
+          this.editingItem = locOrItem;
+          this.itemForm = { ...locOrItem, preferred_unit: locOrItem.preferred_unit || '' };
           this.modal = 'item';
+        },
+
+        openDeductModal(group) {
+          this.deductModal = {
+            group,
+            selectedLocationId: group.recommended_location_id,
+            qty: 1,
+          };
+          this.modal = 'deduct';
+        },
+
+        async confirmDeduct() {
+          const { group, selectedLocationId, qty } = this.deductModal;
+          const loc = group.locations.find(l => l.id === selectedLocationId);
+          if (!loc) return;
+          const newQty = Math.max(0, parseFloat((loc.quantity - qty).toFixed(4)));
+          const res = await fetch(`/api/inventory/${selectedLocationId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ quantity: newQty, location_id: selectedLocationId }),
+          });
+          if (res.ok) {
+            this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
+            this.modal = null;
+            this.deductModal = null;
+            await this.fetchInventory();
+            await this.fetchExpiring();
+          } else {
+            this.showToast('Deduct failed', 'error');
+          }
         },
 
         async saveItem() {
