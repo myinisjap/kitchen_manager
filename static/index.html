@@ -1651,7 +1651,7 @@
           this.suggestions = [];
           this.showSuggestions = false;
           // If this is a location stub (from grouped view), fetch the full item
-          if (!('unit' in locOrItem)) {
+          if (!('preferred_unit' in locOrItem)) {
             const res = await fetch(`/api/inventory/${locOrItem.id}`);
             if (!res.ok) return;
             locOrItem = await res.json();
@@ -1673,7 +1673,7 @@
         async confirmDeduct() {
           const { group, selectedLocationId, qty } = this.deductModal;
           const loc = group.locations.find(l => l.id === selectedLocationId);
-          if (!loc) return;
+          if (!loc || qty <= 0) return;
           const newQty = Math.max(0, parseFloat((loc.quantity - qty).toFixed(4)));
           const res = await fetch(`/api/inventory/${selectedLocationId}`, {
             method: 'PATCH',
