@@ -316,25 +316,6 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		WriteJSON(w, http.StatusOK, candidates)
 	})
 
-	mux.HandleFunc("GET /api/inventory/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathIDFromPattern(r, "id")
-		if !ok {
-			WriteError(w, http.StatusBadRequest, "invalid id")
-			return
-		}
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id)
-		item, err := scanInventoryRow(row)
-		if err == sql.ErrNoRows {
-			WriteError(w, http.StatusNotFound, "not found")
-			return
-		}
-		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		WriteJSON(w, http.StatusOK, item)
-	})
-
 	mux.HandleFunc("GET /api/inventory/grouped", func(w http.ResponseWriter, r *http.Request) {
 		locFilter := r.URL.Query().Get("location")
 		nameFilter := r.URL.Query().Get("name")
@@ -425,6 +406,25 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			results = []groupedItem{}
 		}
 		WriteJSON(w, http.StatusOK, results)
+	})
+
+	mux.HandleFunc("GET /api/inventory/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := pathIDFromPattern(r, "id")
+		if !ok {
+			WriteError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id)
+		item, err := scanInventoryRow(row)
+		if err == sql.ErrNoRows {
+			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, item)
 	})
 
 	mux.HandleFunc("GET /api/inventory/", func(w http.ResponseWriter, r *http.Request) {

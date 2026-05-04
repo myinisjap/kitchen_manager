@@ -100,6 +100,12 @@ func newTestDB(t *testing.T) *sql.DB {
 		quantity_used REAL NOT NULL DEFAULT 0,
 		unit TEXT NOT NULL DEFAULT '',
 		cost_cents INTEGER
+	);
+	CREATE TABLE IF NOT EXISTS inventory_skus (
+		id                INTEGER PRIMARY KEY AUTOINCREMENT,
+		inventory_id      INTEGER NOT NULL REFERENCES inventory(id) ON DELETE CASCADE,
+		barcode           TEXT    NOT NULL UNIQUE,
+		quantity_per_scan REAL    NOT NULL DEFAULT 1
 	);`)
 	if err != nil {
 		t.Fatal(err)
@@ -1134,5 +1140,363 @@ func TestExpiryFirstDeductionCascade(t *testing.T) {
 	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id3).Scan(&qty3)
 	if qty3 != 4 {
 		t.Errorf("expected id3 qty=4, got %v", qty3)
+	}
+}
+
+func TestBarcodeLookupFallsBackToSkuAlias(t *testing.T) {
+	mux, db := newMux(t)
+	// Create an inventory item with a primary barcode
+	body := `{"name":"Flour","quantity":500,"unit":"g","barcode":"PRIMARY001","quantity_per_scan":500}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create item: want 201, got %d: %s", w.Code, w.Body)
+	}
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int64(created["id"].(float64))
+
+	// Insert a SKU alias manually
+	_, err := db.Exec(`INSERT INTO inventory_skus (inventory_id, barcode, quantity_per_scan) VALUES (?,?,?)`, id, "ALIAS001", 250.0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Lookup by alias barcode
+	req2 := httptest.NewRequest("GET", "/api/inventory/barcode/ALIAS001", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("alias lookup: want 200, got %d: %s", w2.Code, w2.Body)
+	}
+	var item map[string]any
+	json.NewDecoder(w2.Body).Decode(&item)
+	if item["name"] != "flour" {
+		t.Errorf("want name flour, got %v", item["name"])
+	}
+	if item["quantity_per_scan"].(float64) != 250.0 {
+		t.Errorf("want quantity_per_scan 250, got %v", item["quantity_per_scan"])
+	}
+	if item["sku_id"] == nil {
+		t.Error("want sku_id in response")
+	}
+}
+
+func TestSimilarSearch(t *testing.T) {
+	mux, _ := newMux(t)
+	for _, b := range []string{
+		`{"name":"Whole Milk","quantity":1,"unit":"L"}`,
+		`{"name":"Almond Milk","quantity":1,"unit":"L"}`,
+		`{"name":"Butter","quantity":200,"unit":"g"}`,
+	} {
+		req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(b))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+	}
+
+	req := httptest.NewRequest("GET", "/api/inventory/similar?name=milk", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	var results []map[string]any
+	json.NewDecoder(w.Body).Decode(&results)
+	if len(results) != 2 {
+		t.Errorf("want 2 milk results, got %d", len(results))
+	}
+
+	// Empty name returns []
+	req2 := httptest.NewRequest("GET", "/api/inventory/similar?name=", nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	var empty []map[string]any
+	json.NewDecoder(w2.Body).Decode(&empty)
+	if len(empty) != 0 {
+		t.Errorf("want empty results, got %d", len(empty))
+	}
+}
+
+func TestCreateSkuAliasAndMergeQuantity(t *testing.T) {
+	mux, db := newMux(t)
+	body := `{"name":"Flour","quantity":500,"unit":"g","preferred_unit":"g","quantity_per_scan":500}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int64(created["id"].(float64))
+
+	// POST SKU alias with quantity
+	skuBody := `{"barcode":"FLOUR002","quantity_per_scan":250,"quantity":250,"unit":"g"}`
+	req2 := httptest.NewRequest("POST", "/api/skus/item/"+strconv.FormatInt(id, 10), bytes.NewBufferString(skuBody))
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w2.Code, w2.Body)
+	}
+
+	var qty float64
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id).Scan(&qty)
+	if qty != 750 {
+		t.Errorf("want quantity 750, got %v", qty)
+	}
+
+	var skuCount int
+	db.QueryRow(`SELECT COUNT(*) FROM inventory_skus WHERE inventory_id=? AND barcode='FLOUR002'`, id).Scan(&skuCount)
+	if skuCount != 1 {
+		t.Error("want 1 SKU alias row")
+	}
+}
+
+func TestCreateSkuAliasWithUnitConversion(t *testing.T) {
+	mux, db := newMux(t)
+	body := `{"name":"Sugar","quantity":1,"unit":"kg","preferred_unit":"kg"}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int64(created["id"].(float64))
+
+	// Add 500g — should add 0.5kg
+	skuBody := `{"barcode":"SUGAR002","quantity_per_scan":500,"quantity":500,"unit":"g"}`
+	req2 := httptest.NewRequest("POST", "/api/skus/item/"+strconv.FormatInt(id, 10), bytes.NewBufferString(skuBody))
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w2.Code, w2.Body)
+	}
+
+	var qty float64
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id).Scan(&qty)
+	if qty < 1.499 || qty > 1.501 {
+		t.Errorf("want quantity ~1.5kg, got %v", qty)
+	}
+}
+
+func TestCreateSkuAliasDuplicateBarcode(t *testing.T) {
+	mux, _ := newMux(t)
+	// Create item with primary barcode
+	body := `{"name":"Rice","quantity":1,"unit":"kg","barcode":"RICE001"}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int64(created["id"].(float64))
+
+	// Try to add alias with same barcode as primary — expect 409
+	skuBody := `{"barcode":"RICE001","quantity_per_scan":1,"quantity":0,"unit":"kg"}`
+	req2 := httptest.NewRequest("POST", "/api/skus/item/"+strconv.FormatInt(id, 10), bytes.NewBufferString(skuBody))
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusConflict {
+		t.Errorf("want 409 conflict, got %d", w2.Code)
+	}
+}
+
+func TestListAndDeleteSkuAliases(t *testing.T) {
+	mux, _ := newMux(t)
+	body := `{"name":"Oats","quantity":1,"unit":"kg"}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int64(created["id"].(float64))
+	idStr := strconv.FormatInt(id, 10)
+
+	// Add two aliases
+	for _, bc := range []string{"OATS001", "OATS002"} {
+		skuBody := `{"barcode":"` + bc + `","quantity_per_scan":1,"quantity":0,"unit":""}`
+		req := httptest.NewRequest("POST", "/api/skus/item/"+idStr, bytes.NewBufferString(skuBody))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+	}
+
+	// List
+	req2 := httptest.NewRequest("GET", "/api/skus/item/"+idStr, nil)
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	var skus []map[string]any
+	json.NewDecoder(w2.Body).Decode(&skus)
+	if len(skus) != 2 {
+		t.Fatalf("want 2 skus, got %d", len(skus))
+	}
+
+	// Delete first
+	skuID := int64(skus[0]["id"].(float64))
+	req3 := httptest.NewRequest("DELETE", "/api/skus/"+strconv.FormatInt(skuID, 10), nil)
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusNoContent {
+		t.Errorf("want 204, got %d", w3.Code)
+	}
+
+	// List again — should have 1
+	req4 := httptest.NewRequest("GET", "/api/skus/item/"+idStr, nil)
+	w4 := httptest.NewRecorder()
+	mux.ServeHTTP(w4, req4)
+	var skus2 []map[string]any
+	json.NewDecoder(w4.Body).Decode(&skus2)
+	if len(skus2) != 1 {
+		t.Errorf("want 1 sku, got %d", len(skus2))
+	}
+}
+
+func TestDeleteInventoryItemCascadesSkus(t *testing.T) {
+	mux, db := newMux(t)
+	body := `{"name":"Pasta","quantity":500,"unit":"g"}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	id := int64(created["id"].(float64))
+	idStr := strconv.FormatInt(id, 10)
+
+	// Add alias
+	skuBody := `{"barcode":"PASTA001","quantity_per_scan":500,"quantity":0,"unit":""}`
+	req2 := httptest.NewRequest("POST", "/api/skus/item/"+idStr, bytes.NewBufferString(skuBody))
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("create sku: want 201, got %d: %s", w2.Code, w2.Body)
+	}
+
+	// Delete inventory item
+	req3 := httptest.NewRequest("DELETE", "/api/inventory/"+idStr, nil)
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusNoContent {
+		t.Fatalf("delete item: want 204, got %d", w3.Code)
+	}
+
+	// SKU should be gone
+	var count int
+	db.QueryRow(`SELECT COUNT(*) FROM inventory_skus WHERE inventory_id=?`, id).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected cascade delete of SKU, got %d rows", count)
+	}
+}
+
+func TestGetGroupedInventory(t *testing.T) {
+	mux, db := newMux(t)
+
+	// Insert two rows: same name+unit, different locations and expiration dates.
+	// id1: Pantry, expires sooner; id2: Fridge, expires later.
+	var id1, id2 int64
+	err := db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',0.5,'L','Pantry','2026-06-01',1,'','') RETURNING id`).Scan(&id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',1.0,'L','Fridge','2026-09-01',1,'','') RETURNING id`).Scan(&id2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	getGrouped := func(query string) []map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/api/inventory/grouped"+query, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var result []map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		return result
+	}
+
+	// --- Test 1: Basic grouping ---
+	// Two rows with same name+unit → one group with two location entries and correct total_quantity.
+	groups := getGrouped("")
+	if len(groups) != 1 {
+		t.Fatalf("basic grouping: want 1 group, got %d", len(groups))
+	}
+	group := groups[0]
+	if group["name"] != "olive oil" {
+		t.Errorf("basic grouping: want name 'olive oil', got %v", group["name"])
+	}
+	if group["total_quantity"].(float64) != 1.5 {
+		t.Errorf("basic grouping: want total_quantity 1.5, got %v", group["total_quantity"])
+	}
+	locs := group["locations"].([]any)
+	if len(locs) != 2 {
+		t.Fatalf("basic grouping: want 2 locations, got %d", len(locs))
+	}
+
+	// --- Test 2: Sort order — locations sorted by expiration ASC, empty expiration last ---
+	// id1 expires 2026-06-01 (sooner), id2 expires 2026-09-01 (later).
+	// First entry should be the Pantry one (soonest expiry).
+	loc0 := locs[0].(map[string]any)
+	if loc0["location"] != "Pantry" {
+		t.Errorf("sort order: want first location 'Pantry' (soonest expiry), got %v", loc0["location"])
+	}
+	loc1 := locs[1].(map[string]any)
+	if loc1["location"] != "Fridge" {
+		t.Errorf("sort order: want second location 'Fridge', got %v", loc1["location"])
+	}
+
+	// --- Test 3: recommended_location_id — should be id of soonest-expiring row ---
+	recID := int64(group["recommended_location_id"].(float64))
+	if recID != id1 {
+		t.Errorf("recommended_location_id: want id1 (%d, soonest expiry), got %d", id1, recID)
+	}
+
+	// Insert a row with no expiration date to verify it sorts last.
+	var id3 int64
+	err = db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',0.25,'L','Cellar','',1,'','') RETURNING id`).Scan(&id3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups2 := getGrouped("")
+	if len(groups2) != 1 {
+		t.Fatalf("sort with no-expiry: want 1 group, got %d", len(groups2))
+	}
+	locs2 := groups2[0]["locations"].([]any)
+	if len(locs2) != 3 {
+		t.Fatalf("sort with no-expiry: want 3 locations, got %d", len(locs2))
+	}
+	// Last entry should be the one with empty expiration.
+	lastLoc := locs2[2].(map[string]any)
+	if lastLoc["location"] != "Cellar" {
+		t.Errorf("sort order: want last location 'Cellar' (no expiry), got %v", lastLoc["location"])
+	}
+
+	// --- Test 4: Empty response for non-matching name filter → [] (not null/404) ---
+	groups3 := getGrouped("?name=doesnotexist")
+	if groups3 == nil {
+		t.Error("empty name filter: want [] not nil")
+	}
+	if len(groups3) != 0 {
+		t.Errorf("empty name filter: want 0 groups, got %d", len(groups3))
+	}
+
+	// --- Test 5: Location filter → only returns groups that have a row in that location ---
+	groups4 := getGrouped("?location=Pantry")
+	if len(groups4) != 1 {
+		t.Fatalf("location filter: want 1 group for Pantry, got %d", len(groups4))
+	}
+	locs4 := groups4[0]["locations"].([]any)
+	if len(locs4) != 1 {
+		t.Fatalf("location filter: want 1 location entry for Pantry, got %d", len(locs4))
+	}
+	pantryLoc := locs4[0].(map[string]any)
+	if pantryLoc["location"] != "Pantry" {
+		t.Errorf("location filter: want location 'Pantry', got %v", pantryLoc["location"])
+	}
+
+	// Location filter for a location with no items → empty array.
+	groups5 := getGrouped("?location=Freezer")
+	if groups5 == nil {
+		t.Error("location filter no match: want [] not nil")
+	}
+	if len(groups5) != 0 {
+		t.Errorf("location filter no match: want 0 groups, got %d", len(groups5))
 	}
 }
