@@ -524,34 +524,51 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			// Items with no expiration date are consumed last.
 			deduct := qtyBefore - newQty
 
-			sibRows, err := db.Query(
-				`SELECT id, quantity FROM inventory WHERE name=? AND unit=?
-				 ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END ASC,
-				          expiration_date ASC`,
-				nameBefore, unitBefore,
-			)
-			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
 			type sibRow struct {
 				id  int64
 				qty float64
 			}
 			var sibs []sibRow
-			for sibRows.Next() {
-				var s sibRow
-				if err := sibRows.Scan(&s.id, &s.qty); err != nil {
-					sibRows.Close()
+
+			// If location_id is provided and non-zero, bypass cascade and deduct only from that row.
+			if locIDVal, ok := patch["location_id"]; ok {
+				if locIDFloat, ok := locIDVal.(float64); ok && locIDFloat != 0 {
+					locID := int64(locIDFloat)
+					var s sibRow
+					err := db.QueryRow(`SELECT id, quantity FROM inventory WHERE id=?`, locID).Scan(&s.id, &s.qty)
+					if err != nil {
+						WriteError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+					sibs = []sibRow{s}
+				}
+			}
+
+			if len(sibs) == 0 {
+				sibRows, err := db.Query(
+					`SELECT id, quantity FROM inventory WHERE name=? AND unit=?
+					 ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END ASC,
+					          expiration_date ASC`,
+					nameBefore, unitBefore,
+				)
+				if err != nil {
 					WriteError(w, http.StatusInternalServerError, err.Error())
 					return
 				}
-				sibs = append(sibs, s)
-			}
-			sibRows.Close()
-			if err := sibRows.Err(); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
-				return
+				for sibRows.Next() {
+					var s sibRow
+					if err := sibRows.Scan(&s.id, &s.qty); err != nil {
+						sibRows.Close()
+						WriteError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+					sibs = append(sibs, s)
+				}
+				sibRows.Close()
+				if err := sibRows.Err(); err != nil {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
 			}
 
 			source := r.URL.Query().Get("source")

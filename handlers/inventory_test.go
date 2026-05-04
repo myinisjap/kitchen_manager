@@ -1500,3 +1500,66 @@ func TestGetGroupedInventory(t *testing.T) {
 		t.Errorf("location filter no match: want 0 groups, got %d", len(groups5))
 	}
 }
+
+func TestDeductWithLocationID(t *testing.T) {
+	mux, _ := newMux(t)
+
+	// Insert Fridge row: milk 5 oz
+	fridgeBody := `{"name":"milk","quantity":5,"unit":"oz","location":"Fridge"}`
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(fridgeBody))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create fridge row: want 201, got %d: %s", w.Code, w.Body)
+	}
+	var fridgeItem map[string]any
+	json.NewDecoder(w.Body).Decode(&fridgeItem)
+	fridgeID := int64(fridgeItem["id"].(float64))
+
+	// Insert Pantry row: milk 10 oz
+	pantryBody := `{"name":"milk","quantity":10,"unit":"oz","location":"Pantry"}`
+	req2 := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(pantryBody))
+	w2 := httptest.NewRecorder()
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("create pantry row: want 201, got %d: %s", w2.Code, w2.Body)
+	}
+	var pantryItem map[string]any
+	json.NewDecoder(w2.Body).Decode(&pantryItem)
+	pantryID := int64(pantryItem["id"].(float64))
+
+	// PATCH the Fridge row with quantity=3 and location_id=fridgeID
+	patchBody := `{"quantity":3,"location_id":` + strconv.FormatInt(fridgeID, 10) + `}`
+	req3 := httptest.NewRequest("PATCH", "/api/inventory/"+strconv.FormatInt(fridgeID, 10), bytes.NewBufferString(patchBody))
+	w3 := httptest.NewRecorder()
+	mux.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("patch with location_id: want 200, got %d: %s", w3.Code, w3.Body)
+	}
+
+	// Verify Fridge row quantity is now 2
+	req4 := httptest.NewRequest("GET", "/api/inventory/"+strconv.FormatInt(fridgeID, 10), nil)
+	w4 := httptest.NewRecorder()
+	mux.ServeHTTP(w4, req4)
+	if w4.Code != http.StatusOK {
+		t.Fatalf("get fridge row: want 200, got %d", w4.Code)
+	}
+	var fridgeResult map[string]any
+	json.NewDecoder(w4.Body).Decode(&fridgeResult)
+	if fridgeResult["quantity"] != 3.0 {
+		t.Errorf("fridge quantity: want 3, got %v", fridgeResult["quantity"])
+	}
+
+	// Verify Pantry row quantity is still 10 (no cascade)
+	req5 := httptest.NewRequest("GET", "/api/inventory/"+strconv.FormatInt(pantryID, 10), nil)
+	w5 := httptest.NewRecorder()
+	mux.ServeHTTP(w5, req5)
+	if w5.Code != http.StatusOK {
+		t.Fatalf("get pantry row: want 200, got %d", w5.Code)
+	}
+	var pantryResult map[string]any
+	json.NewDecoder(w5.Body).Decode(&pantryResult)
+	if pantryResult["quantity"] != 10.0 {
+		t.Errorf("pantry quantity: want 10 (no cascade), got %v", pantryResult["quantity"])
+	}
+}
