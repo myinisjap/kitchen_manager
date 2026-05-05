@@ -495,7 +495,23 @@
           </template>
         </select>
       </div>
-      <input x-model="itemForm.location" placeholder="Location (fridge, pantry...)" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
+      <div class="relative">
+        <input x-model="itemForm.location" @input="clearTimeout(_locationSuggestionTimer); _locationSuggestionTimer = setTimeout(() => fetchLocationSuggestions(), 250)"
+               @keydown.escape="showLocationSuggestions = false"
+               @blur="setTimeout(() => showLocationSuggestions = false, 150)"
+               placeholder="Location (e.g. Pantry, Fridge, Fridge · Left Side)"
+               class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
+               autocomplete="off" />
+        <div x-show="showLocationSuggestions && locationSuggestions.length"
+             class="absolute z-30 left-0 right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg overflow-hidden">
+          <template x-for="loc in locationSuggestions" :key="loc">
+            <div @click="selectLocationSuggestion(loc)"
+                 class="flex items-center justify-between px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/30">
+              <span x-text="loc" class="font-medium dark:text-gray-100"></span>
+            </div>
+          </template>
+        </div>
+      </div>
       <input x-model="itemForm.expiration_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
       <div class="flex gap-2">
         <label class="text-sm text-gray-600 dark:text-gray-300 self-center">Low threshold:</label>
@@ -1261,6 +1277,10 @@
         inventoryLocation: '',
         locations: [],
         editingItem: null,
+        // Location autocomplete
+        locationSuggestions: [],
+        showLocationSuggestions: false,
+        _locationSuggestionTimer: null,
         unitGroups: {},
         suggestions: [],
         showSuggestions: false,
@@ -1438,6 +1458,28 @@
             this.suggestions = [];
             this.showSuggestions = false;
           }
+        },
+
+        async fetchLocationSuggestions() {
+          if (!this.itemForm.location) { this.locationSuggestions = []; this.showLocationSuggestions = false; return; }
+          try {
+            const res = await fetch('/kitchen-manager/api/inventory/locations');
+            if (!res.ok) { this.locationSuggestions = []; this.showLocationSuggestions = false; return; }
+            const allLocations = await res.json();
+            this.locationSuggestions = allLocations.filter(loc =>
+              loc.toLowerCase().includes(this.itemForm.location.toLowerCase())
+            ).slice(0, 10);
+            this.showLocationSuggestions = this.locationSuggestions.length > 0;
+          } catch {
+            this.locationSuggestions = [];
+            this.showLocationSuggestions = false;
+          }
+        },
+
+        selectLocationSuggestion(loc) {
+          this.itemForm.location = loc;
+          this.locationSuggestions = [];
+          this.showLocationSuggestions = false;
         },
 
         selectSuggestion(s) {

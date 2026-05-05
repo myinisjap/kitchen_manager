@@ -276,6 +276,31 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		WriteJSON(w, http.StatusOK, suggestions)
 	})
 
+	mux.HandleFunc("GET /api/inventory/locations", func(w http.ResponseWriter, r *http.Request) {
+		// Return unique non-empty locations from inventory
+		rows, err := db.Query(`SELECT DISTINCT location FROM inventory WHERE location != '' AND location IS NOT NULL ORDER BY location LIMIT 100`)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer rows.Close()
+
+		var locations []string
+		for rows.Next() {
+			var loc string
+			if err := rows.Scan(&loc); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			locations = append(locations, loc)
+		}
+		if err := rows.Err(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, locations)
+	})
+
 	mux.HandleFunc("GET /api/inventory/barcode/{code}", func(w http.ResponseWriter, r *http.Request) {
 		code := r.PathValue("code")
 		if code == "" {
