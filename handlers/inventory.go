@@ -884,6 +884,33 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		broadcastInventory()
 	})
 
+	mux.HandleFunc("PATCH /api/skus/{sku_id}", func(w http.ResponseWriter, r *http.Request) {
+		skuID, ok := pathIDFromPattern(r, "sku_id")
+		if !ok {
+			WriteError(w, http.StatusBadRequest, "invalid sku_id")
+			return
+		}
+		var body struct {
+			Barcode        string  `json:"barcode"`
+			QuantityPerScan float64 `json:"quantity_per_scan"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Barcode == "" {
+			WriteError(w, http.StatusBadRequest, "barcode required")
+			return
+		}
+		res, err := db.Exec(`UPDATE inventory_skus SET barcode=?, quantity_per_scan=? WHERE id=?`, body.Barcode, body.QuantityPerScan, skuID)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			WriteError(w, http.StatusNotFound, "sku not found")
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]any{"id": skuID, "barcode": body.Barcode, "quantity_per_scan": body.QuantityPerScan})
+	})
+
 	mux.HandleFunc("DELETE /api/skus/{sku_id}", func(w http.ResponseWriter, r *http.Request) {
 		skuID, ok := pathIDFromPattern(r, "sku_id")
 		if !ok {
