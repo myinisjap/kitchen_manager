@@ -649,7 +649,7 @@
             </div>
           </template>
           <div>
-            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Quantity to deduct</label>
+            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Quantity to deduct (<span x-text="deductModal.group.unit"></span>)</label>
             <input x-model.number="deductModal.qty" type="number" min="0" step="any"
                    class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
           </div>
