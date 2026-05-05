@@ -176,7 +176,7 @@
                   </div>
                   <div class="flex items-center gap-2 ml-2">
                     <button @click.stop="openDeductModal(group)" class="text-orange-500 text-sm font-medium">−</button>
-                    <button @click="toggleSkuExpand(group.locations[0].id)" class="text-gray-500 text-sm hover:text-gray-700 dark:hover:text-gray-300" title="Manage barcode aliases">🏷️</button>
+                    <button @click.stop="toggleSkuExpand(group.locations[0].id)" class="text-gray-500 text-sm hover:text-gray-700 dark:hover:text-gray-300" title="Manage barcode aliases">🏷️</button>
                     <span class="text-gray-400 text-sm" x-text="expanded ? '▲' : '▼'"></span>
                   </div>
                 </div>

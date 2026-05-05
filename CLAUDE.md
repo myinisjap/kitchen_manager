@@ -61,6 +61,8 @@ docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/doc
 | `GOOGLE_CLIENT_SECRET` | — | Google Cloud OAuth client secret |
 | `SESSION_SECRET` | — | 64-char hex string for cookie signing (`openssl rand -hex 32`) |
 | `BASE_URL` | — | Public URL, used for OAuth redirect URI |
+| `ANTHROPIC_API_KEY` | — | Required for receipt parsing (Claude vision API) |
+| `SPLASH_URL` | — | Optional Splash JS renderer URL for recipe URL import |
 
 ## Auth
 
@@ -72,7 +74,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Layers:**
 - `main.go` — router setup, TLS bootstrapping, static file serving
-- `handlers/` — HTTP request handlers (one file per domain: inventory, shopping, recipes, calendar)
+- `handlers/` — HTTP request handlers (one file per domain: inventory, shopping, recipes, calendar, meals, history, receipt, settings, recipe_import); `ws.go` manages the WebSocket hub
 - `services/` — business logic that spans multiple DB tables (threshold generation, weekly shopping simulation)
 - `units/` — unit enum definitions, dimension validation, and conversion math
 - `internal/database/` — SQLite schema creation and migration (runs on startup)
@@ -99,6 +101,14 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Reverse proxy (Traefik):** The app runs at `/kitchen-manager` behind Traefik's `stripprefix` middleware. Auth redirects must use absolute URLs via `BASE_URL` (not relative paths like `/auth/login`) so the browser preserves the path prefix.
 
+**WebSocket real-time updates:** A `Hub` in `handlers/ws.go` broadcasts a JSON event `{"type":"inventory_updated"}` to all connected clients whenever inventory changes. Handlers call `hub.Broadcast(...)` after mutations. The frontend reconnects automatically on disconnect.
+
+**Receipt parsing:** `handlers/receipt.go` accepts an uploaded image, converts it to grayscale (reduces size ~60–70%), and sends it to Claude via `ANTHROPIC_API_KEY` to extract line items. Falls back gracefully if the key is unset.
+
+**Recipe import:** `handlers/recipe_import.go` extracts `schema.org/Recipe` JSON-LD from HTML. Fetching tries a Splash JS renderer (`SPLASH_URL`) first, then falls back to a direct GET with a browser User-Agent. PDF import is also supported.
+
+**Meal history:** Cooking a recipe logs it to `meal_history` and `meal_history_ingredients`, and deducts ingredients from inventory in the same transaction.
+
 ## Database Schema Notes
 
 - `inventory.low_threshold` — when `quantity` drops below this, `generate-from-thresholds` adds the shortfall to the shopping list
@@ -106,3 +116,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `shopping_list.inventory_id` is nullable (manual items may not link to an inventory item)
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
 - Recipe deletion is transactional (deletes ingredients first, then recipe)
+- `inventory_history` — records every quantity change with `change_type` (add/remove/edit), delta, and optional note; written via `handlers.LogHistory()`
+- `inventory_skus` — barcode aliases per inventory item, each with a `quantity_per_scan` multiplier; added via migration on startup
+- `meal_history` / `meal_history_ingredients` — immutable log of cooked meals; ingredient quantities recorded at cook time
+- `settings` — single key/value table for app-wide config (currently stores notification preferences)
