@@ -1564,6 +1564,132 @@ func TestDeductWithLocationID(t *testing.T) {
 	}
 }
 
+func TestDeductWithLocationIDMultiLocation(t *testing.T) {
+	mux, _ := newMux(t)
+
+	// Three sibling rows: Fridge(2), Pantry(4), Freezer(10) — same name+unit
+	create := func(loc string, qty float64) int64 {
+		body := `{"name":"milk","quantity":` + strconv.FormatFloat(qty, 'f', -1, 64) + `,"unit":"cup","location":"` + loc + `"}`
+		req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s: want 201, got %d: %s", loc, w.Code, w.Body)
+		}
+		var item map[string]any
+		json.NewDecoder(w.Body).Decode(&item)
+		return int64(item["id"].(float64))
+	}
+	fridgeID := create("Fridge", 2)
+	pantryID := create("Pantry", 4)
+	freezerID := create("Freezer", 10)
+
+	patch := func(id int64, newQty float64, locationID int64) *httptest.ResponseRecorder {
+		body := `{"quantity":` + strconv.FormatFloat(newQty, 'f', -1, 64) + `,"location_id":` + strconv.FormatInt(locationID, 10) + `}`
+		req := httptest.NewRequest("PATCH", "/api/inventory/"+strconv.FormatInt(id, 10), bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w
+	}
+	getQty := func(id int64) (float64, bool) {
+		req := httptest.NewRequest("GET", "/api/inventory/"+strconv.FormatInt(id, 10), nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code == http.StatusNotFound {
+			return 0, false
+		}
+		var item map[string]any
+		json.NewDecoder(w.Body).Decode(&item)
+		return item["quantity"].(float64), true
+	}
+
+	// Step 1: Deduct 2 from Fridge (empties it — row should be deleted)
+	w1 := patch(fridgeID, 0, fridgeID)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("deduct fridge: want 200, got %d: %s", w1.Code, w1.Body)
+	}
+	if _, exists := getQty(fridgeID); exists {
+		t.Error("fridge row: want deleted after full deduction")
+	}
+	// Pantry and Freezer untouched
+	if qty, _ := getQty(pantryID); qty != 4 {
+		t.Errorf("pantry: want 4 (untouched), got %v", qty)
+	}
+	if qty, _ := getQty(freezerID); qty != 10 {
+		t.Errorf("freezer: want 10 (untouched), got %v", qty)
+	}
+
+	// Step 2: Deduct 4 from Pantry (empties it — row should be deleted)
+	w2 := patch(pantryID, 0, pantryID)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("deduct pantry: want 200, got %d: %s", w2.Code, w2.Body)
+	}
+	if _, exists := getQty(pantryID); exists {
+		t.Error("pantry row: want deleted after full deduction")
+	}
+	// Freezer still untouched
+	if qty, _ := getQty(freezerID); qty != 10 {
+		t.Errorf("freezer: want 10 (untouched after pantry deduct), got %v", qty)
+	}
+
+	// Step 3: Deduct 4 from Freezer (partial — row stays with 6 remaining)
+	w3 := patch(freezerID, 6, freezerID)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("deduct freezer partial: want 200, got %d: %s", w3.Code, w3.Body)
+	}
+	if qty, exists := getQty(freezerID); !exists || qty != 6 {
+		t.Errorf("freezer: want 6 after partial deduct, got qty=%v exists=%v", qty, exists)
+	}
+}
+
+func TestDeductWithLocationIDNoCascadeToSiblings(t *testing.T) {
+	mux, _ := newMux(t)
+
+	createEggs := func(loc string, qty float64) int64 {
+		body := `{"name":"eggs","quantity":` + strconv.FormatFloat(qty, 'f', -1, 64) + `,"unit":"piece","location":"` + loc + `"}`
+		req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s: want 201, got %d: %s", loc, w.Code, w.Body)
+		}
+		var item map[string]any
+		json.NewDecoder(w.Body).Decode(&item)
+		return int64(item["id"].(float64))
+	}
+	aID := createEggs("A", 5)
+	bID := createEggs("B", 8)
+
+	// Deduct 3 from A using location_id — B must not change
+	body := `{"quantity":2,"location_id":` + strconv.FormatInt(aID, 10) + `}`
+	req := httptest.NewRequest("PATCH", "/api/inventory/"+strconv.FormatInt(aID, 10), bytes.NewBufferString(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body)
+	}
+
+	// A should be 2
+	reqA := httptest.NewRequest("GET", "/api/inventory/"+strconv.FormatInt(aID, 10), nil)
+	wA := httptest.NewRecorder()
+	mux.ServeHTTP(wA, reqA)
+	var aItem map[string]any
+	json.NewDecoder(wA.Body).Decode(&aItem)
+	if aItem["quantity"] != 2.0 {
+		t.Errorf("A: want quantity 2, got %v", aItem["quantity"])
+	}
+
+	// B must be 8 — no cascade
+	reqB := httptest.NewRequest("GET", "/api/inventory/"+strconv.FormatInt(bID, 10), nil)
+	wB := httptest.NewRecorder()
+	mux.ServeHTTP(wB, reqB)
+	var bItem map[string]any
+	json.NewDecoder(wB.Body).Decode(&bItem)
+	if bItem["quantity"] != 8.0 {
+		t.Errorf("B: want quantity 8 (no cascade), got %v", bItem["quantity"])
+	}
+}
+
 func TestReceiptImportMergesViaSkuAlias(t *testing.T) {
 	mux, _ := newMux(t)
 

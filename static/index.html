@@ -46,6 +46,7 @@
         <input x-model="inventorySearch" @input.debounce.300ms="fetchInventory()" type="text" placeholder="Search items..." class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
         <select x-model="inventoryLocation" @change="fetchInventory()" class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
           <option value="">All Locations</option>
+          <option value="__none__">No location</option>
           <template x-for="loc in locations">
             <option :value="loc" x-text="loc"></option>
           </template>
@@ -100,89 +101,65 @@
         <template x-for="group in inventoryItems" :key="group.name + '|' + group.unit">
           <div x-data="{ expanded: false }" class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700">
 
-            <!-- Single-location: render exactly as before -->
-            <template x-if="group.locations.length === 1">
-              <div>
-                <div class="p-3 flex items-start justify-between">
-                  <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2">
-                      <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
-                      <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
-                        <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
-                      </template>
-                    </div>
-                    <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                      <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span>
-                      &bull; <span x-text="group.locations[0].location || 'No location'"></span>
-                      <template x-if="group.locations[0].expiration_date">
-                        <span> &bull; Exp: <span x-text="group.locations[0].expiration_date"></span></span>
-                      </template>
-                    </div>
+            <!-- Header row (same for single and multi location) -->
+            <div class="p-3 flex items-start justify-between cursor-pointer" @click="expanded = !expanded">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
+                  <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
+                    <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
+                  </template>
+                </div>
+                <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                  <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span>
+                  &bull;
+                  <template x-if="group.locations.length === 1">
+                    <span x-text="group.locations[0].location || 'No location'"></span>
+                  </template>
+                  <template x-if="group.locations.length > 1">
+                    <span class="text-blue-600 dark:text-blue-400" x-text="group.locations.length + ' locations'"></span>
+                  </template>
+                </div>
+              </div>
+              <div class="flex items-center gap-1 ml-2">
+                <button @click.stop="openDeductModal(group)" class="text-orange-500 hover:text-orange-600 p-1 rounded" title="Deduct stock">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
+                </button>
+                <button @click.stop="editItem(group.locations[0])" class="text-blue-500 hover:text-blue-600 p-1 rounded" title="Edit item">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
+                </button>
+                <span class="text-gray-400 dark:text-gray-500 text-xs px-0.5" x-text="expanded ? '▲' : '▼'"></span>
+              </div>
+            </div>
+
+            <!-- Expanded: per-location rows -->
+            <div x-show="expanded" class="border-t dark:border-gray-700 divide-y dark:divide-gray-700">
+              <template x-for="loc in group.locations" :key="loc.id">
+                <div class="px-3 py-2 flex items-center justify-between">
+                  <div class="text-sm text-gray-600 dark:text-gray-300 flex-1 min-w-0">
+                    <span class="font-medium" x-text="loc.location || 'No location'"></span>
+                    <span class="text-gray-400 dark:text-gray-500">
+                      &nbsp;&bull; <span x-text="loc.quantity"></span> <span x-text="group.unit"></span>
+                    </span>
+                    <template x-if="loc.expiration_date">
+                      <span class="text-xs text-gray-400 dark:text-gray-500"> &bull; Exp: <span x-text="loc.expiration_date"></span></span>
+                    </template>
                   </div>
-                  <div class="flex items-center gap-1 ml-2">
-                    <button @click="openDeductModal(group)" class="text-orange-500 hover:text-orange-600 p-1 rounded" title="Deduct stock">
-                      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
-                    </button>
-                    <button @click="editItem(group.locations[0])" class="text-blue-500 hover:text-blue-600 p-1 rounded" title="Edit">
+                  <div class="flex items-center gap-1 ml-2 shrink-0">
+                    <button @click="openEditLocation(loc, group)" class="text-blue-500 hover:text-blue-600 p-1 rounded" title="Edit location">
                       <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
                     </button>
-                    <button @click="deleteItem(group.locations[0].id)" class="text-red-400 hover:text-red-600 p-1 rounded" title="Delete">
+                    <button @click="deleteItem(loc.id)" class="text-red-400 hover:text-red-600 p-1 rounded" title="Delete">
                       <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
                     </button>
                   </div>
                 </div>
+              </template>
+              <!-- Add location row -->
+              <div class="px-3 py-2">
+                <button @click="openAddLocation(group)" class="text-sm text-green-600 dark:text-green-400 hover:underline">+ Add location</button>
               </div>
-            </template>
-
-            <!-- Multi-location: collapsible header + per-location rows -->
-            <template x-if="group.locations.length > 1">
-              <div>
-                <!-- Header row -->
-                <div class="p-3 flex items-start justify-between cursor-pointer" @click="expanded = !expanded">
-                  <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2">
-                      <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
-                      <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
-                        <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
-                      </template>
-                      <span class="text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded"
-                            x-text="group.locations.length + ' locations'"></span>
-                    </div>
-                    <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                      <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span> total
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-1 ml-2">
-                    <button @click.stop="openDeductModal(group)" class="text-orange-500 hover:text-orange-600 p-1 rounded" title="Deduct stock">
-                      <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"/></svg>
-                    </button>
-                    <span class="text-gray-400 text-sm" x-text="expanded ? '▲' : '▼'"></span>
-                  </div>
-                </div>
-                <!-- Per-location rows (collapsed by default) -->
-                <div x-show="expanded" class="border-t dark:border-gray-700 divide-y dark:divide-gray-700">
-                  <template x-for="loc in group.locations" :key="loc.id">
-                    <div class="px-3 py-2 flex items-center justify-between">
-                      <div class="text-sm text-gray-600 dark:text-gray-300 flex-1 min-w-0">
-                        <span x-text="loc.location || 'No location'"></span>
-                        &bull; <span x-text="loc.quantity"></span> <span x-text="group.unit"></span>
-                        <template x-if="loc.expiration_date">
-                          <span class="text-xs text-gray-400 dark:text-gray-500"> · Exp: <span x-text="loc.expiration_date"></span></span>
-                        </template>
-                      </div>
-                      <div class="flex items-center gap-1 ml-2">
-                        <button @click="editItem(loc)" class="text-blue-500 hover:text-blue-600 p-1 rounded" title="Edit">
-                          <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
-                        </button>
-                        <button @click="deleteItem(loc.id)" class="text-red-400 hover:text-red-600 p-1 rounded" title="Delete">
-                          <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
-                        </button>
-                      </div>
-                    </div>
-                  </template>
-                </div>
-              </div>
-            </template>
+            </div>
 
           </div>
         </template>
@@ -473,7 +450,8 @@
           </template>
         </div>
       </div>
-      <div class="flex gap-2">
+      <!-- Unit fields: full row when adding new item, preferred-unit-only when editing -->
+      <div x-show="!editingItem" class="flex gap-2">
         <input x-model.number="itemForm.quantity" type="number" placeholder="Quantity" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
         <select x-model="itemForm.unit" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
           <option value="">Unit</option>
@@ -499,28 +477,6 @@
           </template>
         </select>
       </div>
-      <div class="relative">
-        <input x-model="itemForm.location" @input="clearTimeout(_locationSuggestionTimer); _locationSuggestionTimer = setTimeout(() => { fetchLocationSuggestions(); locationSuggestionIndex = -1; }, 250)"
-               @keydown.escape="showLocationSuggestions = false; locationSuggestionIndex = -1"
-               @keydown.down.prevent="if (showLocationSuggestions && locationSuggestions.length) { locationSuggestionIndex = (locationSuggestionIndex + 1) % locationSuggestions.length }"
-               @keydown.up.prevent="if (showLocationSuggestions && locationSuggestions.length) { locationSuggestionIndex = locationSuggestionIndex <= 0 ? 0 : locationSuggestionIndex - 1 }"
-               @keydown.enter.prevent="if (showLocationSuggestions && locationSuggestionIndex >= 0) { selectLocationSuggestion(locationSuggestions[locationSuggestionIndex]); locationSuggestionIndex = -1 }"
-               @blur="setTimeout(() => { showLocationSuggestions = false; locationSuggestionIndex = -1 }, 150)"
-               placeholder="Location (e.g. Pantry, Fridge, Fridge · Left Side)"
-               class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
-               autocomplete="off" />
-        <div x-show="showLocationSuggestions && locationSuggestions.length"
-             class="absolute z-30 left-0 right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg overflow-hidden">
-          <template x-for="(loc, i) in locationSuggestions" :key="loc">
-            <div @click="selectLocationSuggestion(loc); locationSuggestionIndex = -1"
-                 :class="i === locationSuggestionIndex ? 'bg-blue-100 dark:bg-blue-900/50' : 'hover:bg-blue-50 dark:hover:bg-blue-900/30'"
-                 class="flex items-center justify-between px-3 py-2 text-sm cursor-pointer">
-              <span x-text="loc" class="font-medium dark:text-gray-100"></span>
-            </div>
-          </template>
-        </div>
-      </div>
-      <input x-model="itemForm.expiration_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
       <div class="flex gap-2">
         <label class="text-sm text-gray-600 dark:text-gray-300 self-center">Low threshold:</label>
         <input x-model.number="itemForm.low_threshold" type="number" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
@@ -657,6 +613,41 @@
           </template>
         </div>
       </div>
+      <!-- Merge section (editing existing item only) -->
+      <template x-if="itemForm.id">
+        <div class="border dark:border-gray-700 rounded-lg p-3 space-y-2">
+          <p class="text-xs font-medium text-gray-700 dark:text-gray-300">Merge into another item</p>
+          <div class="flex gap-2">
+            <input x-model="mergeSearch" @input="clearTimeout(_mergeSearchTimer); _mergeSearchTimer = setTimeout(() => fetchMergeCandidates(), 300)"
+                   placeholder="Search by name..."
+                   class="flex-1 border rounded-lg px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
+                   autocomplete="off" />
+          </div>
+          <template x-if="mergeSearch && mergeCandidateItems.length > 0">
+            <div class="space-y-1 max-h-36 overflow-y-auto">
+              <template x-for="c in mergeCandidateItems" :key="c.id">
+                <div class="flex items-center justify-between text-sm bg-gray-50 dark:bg-gray-700/50 rounded px-2 py-1.5">
+                  <div class="flex-1 min-w-0">
+                    <span class="font-medium dark:text-gray-100 truncate" x-text="c.name"></span>
+                    <span class="text-gray-400 dark:text-gray-500 ml-1" x-text="c.quantity + ' ' + c.unit"></span>
+                    <span x-show="c.location" class="text-gray-400 dark:text-gray-500 ml-1" x-text="'· ' + c.location"></span>
+                    <template x-if="unitDimension(c.unit) && unitDimension(itemForm.unit) && unitDimension(c.unit) !== unitDimension(itemForm.unit)">
+                      <span class="ml-1 text-xs text-red-400">⚠ incompatible units</span>
+                    </template>
+                  </div>
+                  <button @click="confirmMergeInto(c)"
+                          class="ml-2 text-xs bg-orange-500 hover:bg-orange-600 text-white px-2 py-1 rounded shrink-0">
+                    Merge here
+                  </button>
+                </div>
+              </template>
+            </div>
+          </template>
+          <template x-if="mergeSearch && mergeCandidateItems.length === 0">
+            <p class="text-xs text-gray-400 italic">No matching items found.</p>
+          </template>
+        </div>
+      </template>
       <div class="flex gap-2 pt-2">
         <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
         <button @click="saveItem()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
@@ -675,7 +666,7 @@
           <template x-if="deductModal.group.locations.length > 1">
             <div>
               <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Location</label>
-              <select x-model.number="deductModal.selectedLocationId" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+              <select x-model.number="deductModal.selectedLocationId" @change="deductModal.plan = null" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
                 <template x-for="loc in deductModal.group.locations" :key="loc.id">
                   <option :value="loc.id" x-text="(loc.location || 'No location') + ' · ' + loc.quantity + ' ' + deductModal.group.unit + (loc.expiration_date ? ' · exp ' + loc.expiration_date : '')"></option>
                 </template>
@@ -684,12 +675,40 @@
           </template>
           <div>
             <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Quantity to deduct (<span x-text="deductModal.group.unit"></span>)</label>
-            <input x-model.number="deductModal.qty" type="number" min="0" step="any"
+            <input x-model.number="deductModal.qty" type="number" min="0" step="any" @input="deductModal.plan = null"
                    class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
           </div>
+          <!-- Plan builder: shown when deduction spans multiple locations -->
+          <template x-if="deductModal.plan">
+            <div class="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 p-3 space-y-2">
+              <p class="text-sm font-medium text-amber-800 dark:text-amber-300">
+                Plan · <span x-text="deductModal.plan.remaining"></span> <span x-text="deductModal.group.unit"></span> still to allocate
+              </p>
+              <template x-for="step in deductModal.plan.steps" :key="step.id">
+                <div class="flex justify-between text-sm text-gray-700 dark:text-gray-300">
+                  <span x-text="step.location || 'No location'"></span>
+                  <span class="font-medium" x-text="'−' + step.deduct + ' ' + deductModal.group.unit"></span>
+                </div>
+              </template>
+              <!-- Next location picker (shown while remainder > 0) -->
+              <template x-if="deductModal.plan.remaining > 0">
+                <div class="flex gap-2 pt-1">
+                  <select x-model.number="deductModal.plan.nextId" class="flex-1 border rounded-lg px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+                    <template x-for="loc in deductModal.plan.available" :key="loc.id">
+                      <option :value="loc.id" x-text="(loc.location || 'No location') + ' · ' + loc.quantity + ' ' + deductModal.group.unit"></option>
+                    </template>
+                  </select>
+                  <button @click="deductPlanAddLocation()" class="bg-amber-500 hover:bg-amber-600 text-white text-sm px-3 py-1.5 rounded-lg font-medium">Add</button>
+                </div>
+              </template>
+            </div>
+          </template>
           <div class="flex gap-2 pt-2">
             <button @click="modal = null; deductModal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
-            <button @click="confirmDeduct()" class="flex-1 bg-orange-500 text-white rounded-lg py-2 text-sm font-medium">Deduct</button>
+            <button @click="confirmDeduct()"
+                    :disabled="deductModal.plan && deductModal.plan.remaining > 0"
+                    class="flex-1 bg-orange-500 disabled:opacity-40 text-white rounded-lg py-2 text-sm font-medium"
+                    x-text="deductModal.plan ? 'Confirm deduction' : 'Deduct'"></button>
           </div>
         </div>
       </template>
@@ -1139,6 +1158,96 @@
     </div>
   </div>
 
+  <!-- Edit Location Modal -->
+  <div x-show="modal === 'editLocation'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4" x-show="editLocationForm">
+      <h2 class="text-lg font-bold dark:text-gray-100">Edit Location</h2>
+      <template x-if="editLocationForm">
+        <div class="space-y-4">
+          <div class="text-sm text-gray-500 dark:text-gray-400">
+            <span class="font-medium text-gray-800 dark:text-gray-100" x-text="editLocationForm.name"></span>
+          </div>
+          <div class="relative">
+            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Location</label>
+            <input x-model="editLocationForm.location" type="text" placeholder="e.g. Pantry, Fridge"
+                   @input="clearTimeout(_locationSuggestionTimer); _locationSuggestionTimer = setTimeout(() => fetchEditLocationSuggestions(), 250)"
+                   @keydown.escape="showEditLocationSuggestions = false"
+                   @blur="setTimeout(() => { showEditLocationSuggestions = false }, 150)"
+                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
+                   autocomplete="off" />
+            <div x-show="showEditLocationSuggestions && editLocationSuggestions.length"
+                 class="absolute z-30 left-0 right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg overflow-hidden">
+              <template x-for="loc in editLocationSuggestions" :key="loc">
+                <div @click="editLocationForm.location = loc; showEditLocationSuggestions = false"
+                     class="px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/30 dark:text-gray-100"
+                     x-text="loc"></div>
+              </template>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Quantity (<span x-text="editLocationForm.unit"></span>)</label>
+            <input x-model.number="editLocationForm.quantity" type="number" min="0" step="any"
+                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+          </div>
+          <div>
+            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Expiration date</label>
+            <input x-model="editLocationForm.expiration_date" type="date"
+                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+          </div>
+          <div class="flex gap-2 pt-2">
+            <button @click="modal = null; editLocationForm = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
+            <button @click="saveEditLocation()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Add Location Modal -->
+  <div x-show="modal === 'addLocation'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4" x-show="addLocationForm">
+      <h2 class="text-lg font-bold dark:text-gray-100">Add Location</h2>
+      <template x-if="addLocationForm">
+        <div class="space-y-4">
+          <div class="text-sm text-gray-500 dark:text-gray-400">
+            Adding stock for <span class="font-medium text-gray-800 dark:text-gray-100" x-text="addLocationForm.name"></span>
+          </div>
+          <div class="relative">
+            <input x-model="addLocationForm.location"
+                   @input="clearTimeout(_locationSuggestionTimer); _locationSuggestionTimer = setTimeout(() => { fetchAddLocationSuggestions(); }, 250)"
+                   @keydown.escape="showAddLocationSuggestions = false"
+                   @blur="setTimeout(() => { showAddLocationSuggestions = false }, 150)"
+                   placeholder="Location (e.g. Pantry, Fridge)"
+                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
+                   autocomplete="off" />
+            <div x-show="showAddLocationSuggestions && addLocationSuggestions.length"
+                 class="absolute z-30 left-0 right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg overflow-hidden">
+              <template x-for="loc in addLocationSuggestions" :key="loc">
+                <div @click="addLocationForm.location = loc; showAddLocationSuggestions = false"
+                     class="px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/30 dark:text-gray-100"
+                     x-text="loc"></div>
+              </template>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Quantity (<span x-text="addLocationForm.unit"></span>)</label>
+            <input x-model.number="addLocationForm.quantity" type="number" min="0" step="any"
+                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+          </div>
+          <div>
+            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Expiration date (optional)</label>
+            <input x-model="addLocationForm.expiration_date" type="date"
+                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+          </div>
+          <div class="flex gap-2 pt-2">
+            <button @click="modal = null; addLocationForm = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
+            <button @click="saveAddLocation()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Add</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
   <!-- Tailwind safelist: keeps dynamically-applied classes from being purged -->
   <div class="hidden bg-green-600 bg-red-600 dark:bg-green-800 dark:bg-red-800"></div>
 
@@ -1206,43 +1315,73 @@
           <template x-for="(item, i) in receiptItems" :key="i">
             <div class="border dark:border-gray-700 rounded-xl p-3 flex gap-2 items-start" :class="item._include ? '' : 'opacity-40'">
               <input type="checkbox" x-model="item._include" class="mt-1 accent-orange-500 flex-shrink-0 w-5 h-5" />
-              <div class="flex-1 grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
-                <div class="col-span-2">
-                  <label class="text-xs text-gray-400 dark:text-gray-500">Name</label>
-                  <input x-model="item.name" class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
-                </div>
-                <div>
-                  <label class="text-xs text-gray-400 dark:text-gray-500">Qty</label>
-                  <input x-model.number="item.quantity" type="number" min="0" step="any" class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
-                </div>
-                <div>
-                  <label class="text-xs text-gray-400 dark:text-gray-500">Unit</label>
-                  <select x-model="item.unit" class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
-                    <option value="piece">piece</option>
-                    <option value="lb">lb</option>
-                    <option value="oz">oz</option>
-                    <option value="kg">kg</option>
-                    <option value="g">g</option>
-                    <option value="L">L</option>
-                    <option value="ml">ml</option>
-                    <option value="cup">cup</option>
-                    <option value="tbsp">tbsp</option>
-                    <option value="tsp">tsp</option>
-                    <option value="can">can</option>
-                    <option value="jar">jar</option>
-                    <option value="bunch">bunch</option>
-                    <option value="clove">clove</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-xs text-gray-400 dark:text-gray-500">PLU / Barcode</label>
-                  <input x-model="item.plu" class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-500" placeholder="optional" />
-                </div>
-                <div>
-                  <label class="text-xs text-gray-400 dark:text-gray-500">Unit cost ($)</label>
-                  <input x-model.number="item._cost_dollars" type="number" min="0" step="0.01"
-                         @input="item.unit_cost_cents = Math.round(item._cost_dollars * 100)"
-                         class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+              <div class="flex-1 min-w-0">
+                <!-- Similar item suggestion (only shown when not already merged and has candidates) -->
+                <template x-if="item._similar && item._similar.length > 0 && !item._mergeTarget">
+                  <div class="mb-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 p-2">
+                    <p class="text-xs font-medium text-amber-700 dark:text-amber-400 mb-1">Similar items in pantry:</p>
+                    <template x-for="candidate in item._similar" :key="candidate.id">
+                      <div class="flex items-center justify-between gap-2 py-0.5">
+                        <span class="text-xs text-gray-700 dark:text-gray-300 truncate">
+                          <span x-text="candidate.name"></span>
+                          <span class="text-gray-400 dark:text-gray-500" x-text="' · ' + candidate.quantity + ' ' + candidate.unit + (candidate.location ? ' · ' + candidate.location : '')"></span>
+                        </span>
+                        <button @click="item._mergeTarget = candidate; item._include = true"
+                                class="flex-shrink-0 text-xs bg-amber-500 hover:bg-amber-600 text-white px-2 py-0.5 rounded font-medium">
+                          Add to this
+                        </button>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+                <!-- Merge target banner -->
+                <template x-if="item._mergeTarget">
+                  <div class="mb-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 p-2 flex items-center justify-between gap-2">
+                    <p class="text-xs text-green-700 dark:text-green-400">
+                      Adding to: <span class="font-medium" x-text="item._mergeTarget.name"></span>
+                      <span x-text="' (' + item._mergeTarget.quantity + ' ' + item._mergeTarget.unit + ')'"></span>
+                    </p>
+                    <button @click="item._mergeTarget = null" class="text-xs text-green-600 dark:text-green-400 underline flex-shrink-0">Undo</button>
+                  </div>
+                </template>
+                <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+                  <div class="col-span-2">
+                    <label class="text-xs text-gray-400 dark:text-gray-500">Name</label>
+                    <input x-model="item.name" class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                  </div>
+                  <div>
+                    <label class="text-xs text-gray-400 dark:text-gray-500">Qty</label>
+                    <input x-model.number="item.quantity" type="number" min="0" step="any" class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                  </div>
+                  <div>
+                    <label class="text-xs text-gray-400 dark:text-gray-500">Unit</label>
+                    <select x-model="item.unit" class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+                      <option value="piece">piece</option>
+                      <option value="lb">lb</option>
+                      <option value="oz">oz</option>
+                      <option value="kg">kg</option>
+                      <option value="g">g</option>
+                      <option value="L">L</option>
+                      <option value="ml">ml</option>
+                      <option value="cup">cup</option>
+                      <option value="tbsp">tbsp</option>
+                      <option value="tsp">tsp</option>
+                      <option value="can">can</option>
+                      <option value="jar">jar</option>
+                      <option value="bunch">bunch</option>
+                      <option value="clove">clove</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="text-xs text-gray-400 dark:text-gray-500">PLU / Barcode</label>
+                    <input x-model="item.plu" class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-500" placeholder="optional" />
+                  </div>
+                  <div>
+                    <label class="text-xs text-gray-400 dark:text-gray-500">Unit cost ($)</label>
+                    <input x-model.number="item._cost_dollars" type="number" min="0" step="0.01"
+                           @input="item.unit_cost_cents = Math.round(item._cost_dollars * 100)"
+                           class="w-full border rounded px-2 py-1 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -1253,6 +1392,29 @@
           <button @click="addReceiptToInventory()" class="flex-1 bg-orange-500 text-white rounded-lg py-2 text-sm font-medium"
                   x-text="'Add ' + (receiptItems?.filter(i=>i._include) || []).length + ' items to inventory'"></button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-app dialog (replaces native confirm/alert) -->
+  <div x-show="_dialog" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50" style="display:none">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-4">
+      <div>
+        <p class="font-semibold text-gray-900 dark:text-gray-100 text-base" x-text="_dialog && _dialog.title"></p>
+        <p x-show="_dialog && _dialog.body" class="mt-2 text-sm text-gray-600 dark:text-gray-300 whitespace-pre-line" x-text="_dialog && _dialog.body"></p>
+      </div>
+      <div class="flex gap-2 justify-end">
+        <template x-if="_dialog && _dialog.cancelLabel">
+          <button @click="_dialogResolve(false)"
+                  class="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">
+            <span x-text="_dialog.cancelLabel"></span>
+          </button>
+        </template>
+        <button @click="_dialogResolve(true)"
+                :class="_dialog && _dialog.destructive ? 'bg-red-500 hover:bg-red-600' : 'bg-orange-500 hover:bg-orange-600'"
+                class="px-4 py-2 rounded-lg text-sm text-white font-medium">
+          <span x-text="_dialog && _dialog.confirmLabel"></span>
+        </button>
       </div>
     </div>
   </div>
@@ -1272,6 +1434,8 @@
           { id: 'meals', label: 'Meals', icon: '🍳' },
         ],
         modal: null,
+        _dialog: null,
+        _dialogResolveCallback: null,
         toast: '',
         _toastTimer: null,
         toastStyle: '',
@@ -1316,6 +1480,15 @@
         groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
         itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
         deductModal: null,   // { group, selectedLocationId, qty }
+        editLocationForm: null,   // { id, name, unit, location, quantity, expiration_date }
+        addLocationForm: null,    // { name, unit, preferred_unit, low_threshold, location, quantity, expiration_date }
+        addLocationSuggestions: [],
+        showAddLocationSuggestions: false,
+        editLocationSuggestions: [],
+        showEditLocationSuggestions: false,
+        mergeSearch: '',
+        mergeCandidateItems: [],
+        _mergeSearchTimer: null,
 
         // SKU alias merge
         skuMergeDialog: null,  // { barcode, name, quantity, unit, candidates: [], mode: 'find'|'grocery' }
@@ -1950,6 +2123,21 @@
           this._toastTimer = setTimeout(() => { this.toast = ''; this.toastStyle = ''; this.toastBadge = ''; }, 2500);
         },
 
+        // Returns a Promise<boolean>; title is always shown, body is optional detail text
+        _showDialog({ title, body = '', confirmLabel = 'OK', cancelLabel = null, destructive = false }) {
+          return new Promise(resolve => {
+            this._dialogResolveCallback = resolve;
+            this._dialog = { title, body, confirmLabel, cancelLabel, destructive };
+          });
+        },
+
+        _dialogResolve(value) {
+          this._dialog = null;
+          const cb = this._dialogResolveCallback;
+          this._dialogResolveCallback = null;
+          if (cb) cb(value);
+        },
+
         // --- Inventory ---
         async fetchInventory() {
           const params = new URLSearchParams();
@@ -1979,6 +2167,8 @@
         async editItem(locOrItem) {
           this.suggestions = [];
           this.showSuggestions = false;
+          this.mergeSearch = '';
+          this.mergeCandidateItems = [];
           // If this is a location stub (from grouped view), fetch the full item
           if (!('preferred_unit' in locOrItem)) {
             const res = await fetch(this.baseUrl + '/api/inventory/' + locOrItem.id);
@@ -1999,28 +2189,80 @@
             group,
             selectedLocationId: group.recommended_location_id,
             qty: 1,
+            plan: null,
           };
           this.modal = 'deduct';
         },
 
         async confirmDeduct() {
-          const { group, selectedLocationId, qty } = this.deductModal;
-          const loc = group.locations.find(l => l.id === selectedLocationId);
-          if (!loc || qty <= 0) return;
-          const newQty = Math.max(0, parseFloat((loc.quantity - qty).toFixed(4)));
-          const res = await fetch(this.baseUrl + '/api/inventory/' + selectedLocationId, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quantity: newQty, location_id: selectedLocationId }),
-          });
-          if (res.ok) {
+          const { group, selectedLocationId, qty, plan } = this.deductModal;
+          if (qty <= 0) return;
+
+          // Execute confirmed plan — sequential, each with location_id to bypass cascade
+          if (plan && plan.remaining <= 0) {
+            for (const step of plan.steps) {
+              const res = await fetch(this.baseUrl + '/api/inventory/' + step.id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: parseFloat((step.currentQty - step.deduct).toFixed(4)), location_id: step.id }),
+              });
+              if (!res.ok) { this.showToast('Deduct failed', 'error'); return; }
+            }
             this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
             this.modal = null;
             this.deductModal = null;
             await this.fetchInventory();
             await this.fetchExpiring();
-          } else {
-            this.showToast('Deduct failed', 'error');
+            return;
+          }
+
+          // Validate total available
+          const totalAvailable = parseFloat(group.locations.reduce((sum, l) => sum + l.quantity, 0).toFixed(4));
+          if (qty > totalAvailable) {
+            this.showToast(`Cannot deduct ${qty} — only ${totalAvailable} ${group.unit} available across all locations`, 'error');
+            return;
+          }
+
+          // Start building plan with selected location
+          const loc = group.locations.find(l => l.id === selectedLocationId);
+          if (!loc) return;
+          const take = Math.min(qty, loc.quantity);
+          const remaining = parseFloat((qty - take).toFixed(4));
+          const steps = [{ id: loc.id, location: loc.location, deduct: parseFloat(take.toFixed(4)), currentQty: loc.quantity }];
+          const available = group.locations.filter(l => l.id !== selectedLocationId && l.quantity > 0);
+
+          // Single location covers it: execute immediately
+          if (remaining <= 0) {
+            const res = await fetch(this.baseUrl + '/api/inventory/' + loc.id, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ quantity: parseFloat((loc.quantity - take).toFixed(4)), location_id: loc.id }),
+            });
+            if (!res.ok) { this.showToast('Deduct failed', 'error'); return; }
+            this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
+            this.modal = null;
+            this.deductModal = null;
+            await this.fetchInventory();
+            await this.fetchExpiring();
+            return;
+          }
+
+          // Need more locations — show interactive plan builder
+          this.deductModal.plan = { steps, remaining, available, nextId: available[0]?.id ?? null };
+        },
+
+        deductPlanAddLocation() {
+          const plan = this.deductModal.plan;
+          const loc = plan.available.find(l => l.id === plan.nextId);
+          if (!loc) return;
+          const take = Math.min(plan.remaining, loc.quantity);
+          const newSteps = [...plan.steps, { id: loc.id, location: loc.location, deduct: parseFloat(take.toFixed(4)), currentQty: loc.quantity }];
+          const newRemaining = parseFloat((plan.remaining - take).toFixed(4));
+          const newAvailable = plan.available.filter(l => l.id !== loc.id);
+          this.deductModal.plan = { steps: newSteps, remaining: newRemaining, available: newAvailable, nextId: newAvailable[0]?.id ?? null };
+          // If only one location left and remainder still > 0, auto-add it
+          if (newRemaining > 0 && newAvailable.length === 1) {
+            this.deductPlanAddLocation();
           }
         },
 
@@ -2047,10 +2289,205 @@
         },
 
         async deleteItem(id) {
-          if (!confirm('Delete this item?')) return;
+          const ok = await this._showDialog({ title: 'Delete this item?', confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });
+          if (!ok) return;
           await fetch(this.baseUrl + '/api/inventory/' + id, { method: 'DELETE' });
           await this.fetchInventory();
           this.showToast('Item deleted');
+        },
+
+        openEditLocation(loc, group) {
+          this.editLocationForm = {
+            id: loc.id,
+            name: group.name,
+            unit: group.unit,
+            location: loc.location || '',
+            quantity: loc.quantity,
+            expiration_date: loc.expiration_date || '',
+            siblings: group.locations,
+          };
+          this.modal = 'editLocation';
+        },
+
+        async saveEditLocation() {
+          const f = this.editLocationForm;
+          if (!f) return;
+
+          // Check if the new location matches a different sibling row
+          const collision = (f.siblings || []).find(s =>
+            s.id !== f.id && (s.location || '') === (f.location || '')
+          );
+
+          if (collision) {
+            // Merge: add quantity to the collision row, delete the edited row
+            const newQty = parseFloat((collision.quantity + f.quantity).toFixed(4));
+            const [patchRes, delRes] = await Promise.all([
+              fetch(this.baseUrl + '/api/inventory/' + collision.id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: newQty, expiration_date: collision.expiration_date }),
+              }),
+              fetch(this.baseUrl + '/api/inventory/' + f.id, { method: 'DELETE' }),
+            ]);
+            if (patchRes.ok && delRes.ok) {
+              this.showToast('Locations merged');
+              this.modal = null;
+              this.editLocationForm = null;
+              await this.fetchInventory();
+              await this.fetchExpiring();
+            } else {
+              this.showToast('Merge failed', 'error');
+            }
+            return;
+          }
+
+          const res = await fetch(this.baseUrl + '/api/inventory/' + f.id, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ quantity: f.quantity, expiration_date: f.expiration_date, location: f.location }),
+          });
+          if (res.ok) {
+            this.showToast('Location updated');
+            this.modal = null;
+            this.editLocationForm = null;
+            await this.fetchInventory();
+            await this.fetchExpiring();
+          } else {
+            this.showToast('Update failed', 'error');
+          }
+        },
+
+        openAddLocation(group) {
+          this.addLocationForm = {
+            name: group.name,
+            unit: group.unit,
+            preferred_unit: group.preferred_unit || group.unit,
+            low_threshold: group.low_threshold || 0,
+            location: '',
+            quantity: 0,
+            expiration_date: '',
+          };
+          this.addLocationSuggestions = [];
+          this.showAddLocationSuggestions = false;
+          this.modal = 'addLocation';
+        },
+
+        async fetchEditLocationSuggestions() {
+          try {
+            const res = await fetch(this.baseUrl + '/api/inventory/locations');
+            if (!res.ok) return;
+            const all = await res.json();
+            this.editLocationSuggestions = all.filter(loc =>
+              loc.toLowerCase().includes((this.editLocationForm.location || '').toLowerCase())
+            ).slice(0, 10);
+            this.showEditLocationSuggestions = this.editLocationSuggestions.length > 0;
+          } catch {
+            this.editLocationSuggestions = [];
+            this.showEditLocationSuggestions = false;
+          }
+        },
+
+        async fetchAddLocationSuggestions() {
+          try {
+            const res = await fetch(this.baseUrl + '/api/inventory/locations');
+            if (!res.ok) return;
+            const all = await res.json();
+            this.addLocationSuggestions = all.filter(loc =>
+              loc.toLowerCase().includes((this.addLocationForm.location || '').toLowerCase())
+            ).slice(0, 10);
+            this.showAddLocationSuggestions = this.addLocationSuggestions.length > 0;
+          } catch {
+            this.addLocationSuggestions = [];
+            this.showAddLocationSuggestions = false;
+          }
+        },
+
+        async fetchMergeCandidates() {
+          const q = this.mergeSearch.trim();
+          if (!q) { this.mergeCandidateItems = []; return; }
+          try {
+            const res = await fetch(this.baseUrl + '/api/inventory/?name=' + encodeURIComponent(q));
+            if (!res.ok) { this.mergeCandidateItems = []; return; }
+            const all = await res.json();
+            // Exclude rows belonging to the item being edited
+            this.mergeCandidateItems = all.filter(i => i.id !== this.itemForm.id).slice(0, 8);
+          } catch {
+            this.mergeCandidateItems = [];
+          }
+        },
+
+        async confirmMergeInto(target) {
+          const srcUnit = this.itemForm.unit;
+          const tgtUnit = target.preferred_unit || target.unit;
+          const srcDim = this.unitDimension(srcUnit);
+          const tgtDim = this.unitDimension(tgtUnit);
+
+          if (srcDim && tgtDim && srcDim !== tgtDim) {
+            await this._showDialog({
+              title: 'Incompatible units',
+              body: `"${this.itemForm.name}" is in ${srcUnit} (${srcDim}) but "${target.name}" is in ${tgtUnit} (${tgtDim}). Units must be the same dimension.`,
+              confirmLabel: 'OK',
+            });
+            return;
+          }
+
+          let confirmBody = `This will delete the current item.`;
+          if (srcUnit !== tgtUnit && srcDim === tgtDim) {
+            confirmBody = `Quantity will be converted from ${srcUnit} to ${tgtUnit}.\n\n` + confirmBody;
+          }
+          const ok = await this._showDialog({
+            title: `Merge "${this.itemForm.name}" into "${target.name}"?`,
+            body: confirmBody,
+            confirmLabel: 'Merge',
+            cancelLabel: 'Cancel',
+            destructive: true,
+          });
+          if (!ok) return;
+
+          const res = await fetch(this.baseUrl + '/api/inventory/' + this.itemForm.id + '/merge-into/' + target.id, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+          });
+          if (res.ok) {
+            this.showToast(`Merged into "${target.name}"`);
+            this.modal = null;
+            this.mergeSearch = '';
+            this.mergeCandidateItems = [];
+            await this.fetchInventory();
+            await this.fetchExpiring();
+          } else {
+            const err = await res.json().catch(() => ({}));
+            this.showToast(err.error || 'Merge failed', 'error');
+          }
+        },
+
+        async saveAddLocation() {
+          const f = this.addLocationForm;
+          if (!f || !f.name) return;
+          const payload = {
+            name: f.name,
+            quantity: f.quantity,
+            unit: f.unit,
+            preferred_unit: f.preferred_unit || f.unit,
+            location: f.location,
+            expiration_date: f.expiration_date,
+            low_threshold: f.low_threshold || 0,
+          };
+          const res = await fetch(this.baseUrl + '/api/inventory/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (res.ok) {
+            this.showToast('Location added');
+            this.modal = null;
+            this.addLocationForm = null;
+            await this.fetchInventory();
+          } else {
+            const err = await res.json().catch(() => ({}));
+            this.showToast(err.error || 'Failed to add location', 'error');
+          }
         },
 
         // --- Shopping ---
@@ -2136,11 +2573,25 @@
             const res = await fetch('/kitchen-manager/api/receipt/parse', { method: 'POST', body: fd });
             const data = await res.json();
             if (!res.ok) { this.receiptError = data.error || 'Parsing failed'; return; }
-            this.receiptItems = data.items.map(item => ({
+            const mapped = data.items.map(item => ({
               ...item,
               _include: true,
               _cost_dollars: item.unit_cost_cents ? (item.unit_cost_cents / 100).toFixed(2) : '',
+              _similar: [],
+              _mergeTarget: null,
             }));
+            // Check each item for similar existing inventory entries
+            await Promise.all(mapped.map(async item => {
+              if (!item.name || !item.name.trim()) return;
+              try {
+                const sr = await fetch(this.baseUrl + '/api/inventory/similar?name=' + encodeURIComponent(item.name));
+                if (sr.ok) {
+                  const candidates = await sr.json();
+                  if (candidates && candidates.length > 0) item._similar = candidates;
+                }
+              } catch { /* silent */ }
+            }));
+            this.receiptItems = mapped;
           } catch (e) {
             this.receiptError = 'Network error: ' + e.message;
           } finally {
@@ -2156,6 +2607,26 @@
             const receiptQty = item.quantity || 1;
             const qtyPerScan = item.quantity_per_scan > 0 ? item.quantity_per_scan : null;
             const finalQty = qtyPerScan ? receiptQty * qtyPerScan : receiptQty;
+
+            if (item._mergeTarget) {
+              // Add quantity to existing inventory item
+              const target = item._mergeTarget;
+              const targetUnit = target.preferred_unit || target.unit;
+              let addQty = finalQty;
+              if (item.unit && targetUnit && item.unit !== targetUnit) {
+                const converted = this.convertUnits(finalQty, item.unit, targetUnit);
+                if (converted !== null) addQty = parseFloat(converted.toFixed(4));
+              }
+              const newQty = parseFloat(((target.quantity || 0) + addQty).toFixed(4));
+              const res = await fetch(this.baseUrl + '/api/inventory/' + target.id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: newQty }),
+              });
+              if (res.ok) { added++; } else { failed++; }
+              return;
+            }
+
             const payload = {
               name: item.name,
               quantity: finalQty,
@@ -2363,15 +2834,16 @@
         },
 
         async deleteRecipe(id) {
-          let msg = 'Delete this recipe?';
+          let body = '';
           try {
             const res = await fetch(this.baseUrl + '/api/recipes/' + id + '/future-calendar');
             if (res.ok) {
               const { count } = await res.json();
-              if (count > 0) msg = `This recipe is scheduled ${count} time${count !== 1 ? 's' : ''} on the calendar. Delete anyway?`;
+              if (count > 0) body = `This recipe is scheduled ${count} time${count !== 1 ? 's' : ''} on the calendar.`;
             }
-          } catch (e) { /* fall through to plain confirm */ }
-          if (!confirm(msg)) return;
+          } catch (e) { /* fall through */ }
+          const ok = await this._showDialog({ title: 'Delete this recipe?', body, confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });
+          if (!ok) return;
           const delRes = await fetch(this.baseUrl + '/api/recipes/' + id, { method: 'DELETE' });
           if (!delRes.ok) {
             const body = await delRes.text();

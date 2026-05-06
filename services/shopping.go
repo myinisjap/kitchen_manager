@@ -8,7 +8,7 @@ import (
 // and adds them to the shopping list if not already present (unchecked).
 // Returns the number of items added.
 func GenerateFromThresholds(db *sql.DB) (int, error) {
-	rows, err := db.Query(`SELECT id, name, quantity, low_threshold, unit FROM inventory WHERE quantity < low_threshold`)
+	rows, err := db.Query(`SELECT id, name, quantity, low_threshold, unit FROM inventory WHERE quantity <= low_threshold`)
 	if err != nil {
 		return 0, err
 	}
