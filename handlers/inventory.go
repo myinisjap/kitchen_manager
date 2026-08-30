@@ -680,11 +680,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 						Source:         source,
 						ChangedBy:      auth.EmailFromContext(r.Context()),
 					})
-					if _, err := tx.Exec(`DELETE FROM inventory WHERE id=?`, s.id); err != nil {
+					if _, err := tx.Exec(`UPDATE inventory SET quantity=0 WHERE id=?`, s.id); err != nil {
 						tx.Rollback()
 						WriteError(w, http.StatusInternalServerError, err.Error())
 						return
 					}
+					lastSibID = s.id
 				} else {
 					remaining := s.qty - deduct
 					deduct = 0

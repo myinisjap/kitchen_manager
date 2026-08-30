@@ -38,8 +38,8 @@ func newTestDB(t *testing.T) *sql.DB {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		inventory_id INTEGER NOT NULL,
 		item_name TEXT NOT NULL DEFAULT '',
-		changed_at TEXT NOT NULL,
-		changed_by TEXT NOT NULL DEFAULT 'system',
+		changed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+		changed_by TEXT DEFAULT 'system',
 		change_type TEXT NOT NULL,
 		quantity_before REAL,
 		quantity_after REAL,
@@ -145,6 +145,9 @@ func newMux(t *testing.T) (*http.ServeMux, *sql.DB) {
 	handlers.RegisterShopping(mux, db)
 	handlers.RegisterRecipes(mux, db)
 	handlers.RegisterCalendar(mux, db)
+	handlers.RegisterMeals(mux, db)
+	handlers.RegisterHistory(mux, db)
+	handlers.RegisterSettings(mux, db)
 	return mux, db
 }
 
@@ -1114,24 +1117,22 @@ func TestExpiryFirstDeductionCascade(t *testing.T) {
 		t.Errorf("expected id3 qty=4 (untouched), got %v", qty3)
 	}
 
-	// Now deduct the remaining 2 from id1 — cascade: id1(2) fully consumed → deleted, id2 untouched.
+	// Now deduct the remaining 2 from id1 — cascade: id1(2) fully consumed → qty=0, id2 untouched.
 	patchURL1 := "/api/inventory/" + strconv.FormatInt(id1, 10)
 	req2 := httptest.NewRequest(http.MethodPatch, patchURL1, bytes.NewBufferString(`{"quantity":0}`))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	mux.ServeHTTP(w2, req2)
-	// deduct=2, cascade: id1(2) fully consumed → deleted. id2(3) >= 2 → id2 becomes 1.
 	if w2.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w2.Code, w2.Body.String())
 	}
 
-	// id1 should be deleted.
-	var exists int
-	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE id=?`, id1).Scan(&exists)
-	if exists != 0 {
-		t.Errorf("expected id1 deleted after full deduction, got count=%d", exists)
+	// id1 should remain with qty=0 (not deleted).
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id1).Scan(&qty1)
+	if qty1 != 0 {
+		t.Errorf("expected id1 qty=0 after full deduction, got %v", qty1)
 	}
-	// deduct=2, id1(2) fully consumed → deduct hits 0, id2 untouched.
+	// id2 untouched.
 	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id2).Scan(&qty2)
 	if qty2 != 3 {
 		t.Errorf("expected id2 qty=3 (untouched), got %v", qty2)
@@ -1603,13 +1604,13 @@ func TestDeductWithLocationIDMultiLocation(t *testing.T) {
 		return item["quantity"].(float64), true
 	}
 
-	// Step 1: Deduct 2 from Fridge (empties it — row should be deleted)
+	// Step 1: Deduct 2 from Fridge (empties it — row stays with qty=0)
 	w1 := patch(fridgeID, 0, fridgeID)
 	if w1.Code != http.StatusOK {
 		t.Fatalf("deduct fridge: want 200, got %d: %s", w1.Code, w1.Body)
 	}
-	if _, exists := getQty(fridgeID); exists {
-		t.Error("fridge row: want deleted after full deduction")
+	if qty, exists := getQty(fridgeID); !exists || qty != 0 {
+		t.Errorf("fridge row: want qty=0 after full deduction, got qty=%v exists=%v", qty, exists)
 	}
 	// Pantry and Freezer untouched
 	if qty, _ := getQty(pantryID); qty != 4 {
@@ -1619,13 +1620,13 @@ func TestDeductWithLocationIDMultiLocation(t *testing.T) {
 		t.Errorf("freezer: want 10 (untouched), got %v", qty)
 	}
 
-	// Step 2: Deduct 4 from Pantry (empties it — row should be deleted)
+	// Step 2: Deduct 4 from Pantry (empties it — row stays with qty=0)
 	w2 := patch(pantryID, 0, pantryID)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("deduct pantry: want 200, got %d: %s", w2.Code, w2.Body)
 	}
-	if _, exists := getQty(pantryID); exists {
-		t.Error("pantry row: want deleted after full deduction")
+	if qty, exists := getQty(pantryID); !exists || qty != 0 {
+		t.Errorf("pantry row: want qty=0 after full deduction, got qty=%v exists=%v", qty, exists)
 	}
 	// Freezer still untouched
 	if qty, _ := getQty(freezerID); qty != 10 {

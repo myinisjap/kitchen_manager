@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
@@ -16,5 +17,8 @@ func ReadJSON(r *http.Request, v any) error {
 }
 
 func WriteError(w http.ResponseWriter, status int, msg string) {
+	if status >= 500 {
+		log.Printf("ERROR %d: %s", status, msg)
+	}
 	WriteJSON(w, status, map[string]string{"error": msg})
 }

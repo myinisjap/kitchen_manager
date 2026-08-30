@@ -51,6 +51,9 @@
             <option :value="loc" x-text="loc"></option>
           </template>
         </select>
+        <button @click="hideEmptyInventory = !hideEmptyInventory; localStorage.setItem('km-hide-empty', hideEmptyInventory)"
+                :class="hideEmptyInventory ? 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200' : 'border border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500'"
+                class="px-3 py-2 rounded-lg text-sm font-medium">Hide empty</button>
         <button @click="openScanner('find')" class="border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-2 rounded-lg text-sm font-medium">📷 Scan</button>
         <button @click="openRemoveStockScanner()" class="border border-orange-400 text-orange-600 px-3 py-2 rounded-lg text-sm font-medium">−1 Scan</button>
         <button @click="openAddItem()" class="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium">+ Add Item</button>
@@ -98,7 +101,7 @@
 
       <!-- Item list -->
       <div class="space-y-2">
-        <template x-for="group in inventoryItems" :key="group.name + '|' + group.unit">
+        <template x-for="group in inventoryItems.filter(g => !hideEmptyInventory || g.total_quantity > 0)" :key="group.name + '|' + group.unit">
           <div x-data="{ expanded: false }" class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700">
 
             <!-- Header row (same for single and multi location) -->
@@ -1447,6 +1450,7 @@
         expiryOpen: false,
         inventorySearch: '',
         inventoryLocation: '',
+        hideEmptyInventory: localStorage.getItem('km-hide-empty') !== 'false',
         locations: [],
         editingItem: null,
         // Location autocomplete
