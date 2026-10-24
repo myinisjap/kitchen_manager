@@ -2228,10 +2228,13 @@
             this.modal = null;
             this.cookItConfirm = null;
             this.showToast(`Cooked ${recipe.name} (${servings} serving${servings !== 1 ? 's' : ''})`, 'success');
+            try { const b = await res.clone().json(); (b.warnings || []).forEach(w => this.showToast(w, 'error')); } catch (e) {}
             await this.fetchInventory();
             await this.fetchExpiring();
           } else {
-            this.showToast('Failed to log meal', 'error');
+            let msg = 'Failed to log meal';
+            try { const b = await res.json(); if (b.error) msg += ': ' + b.error; } catch (e) {}
+            this.showToast(msg, 'error');
           }
         },
 
@@ -2412,7 +2415,7 @@
             const item = await res.json();
             const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
             const newQty = Math.max(0, parseFloat((item.quantity - scanQty).toFixed(4)));
-            const patch = await fetch(this.baseUrl + '/api/inventory/' + item.id, {
+            const patch = await fetch(this.baseUrl + '/api/inventory/' + item.id + '?source=barcode_remove', {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ quantity: newQty }),

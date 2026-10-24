@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -10,7 +12,11 @@ import (
 	"kitchen_manager/internal/auth"
 )
 
-func RegisterMeals(mux *http.ServeMux, db *sql.DB) {
+func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
+	var wsHub *Hub
+	if len(hub) > 0 {
+		wsHub = hub[0]
+	}
 	// POST /api/meals — log a cooked meal
 	mux.HandleFunc("POST /api/meals", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -95,6 +101,8 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB) {
 			costCents   *int64
 		}
 		var mealIngs []mealIngRow
+		remap := map[int64]int64{}
+		warnings := []string{}
 
 		for _, ing := range ingredients {
 			scale := float64(input.ServingsMade) / float64(recipeServings)
@@ -105,41 +113,45 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB) {
 
 			if ing.InventoryID.Valid {
 				invID := ing.InventoryID.Int64
-				invIDPtr = &invID
-
-				// Fetch current inventory quantity and cost
-				var currentQty float64
-				var unitCostCents sql.NullInt64
-				err := tx.QueryRow(`SELECT quantity, unit_cost_cents FROM inventory WHERE id=?`, invID).Scan(&currentQty, &unitCostCents)
-				if err == nil {
-					newQty := currentQty - qtyUsed
-					if newQty < 0 {
-						newQty = 0
+				if m, ok := remap[invID]; ok {
+					invID = m
+				}
+				recID := input.RecipeID
+				dres, derr := deductStock(db, tx, deductRequest{
+					ItemID:    invID,
+					Qty:       qtyUsed,
+					Unit:      ing.Unit,
+					Source:    "meal_cooked",
+					RecipeID:  &recID,
+					ChangedBy: auth.EmailFromContext(r.Context()),
+				})
+				switch {
+				case derr == nil:
+					// Reference the row that now holds this item's stock; the
+					// original row may have been folded into a sibling. The
+					// recorded quantity/unit stay in the recipe's unit.
+					if dres.ResultItemID != 0 {
+						rid := dres.ResultItemID
+						invIDPtr = &rid
+						remap[ing.InventoryID.Int64] = rid
 					}
-					if _, err := tx.Exec(`UPDATE inventory SET quantity=? WHERE id=?`, newQty, invID); err != nil {
-						tx.Rollback()
-						WriteError(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-					// Log inventory history
-					recID := input.RecipeID
-					_ = LogHistory(db, tx, LogHistoryParams{
-						InventoryID:    invID,
-						ItemName:       ing.Name,
-						ChangeType:     "deduct",
-						QuantityBefore: &currentQty,
-						QuantityAfter:  &newQty,
-						Unit:           ing.Unit,
-						Source:         "meal_cooked",
-						RecipeID:       &recID,
-						ChangedBy:      auth.EmailFromContext(r.Context()),
-					})
-					if unitCostCents.Valid && unitCostCents.Int64 > 0 {
-						c := int64(math.Round(qtyUsed * float64(unitCostCents.Int64)))
+					if dres.UnitCostCents > 0 {
+						c := int64(math.Round(dres.Requested * float64(dres.UnitCostCents)))
 						costCents = &c
 						totalCost += c
 						hasCost = true
 					}
+				case errors.Is(derr, errItemNotFound):
+					// Stale link: treat as an unlinked ingredient.
+				case errors.Is(derr, errIncompatibleUnits):
+					// Skip deduction and cost for this ingredient only; keep the link.
+					lid := invID
+					invIDPtr = &lid
+					warnings = append(warnings, fmt.Sprintf("Couldn't deduct %s %s of %s: stock is tracked in %s", strconv.FormatFloat(qtyUsed, 'f', -1, 64), ing.Unit, ing.Name, dres.Unit))
+				default:
+					tx.Rollback()
+					WriteError(w, http.StatusInternalServerError, derr.Error())
+					return
 				}
 			}
 
@@ -186,6 +198,10 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 
+		if wsHub != nil {
+			wsHub.Broadcast("inventory_updated")
+		}
+
 		WriteJSON(w, http.StatusCreated, map[string]any{
 			"id":               mealID,
 			"recipe_id":        input.RecipeID,
@@ -194,6 +210,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB) {
 			"servings_made":    input.ServingsMade,
 			"total_cost_cents": totalCostPtr,
 			"notes":            input.Notes,
+			"warnings":         warnings,
 		})
 	})
 

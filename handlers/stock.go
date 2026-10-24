@@ -74,35 +74,35 @@ func findSurvivingSibling(tx *sql.Tx, name, unit string, exclude []int64) (int64
 // deleted. When none does, one row is kept at quantity 0 (with its expiry
 // cleared) so the item stays visible as out of stock and threshold restocking
 // and recipe links keep working. It returns the id of the row kept at zero,
-// or 0 if every empty row was folded into a surviving sibling.
-func retireEmptyLots(tx *sql.Tx, ids []int64, name, unit string) (int64, error) {
+// or 0 if every empty row was folded into a surviving sibling. The second
+// result is the row that holds the folded references.
+func retireEmptyLots(tx *sql.Tx, ids []int64, name, unit string) (kept int64, survivorID int64, err error) {
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	survivor, ok, err := findSurvivingSibling(tx, name, unit, ids)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	var kept int64
 	toDelete := ids
 	if !ok {
 		kept = ids[len(ids)-1]
 		toDelete = ids[:len(ids)-1]
 		survivor = kept
 		if _, err := tx.Exec(`UPDATE inventory SET quantity=0, expiration_date='' WHERE id=?`, kept); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
 	for _, id := range toDelete {
 		if err := relinkInventoryRefs(tx, id, &survivor); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if err := moveBarcodes(tx, id, survivor); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if _, err := tx.Exec(`DELETE FROM inventory WHERE id=?`, id); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
-	return kept, nil
+	return kept, survivor, nil
 }

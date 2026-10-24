@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 	"strconv"
@@ -569,22 +570,24 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		isDeduction := hasQty && isFloat && newQty < qtyBefore
 
 		if isDeduction {
-			// Cascade deduction across all siblings (same name+unit) ordered by earliest expiration first.
-			// Items with no expiration date are consumed last.
-			deduct := qtyBefore - newQty
-
-			type sibRow struct {
-				id  int64
-				qty float64
+			// Cascade deduction across all siblings (same name+unit) ordered by
+			// earliest expiration first, via the shared deductStock helper.
+			req := deductRequest{
+				ItemID:    id,
+				Qty:       qtyBefore - newQty,
+				Source:    r.URL.Query().Get("source"),
+				ChangedBy: auth.EmailFromContext(r.Context()),
 			}
-			var sibs []sibRow
+			if req.Source == "" {
+				req.Source = "manual"
+			}
 
 			// If location_id is provided and non-zero, bypass cascade and deduct only from that row.
 			if locIDVal, ok := patch["location_id"]; ok {
 				if locIDFloat, ok := locIDVal.(float64); ok && locIDFloat != 0 {
 					locID := int64(locIDFloat)
-					var s sibRow
-					err := db.QueryRow(`SELECT id, quantity FROM inventory WHERE id=?`, locID).Scan(&s.id, &s.qty)
+					var exists int64
+					err := db.QueryRow(`SELECT id FROM inventory WHERE id=?`, locID).Scan(&exists)
 					if err == sql.ErrNoRows {
 						WriteError(w, http.StatusNotFound, "location not found")
 						return
@@ -593,40 +596,9 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 						WriteError(w, http.StatusInternalServerError, err.Error())
 						return
 					}
-					sibs = []sibRow{s}
+					req.ItemID = locID
+					req.SingleLot = true
 				}
-			}
-
-			if len(sibs) == 0 {
-				sibRows, err := db.Query(
-					`SELECT id, quantity FROM inventory WHERE name=? AND unit=?
-					 ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END ASC,
-					          expiration_date ASC`,
-					nameBefore, unitBefore,
-				)
-				if err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-				for sibRows.Next() {
-					var s sibRow
-					if err := sibRows.Scan(&s.id, &s.qty); err != nil {
-						sibRows.Close()
-						WriteError(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-					sibs = append(sibs, s)
-				}
-				sibRows.Close()
-				if err := sibRows.Err(); err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-			}
-
-			source := r.URL.Query().Get("source")
-			if source == "" {
-				source = "manual"
 			}
 
 			tx, err := db.Begin()
@@ -634,65 +606,23 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-
-			var lastSibID int64
-			var emptied []int64
-			for _, s := range sibs {
-				if deduct <= 0 {
-					break
-				}
-				if s.qty <= deduct {
-					deduct -= s.qty
-					emptied = append(emptied, s.id)
-					zero := 0.0
-					_ = LogHistory(db, tx, LogHistoryParams{
-						InventoryID:    s.id,
-						ItemName:       nameBefore,
-						ChangeType:     "deduct",
-						QuantityBefore: &s.qty,
-						QuantityAfter:  &zero,
-						Unit:           unitBefore,
-						Source:         source,
-						ChangedBy:      auth.EmailFromContext(r.Context()),
-					})
-				} else {
-					remaining := s.qty - deduct
-					deduct = 0
-					lastSibID = s.id
-					_ = LogHistory(db, tx, LogHistoryParams{
-						InventoryID:    s.id,
-						ItemName:       nameBefore,
-						ChangeType:     "deduct",
-						QuantityBefore: &s.qty,
-						QuantityAfter:  &remaining,
-						Unit:           unitBefore,
-						Source:         source,
-						ChangedBy:      auth.EmailFromContext(r.Context()),
-					})
-					if _, err := tx.Exec(`UPDATE inventory SET quantity=? WHERE id=?`, remaining, s.id); err != nil {
-						tx.Rollback()
-						WriteError(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-				}
-			}
-
-			// Empty lots are folded into a surviving sibling, or the last one is
-			// kept at zero so the item stays on hand as out of stock.
-			keptID, err := retireEmptyLots(tx, emptied, nameBefore, unitBefore)
+			dres, err := deductStock(db, tx, req)
 			if err != nil {
 				tx.Rollback()
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				if errors.Is(err, errItemNotFound) {
+					WriteError(w, http.StatusNotFound, err.Error())
+				} else if errors.Is(err, errIncompatibleUnits) {
+					WriteError(w, http.StatusUnprocessableEntity, err.Error())
+				} else {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+				}
 				return
 			}
-			if lastSibID == 0 {
-				lastSibID = keptID
-			}
-
 			if err := tx.Commit(); err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			lastSibID := dres.LastLotID
 
 			if lastSibID != 0 {
 				row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, lastSibID)
