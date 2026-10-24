@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -70,27 +72,30 @@ func handleImportHTML(w http.ResponseWriter, r *http.Request) {
 
 const splashURL = "http://splash:8050/render.html"
 
+var directFetchClient = newSafeHTTPClient(15 * time.Second)
+
 // fetchURL tries Splash first (renders JS, bypasses bot detection), then falls
-// back to a direct HTTP GET with a browser-like User-Agent.
-func fetchURL(targetURL string) ([]byte, error) {
+// back to a direct HTTP GET with a browser-like User-Agent. The caller must
+// have run validateFetchURL. The Splash request itself uses a plain client
+// because Splash lives on a private network.
+func fetchURL(ctx context.Context, targetURL string) ([]byte, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 
-	// Try Splash (renders JS, bypasses some bot detection).
-	splashReq, err := http.NewRequest(http.MethodGet, splashURL+"?url="+url.QueryEscape(targetURL)+"&wait=2&timeout=25", nil)
+	splashReq, err := http.NewRequestWithContext(ctx, http.MethodGet, splashURL+"?url="+url.QueryEscape(targetURL)+"&wait=2&timeout=25", nil)
 	if err == nil {
 		if resp, err := client.Do(splashReq); err == nil {
-			defer resp.Body.Close()
+			var body []byte
 			if resp.StatusCode == http.StatusOK {
-				body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
-				if err == nil && len(bytes.TrimSpace(body)) > 0 {
-					return body, nil
-				}
+				body, _ = io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
+			}
+			resp.Body.Close()
+			if len(bytes.TrimSpace(body)) > 0 {
+				return body, nil
 			}
 		}
 	}
 
-	// Fall back to direct fetch
-	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url")
 	}
@@ -98,9 +103,11 @@ func fetchURL(targetURL string) ([]byte, error) {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
-	directClient := &http.Client{Timeout: 10 * time.Second}
-	resp, err := directClient.Do(req)
+	resp, err := directFetchClient.Do(req)
 	if err != nil {
+		if errors.Is(err, errBlockedAddress) || errors.Is(err, errBlockedURL) {
+			return nil, errBlockedAddress
+		}
 		return nil, fmt.Errorf("could not fetch url: %w", err)
 	}
 	defer resp.Body.Close()
@@ -118,14 +125,25 @@ func handleImportURL(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusBadRequest, "invalid url")
 		return
 	}
-	parsed, err := url.ParseRequestURI(input.URL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		WriteError(w, http.StatusBadRequest, "url must use http or https")
+	const blockedMsg = "url points to a private or local network address and cannot be imported"
+	if _, err := validateFetchURL(r.Context(), input.URL); err != nil {
+		switch {
+		case errors.Is(err, errBlockedAddress), errors.Is(err, errBlockedURL):
+			WriteError(w, http.StatusBadRequest, blockedMsg)
+		case errors.Is(err, errBadScheme):
+			WriteError(w, http.StatusBadRequest, "url must use http or https")
+		default:
+			WriteError(w, http.StatusBadRequest, "could not resolve host")
+		}
 		return
 	}
 
-	body, err := fetchURL(input.URL)
+	body, err := fetchURL(r.Context(), input.URL)
 	if err != nil {
+		if errors.Is(err, errBlockedAddress) {
+			WriteError(w, http.StatusBadRequest, blockedMsg)
+			return
+		}
 		WriteError(w, http.StatusBadGateway, err.Error()+" — try the Paste tab instead.")
 		return
 	}
@@ -468,8 +486,8 @@ func parseIngredientString(s string) ImportedIngredient {
 		"tbsp": "tbsp", "tablespoon": "tbsp", "tablespoons": "tbsp", "tbs": "tbsp", "tbl": "tbsp", "tb": "tbsp",
 		"tsp": "tsp", "teaspoon": "tsp", "teaspoons": "tsp", "ts": "tsp",
 		"fl": "ml", "floz": "ml", "fl.oz": "ml", "fl.oz.": "ml", // fluid oz → ml (closest)
-		"pt": "ml", "pint": "ml", "pints": "ml",                  // 1pt ≈ 473ml; keep as ml
-		"qt": "L", "quart": "L", "quarts": "L",                   // 1qt ≈ 0.95L; keep as L
+		"pt": "ml", "pint": "ml", "pints": "ml", // 1pt ≈ 473ml; keep as ml
+		"qt": "L", "quart": "L", "quarts": "L", // 1qt ≈ 0.95L; keep as L
 		"gal": "L", "gallon": "L", "gallons": "L",
 		// count
 		"piece": "piece", "pieces": "piece",

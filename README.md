@@ -201,6 +201,8 @@ Most major recipe sites work with the URL import. If a site blocks automatic fet
 2. Select all (Ctrl+A), copy (Ctrl+C)
 3. Use the **Paste** tab in the Import dialog
 
+For security, URL import refuses URLs that resolve to private, loopback or link-local addresses (LAN devices, localhost, cloud metadata). Use the Paste tab for such pages.
+
 ---
 
 ## Running without Docker (developers)
