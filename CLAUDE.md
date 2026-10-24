@@ -79,6 +79,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `internal/auth/` — OAuth flow, session management, auth middleware
 - `internal/tlscert/` — self-signed TLS certificate generation
 - `deploy/` — Dockerfile, docker-compose.yml (Traefik reverse proxy, not Caddy)
+  Do not add a headless-browser renderer (e.g. Splash) to the compose network; it was removed for security (it could reach app:8080 bypassing forward-auth). Recipe URL import is a direct SSRF-safe fetch (`handlers/safefetch.go`).
 - `static/index.html` — entire frontend as a single file (~40KB)
 
 **Request flow:** Frontend → Handler → Service (if needed) → Raw SQL → SQLite (`kitchen.db`)

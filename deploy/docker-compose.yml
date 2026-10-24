@@ -21,9 +21,6 @@ services:
       - proxy_net
       - default
 
-  splash:
-    image: scrapinghub/splash
-    restart: unless-stopped
 
 networks:
   proxy_net:

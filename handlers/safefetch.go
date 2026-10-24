@@ -99,10 +99,9 @@ func newSafeHTTPClient(timeout time.Duration) *http.Client {
 
 var errBadScheme = errors.New("url must use http or https")
 
-// validateFetchURL is a pre-check used before handing a URL to Splash and as an
-// early rejection in the handler. For Splash it is best-effort only (Splash
-// re-resolves and follows redirects itself).
-// TODO: isolate Splash on its own network (separate task).
+// validateFetchURL is an early pre-check in the handler that gives clear errors
+// for bad schemes, credentials, localhost and hosts resolving to blocked
+// addresses. The real enforcement is safeDialControl at connect time.
 func validateFetchURL(ctx context.Context, raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {

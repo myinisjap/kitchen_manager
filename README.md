@@ -195,7 +195,7 @@ Units in the same category can be converted automatically. Each pantry item has 
 
 ## Recipe import
 
-Most major recipe sites work with the URL import. If a site blocks automatic fetching:
+URL import fetches the page directly and reads its schema.org recipe data. Sites that block automated requests or build the recipe with JavaScript may fail. In that case:
 
 1. Open the recipe in your browser
 2. Select all (Ctrl+A), copy (Ctrl+C)
