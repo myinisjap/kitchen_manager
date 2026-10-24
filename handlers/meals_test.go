@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"kitchen_manager/handlers"
@@ -84,20 +85,31 @@ func TestCookConvertsMass(t *testing.T) {
 	}
 }
 
-func TestCookIncompatibleUnitsRejected(t *testing.T) {
+func TestCookIncompatibleUnitsWarns(t *testing.T) {
 	mux, db := newMealsMux(t)
 	id := insertLot(t, db, "flour", 500, "g", "", "")
 	rid := recipeWith(t, db, id, "flour", 2, "cup")
-	if code := cook(t, mux, rid); code != http.StatusUnprocessableEntity {
-		t.Fatalf("code %d", code)
+	w := call(t, mux, "POST", "/api/meals", fmt.Sprintf(`{"recipe_id":%d}`, rid))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("code %d", w.Code)
 	}
 	if q := qtyOf(t, db, id); q != 500 {
 		t.Fatalf("qty %v", q)
 	}
 	var n int
 	db.QueryRow(`SELECT COUNT(*) FROM meal_history`).Scan(&n)
-	if n != 0 {
+	if n != 1 {
 		t.Fatalf("meal rows %d", n)
+	}
+	var invID sql.NullInt64
+	var cost sql.NullInt64
+	db.QueryRow(`SELECT inventory_id, cost_cents FROM meal_history_ingredients`).Scan(&invID, &cost)
+	if invID.Int64 != id || cost.Valid {
+		t.Fatalf("ingredient row %v %v", invID, cost)
+	}
+	want := "Couldn't deduct 2 cup of flour: stock is tracked in g"
+	if !strings.Contains(w.Body.String(), want) {
+		t.Fatalf("missing warning: %s", w.Body.String())
 	}
 }
 

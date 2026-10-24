@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -101,6 +102,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		var mealIngs []mealIngRow
 		remap := map[int64]int64{}
+		warnings := []string{}
 
 		for _, ing := range ingredients {
 			scale := float64(input.ServingsMade) / float64(recipeServings)
@@ -142,9 +144,10 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				case errors.Is(derr, errItemNotFound):
 					// Stale link: treat as an unlinked ingredient.
 				case errors.Is(derr, errIncompatibleUnits):
-					tx.Rollback()
-					WriteError(w, http.StatusUnprocessableEntity, derr.Error())
-					return
+					// Skip deduction and cost for this ingredient only; keep the link.
+					lid := invID
+					invIDPtr = &lid
+					warnings = append(warnings, fmt.Sprintf("Couldn't deduct %s %s of %s: stock is tracked in %s", strconv.FormatFloat(qtyUsed, 'f', -1, 64), ing.Unit, ing.Name, dres.Unit))
 				default:
 					tx.Rollback()
 					WriteError(w, http.StatusInternalServerError, derr.Error())
@@ -207,6 +210,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			"servings_made":    input.ServingsMade,
 			"total_cost_cents": totalCostPtr,
 			"notes":            input.Notes,
+			"warnings":         warnings,
 		})
 	})
 

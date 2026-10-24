@@ -87,7 +87,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Units system:** 14 units across 3 dimensions (mass, volume, count). Units must be same-dimension to convert. Count units don't inter-convert. The `preferred_unit` on an inventory item is the canonical unit for display and aggregation.
 
-**Stock deductions:** inventory PATCH deductions, cooking (`POST /api/meals`) and remove-stock scans all go through `deductStock` in `handlers/deduct.go`. It converts the requested unit to `preferred_unit` (or `unit`), cascades expiry-first across lots, retires emptied lots, and rejects cross-dimension deductions (e.g. cups vs grams) with 422.
+**Stock deductions:** inventory PATCH deductions, cooking (`POST /api/meals`) and remove-stock scans all go through `deductStock` in `handlers/deduct.go`. It converts the requested unit to `preferred_unit` (or `unit`), cascades expiry-first across lots, retires emptied lots, and returns an incompatible-units error for cross-dimension deductions (e.g. cups vs grams); cooking skips that ingredient and adds a `warnings` entry to the 201 response.
 
 **Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips items already on the unchecked list to avoid duplicates.
 

@@ -2228,6 +2228,7 @@
             this.modal = null;
             this.cookItConfirm = null;
             this.showToast(`Cooked ${recipe.name} (${servings} serving${servings !== 1 ? 's' : ''})`, 'success');
+            try { const b = await res.clone().json(); (b.warnings || []).forEach(w => this.showToast(w, 'error')); } catch (e) {}
             await this.fetchInventory();
             await this.fetchExpiring();
           } else {
