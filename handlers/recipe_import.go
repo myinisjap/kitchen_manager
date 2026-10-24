@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -70,31 +69,12 @@ func handleImportHTML(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, map[string]any{"text": plainText})
 }
 
-const splashURL = "http://splash:8050/render.html"
-
 var directFetchClient = newSafeHTTPClient(15 * time.Second)
 
-// fetchURL tries Splash first (renders JS, bypasses bot detection), then falls
-// back to a direct HTTP GET with a browser-like User-Agent. The caller must
-// have run validateFetchURL. The Splash request itself uses a plain client
-// because Splash lives on a private network.
+// fetchURL performs a direct HTTP GET with a browser-like User-Agent via the
+// SSRF-safe client (dial-time IP checks cover redirects and DNS rebinding).
+// The caller should run validateFetchURL first for a friendly early error.
 func fetchURL(ctx context.Context, targetURL string) ([]byte, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-
-	splashReq, err := http.NewRequestWithContext(ctx, http.MethodGet, splashURL+"?url="+url.QueryEscape(targetURL)+"&wait=2&timeout=25", nil)
-	if err == nil {
-		if resp, err := client.Do(splashReq); err == nil {
-			var body []byte
-			if resp.StatusCode == http.StatusOK {
-				body, _ = io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
-			}
-			resp.Body.Close()
-			if len(bytes.TrimSpace(body)) > 0 {
-				return body, nil
-			}
-		}
-	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url")
