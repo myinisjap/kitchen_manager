@@ -636,12 +636,14 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 
 			var lastSibID int64
+			var emptied []int64
 			for _, s := range sibs {
 				if deduct <= 0 {
 					break
 				}
 				if s.qty <= deduct {
 					deduct -= s.qty
+					emptied = append(emptied, s.id)
 					zero := 0.0
 					_ = LogHistory(db, tx, LogHistoryParams{
 						InventoryID:    s.id,
@@ -653,11 +655,6 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 						Source:         source,
 						ChangedBy:      auth.EmailFromContext(r.Context()),
 					})
-					if _, err := tx.Exec(`DELETE FROM inventory WHERE id=?`, s.id); err != nil {
-						tx.Rollback()
-						WriteError(w, http.StatusInternalServerError, err.Error())
-						return
-					}
 				} else {
 					remaining := s.qty - deduct
 					deduct = 0
@@ -678,6 +675,18 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 						return
 					}
 				}
+			}
+
+			// Empty lots are folded into a surviving sibling, or the last one is
+			// kept at zero so the item stays on hand as out of stock.
+			keptID, err := retireEmptyLots(tx, emptied, nameBefore, unitBefore)
+			if err != nil {
+				tx.Rollback()
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if lastSibID == 0 {
+				lastSibID = keptID
 			}
 
 			if err := tx.Commit(); err != nil {
@@ -1027,6 +1036,13 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 
+		// Point recipes, shopping list rows and meal history at the target
+		if err := relinkInventoryRefs(tx, id, &targetID); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
 		// Delete source
 		if _, err := tx.Exec(`DELETE FROM inventory WHERE id=?`, id); err != nil {
 			tx.Rollback()
@@ -1069,11 +1085,49 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Fetch before deleting for history
 		var itemName, itemUnit string
 		var itemQty float64
-		_ = db.QueryRow(`SELECT name, quantity, unit FROM inventory WHERE id=?`, id).Scan(&itemName, &itemQty, &itemUnit)
-		res, _ := db.Exec(`DELETE FROM inventory WHERE id=?`, id)
-		n, _ := res.RowsAffected()
-		if n == 0 {
+		err := db.QueryRow(`SELECT name, quantity, unit FROM inventory WHERE id=?`, id).Scan(&itemName, &itemQty, &itemUnit)
+		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// Hand references to another row of the same item if there is one,
+		// otherwise clear them, so the delete doesn't break foreign keys.
+		var relinkTo *int64
+		siblingID, ok, err := findSurvivingSibling(tx, itemName, itemUnit, []int64{id})
+		if err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if ok {
+			relinkTo = &siblingID
+			if err := moveBarcodes(tx, id, siblingID); err != nil {
+				tx.Rollback()
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if err := relinkInventoryRefs(tx, id, relinkTo); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if _, err := tx.Exec(`DELETE FROM inventory WHERE id=?`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		_ = LogHistory(db, nil, LogHistoryParams{
