@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -467,10 +468,6 @@ func parseIngredientString(s string) ImportedIngredient {
 		"cup": "cup", "cups": "cup", "c": "cup", "c.": "cup",
 		"tbsp": "tbsp", "tablespoon": "tbsp", "tablespoons": "tbsp", "tbs": "tbsp", "tbl": "tbsp", "tb": "tbsp",
 		"tsp": "tsp", "teaspoon": "tsp", "teaspoons": "tsp", "ts": "tsp",
-		"fl": "ml", "floz": "ml", "fl.oz": "ml", "fl.oz.": "ml", // fluid oz → ml (closest)
-		"pt": "ml", "pint": "ml", "pints": "ml",                  // 1pt ≈ 473ml; keep as ml
-		"qt": "L", "quart": "L", "quarts": "L",                   // 1qt ≈ 0.95L; keep as L
-		"gal": "L", "gallon": "L", "gallons": "L",
 		// count
 		"piece": "piece", "pieces": "piece",
 		"slice": "piece", "slices": "piece",
@@ -494,10 +491,41 @@ func parseIngredientString(s string) ImportedIngredient {
 		"box": "can", "boxes": "can",
 	}
 
+	// Units that need a numeric conversion into a supported unit.
+	convertedUnits := map[string]struct {
+		unit   string
+		factor float64
+	}{
+		"pt": {"ml", 473.176}, "pint": {"ml", 473.176}, "pints": {"ml", 473.176},
+		"qt": {"L", 0.946353}, "quart": {"L", 0.946353}, "quarts": {"L", 0.946353},
+		"gal": {"L", 3.78541}, "gallon": {"L", 3.78541}, "gallons": {"L", 3.78541},
+		"floz": {"ml", 29.5735}, "fl.oz": {"ml", 29.5735}, "fl.oz.": {"ml", 29.5735},
+	}
+
 	if len(rest) == 0 {
 		return ing
 	}
 	unitKey := strings.ToLower(strings.Trim(rest[0], ".,;:()"))
+	nameFrom := -1
+	if unitKey == "fl" && len(rest) > 1 {
+		switch strings.ToLower(strings.Trim(rest[1], ".,;:()")) {
+		case "oz", "ounce", "ounces":
+			unitKey = "floz"
+			nameFrom = 2
+		}
+	}
+	if conv, ok := convertedUnits[unitKey]; ok {
+		if nameFrom < 0 {
+			nameFrom = 1
+		}
+		ing.Quantity = math.Round(ing.Quantity*conv.factor*100) / 100
+		ing.Unit = conv.unit
+		ing.Name = strings.Join(rest[nameFrom:], " ")
+		if ing.Name == "" {
+			ing.Name = s
+		}
+		return ing
+	}
 	if mapped, ok := knownUnits[unitKey]; ok {
 		ing.Unit = mapped
 		ing.Name = strings.Join(rest[1:], " ")

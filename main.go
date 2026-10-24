@@ -42,7 +42,7 @@ func main() {
 	handlers.RegisterCalendar(mux, db, hub)
 	handlers.RegisterHistory(mux, db)
 	handlers.RegisterSettings(mux, db)
-	handlers.RegisterMeals(mux, db)
+	handlers.RegisterMeals(mux, db, hub)
 	mux.HandleFunc("GET /ws", handlers.ServeWs(hub))
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
