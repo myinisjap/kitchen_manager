@@ -47,12 +47,12 @@ go run .
 **Production (Docker):**
 ```bash
 cp .env.example .env  # fill in values
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 ```
 
 **Redeploy production (after code changes):**
 ```bash
-docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/docker-compose.yml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yml down && docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 ```
 
 ## Environment Variables
@@ -66,6 +66,7 @@ docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/doc
 | `GOOGLE_CLIENT_ID` | — | Google Cloud OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | — | Google Cloud OAuth client secret |
 | `SESSION_SECRET` | — | 64-char hex string for cookie signing (`openssl rand -hex 32`) |
+| `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
 | `BASE_URL` | — | Public URL incl. any path prefix (e.g. `https://host/kitchen-manager`); used for OAuth and auth redirects |
 
 ## Auth
@@ -125,3 +126,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Security headers / CSP:** `securityHeaders` middleware in `main.go` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on all responses. CSP allows `'unsafe-eval'` because the standard Alpine build needs it (the CSP build can't run the inline expressions in index.html). Any new external origin must be added to `contentSecurityPolicy`; don't add inline scripts/styles or CDN tags.
 
 - `meal_history.cooked_at` is always stored as RFC3339 UTC (`2006-01-02T15:04:05Z`); POST normalizes client offsets and a startup migration normalizes legacy rows. `/api/meals/stats` takes `tz` (IANA, preferred) or `tz_offset` (minutes east of UTC), computes week/month boundaries in that zone, and queries in UTC.
+
+## Deploy notes
+
+- Container runs as non-root UID 10001; base images are pinned by digest (bump the digest with the tag).
+- `/healthz` is auth-exempt: served outside auth/session middleware via `withHealthz` in main.go; used by the Dockerfile HEALTHCHECK.
