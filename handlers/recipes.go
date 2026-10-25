@@ -53,7 +53,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		res, err := db.Exec(`INSERT INTO recipes (name,description,instructions,tags,servings) VALUES (?,?,?,?,?)`,
 			input.Name, input.Description, input.Instructions, input.Tags, input.Servings)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		recipeID, _ := res.LastInsertId()
@@ -65,13 +65,13 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 			if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
 				recipeID, invID, ingName, ing.Quantity, ing.Unit); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		recipe, err := getRecipeWithIngredients(db, recipeID)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusCreated, recipe)
@@ -88,7 +88,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		rows, err := db.Query(q)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -103,7 +103,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var servings int
 			if err := rows.Scan(&id, &name, &desc, &instructions, &tags, &servings); err != nil {
 				rows.Close()
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			if tag != "" {
@@ -122,7 +122,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		rows.Close()
@@ -131,12 +131,12 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		for _, c := range candidates {
 			recipe, err := getRecipeWithIngredients(db, c.id)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			avail, err := recipeIsAvailable(db, recipe)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			if availableOnly && !avail.Available {
@@ -167,7 +167,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, recipe)
@@ -182,7 +182,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		today := time.Now().Format("2006-01-02")
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM meal_calendar WHERE recipe_id=? AND date>=?`, id, today).Scan(&count); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"count": count})
@@ -197,7 +197,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 			res, err := db.Exec(`UPDATE recipes SET archived=? WHERE id=?`, val, id)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			if n, _ := res.RowsAffected(); n == 0 {
@@ -206,7 +206,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 			recipe, err := getRecipeWithIngredients(db, id)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			WriteJSON(w, http.StatusOK, recipe)
@@ -224,7 +224,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		var exists int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM recipes WHERE id=?`, id).Scan(&exists); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if exists == 0 {
@@ -233,42 +233,42 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		// Keep cooking history (meal_history stores recipe_name): just unlink the recipe.
 		if _, err := tx.Exec(`UPDATE meal_history SET recipe_id=NULL WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`UPDATE inventory_history SET recipe_id=NULL WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`UPDATE meal_history SET calendar_entry_id=NULL WHERE calendar_entry_id IN (SELECT id FROM meal_calendar WHERE recipe_id=?)`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`DELETE FROM meal_calendar WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`DELETE FROM recipe_ingredients WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`DELETE FROM recipes WHERE id=?`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -309,7 +309,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		var exists int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM recipes WHERE id=?`, id).Scan(&exists); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if exists == 0 {
@@ -318,18 +318,18 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`UPDATE recipes SET name=?,description=?,instructions=?,tags=?,servings=? WHERE id=?`,
 			input.Name, input.Description, input.Instructions, input.Tags, input.Servings, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`DELETE FROM recipe_ingredients WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		for _, ing := range input.Ingredients {
@@ -341,17 +341,17 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			if _, err := tx.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
 				id, invID, ingName, ing.Quantity, ing.Unit); err != nil {
 				tx.Rollback()
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		recipe, err := getRecipeWithIngredients(db, id)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, recipe)
@@ -378,7 +378,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		recipeServings := recipe["servings"].(int)
@@ -434,7 +434,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// generation is the idempotent one. Merges into one row either way.
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback() //nolint:errcheck
@@ -442,7 +442,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		for _, a := range additions {
 			mr, err := services.MergeIntoShoppingList(tx, a)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			if mr.Created {
@@ -452,7 +452,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"added": added, "merged": merged})
