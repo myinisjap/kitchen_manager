@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"kitchen_manager/units"
@@ -166,7 +167,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 				totals[key].total += needed
 			} else {
 				// Unlinked ingredient: no conversion, use as-is
-				key := ing.name + "|" + ing.unit
+				key := strings.ToLower(ing.name) + "|" + ing.unit
 				if totals[key] == nil {
 					totals[key] = &totalNeed{
 						name: ing.name,

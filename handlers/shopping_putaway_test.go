@@ -70,7 +70,7 @@ func TestBoughtNewProduct(t *testing.T) {
 	if err := db.QueryRow(`SELECT name,quantity,unit,location,expiration_date FROM inventory`).Scan(&name, &q, &unit, &loc, &exp); err != nil {
 		t.Fatal(err)
 	}
-	if name != "bananas" || q != 6 || unit != "piece" || loc != "counter" || exp != "2030-01-05" {
+	if name != "Bananas" || q != 6 || unit != "piece" || loc != "counter" || exp != "2030-01-05" {
 		t.Fatal(name, q, unit, loc, exp)
 	}
 }
@@ -192,7 +192,7 @@ func TestPutAwayBatch(t *testing.T) {
 	if qtyOf(t, db, lot) != 5 {
 		t.Fatal("override ignored")
 	}
-	if countRows(t, db, `SELECT COUNT(*) FROM inventory WHERE name='apples' AND location='shelf' AND quantity=3`) != 1 {
+	if countRows(t, db, `SELECT COUNT(*) FROM inventory WHERE name='Apples' AND location='shelf' AND quantity=3`) != 1 {
 		t.Fatal("apples")
 	}
 	for _, id := range []int64{u, bad} {

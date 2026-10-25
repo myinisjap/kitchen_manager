@@ -79,7 +79,7 @@ func deductStock(db *sql.DB, tx *sql.Tx, req deductRequest) (deductResult, error
 		}
 		lots = []lot{l}
 	} else {
-		rows, err := tx.Query(`SELECT id, quantity FROM inventory WHERE name=? AND unit=?
+		rows, err := tx.Query(`SELECT id, quantity FROM inventory WHERE name=? COLLATE NOCASE AND unit=?
 			ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END ASC, expiration_date ASC, id ASC`, name, unit)
 		if err != nil {
 			return res, err
