@@ -117,6 +117,10 @@ func TestMigrateMealHistoryNullableRecipe(t *testing.T) {
 			if _, err := db.Exec(`UPDATE meal_history SET recipe_id=NULL`); err != nil {
 				t.Fatal(err)
 			}
+		}
+		db.Close()
+	}
+}
 
 func TestNormalizeMealCookedAt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "k.db")
