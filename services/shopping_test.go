@@ -68,3 +68,77 @@ func TestGenerateFromThresholds(t *testing.T) {
 		t.Errorf("after check n=%d err=%v rows=%d", n, err, countShopping(t, db))
 	}
 }
+
+func shoppingRows(t *testing.T, db *sql.DB) (n int, qty float64, unit string, invID int64) {
+	t.Helper()
+	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(quantity_needed),0), COALESCE(MAX(unit),''), COALESCE(MAX(inventory_id),0) FROM shopping_list`).Scan(&n, &qty, &unit, &invID); err != nil {
+		t.Fatal(err)
+	}
+	return
+}
+
+func TestGenerateFromThresholds_MultiLotAbovePar(t *testing.T) {
+	db := testutil.NewDB(t)
+	insertInv(t, db, "milk", 0.5, "L", "", 1)
+	insertInv(t, db, "milk", 3, "L", "", 1)
+	added, err := services.GenerateFromThresholds(db)
+	if err != nil || added != 0 {
+		t.Fatalf("added=%d err=%v", added, err)
+	}
+}
+
+func TestGenerateFromThresholds_MultiLotRestockToPar(t *testing.T) {
+	db := testutil.NewDB(t)
+	first := insertInv(t, db, "milk", 0.25, "L", "L", 2)
+	second := insertInv(t, db, "milk", 250, "ml", "L", 2)
+	added, err := services.GenerateFromThresholds(db)
+	if err != nil || added != 1 {
+		t.Fatalf("added=%d err=%v", added, err)
+	}
+	n, qty, unit, inv := shoppingRows(t, db)
+	if n != 1 || qty != 1.5 || unit != "L" || inv != first {
+		t.Fatalf("got n=%d qty=%v unit=%q inv=%d", n, qty, unit, inv)
+	}
+	if added, _ = services.GenerateFromThresholds(db); added != 0 {
+		t.Fatalf("second call added %d", added)
+	}
+	// An unchecked row linked to any lot of the product blocks too.
+	db.Exec(`DELETE FROM shopping_list`)
+	db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'manual')`, second, "milk", 1, "L")
+	if added, _ = services.GenerateFromThresholds(db); added != 0 {
+		t.Fatalf("linked-to-second-lot row did not block: %d", added)
+	}
+}
+
+func TestGenerateFromThresholds_ParUnsetZero(t *testing.T) {
+	db := testutil.NewDB(t)
+	insertInv(t, db, "salt", 0, "g", "", 0)
+	if added, err := services.GenerateFromThresholds(db); err != nil || added != 0 {
+		t.Fatalf("added=%d err=%v", added, err)
+	}
+}
+
+func TestGenerateFromThresholds_ParIsMaxOfLots(t *testing.T) {
+	db := testutil.NewDB(t)
+	insertInv(t, db, "rice", 0.5, "kg", "kg", 1)
+	insertInv(t, db, "rice", 0.5, "kg", "kg", 4)
+	if added, err := services.GenerateFromThresholds(db); err != nil || added != 1 {
+		t.Fatalf("added=%d err=%v", added, err)
+	}
+	if _, qty, _, _ := shoppingRows(t, db); qty != 3 {
+		t.Fatalf("qty=%v want 3", qty)
+	}
+}
+
+func TestProductLevels_SkipsUnconvertibleLot(t *testing.T) {
+	db := testutil.NewDB(t)
+	insertInv(t, db, "egg", 100, "g", "", 0)
+	insertInv(t, db, "egg", 5, "piece", "", 0)
+	lv, err := services.ProductLevels(db)
+	if err != nil || len(lv) != 1 {
+		t.Fatalf("%v %v", lv, err)
+	}
+	if lv[0].Total != 100 || lv[0].Unit != "g" || len(lv[0].LotIDs) != 2 {
+		t.Fatalf("%+v", lv[0])
+	}
+}

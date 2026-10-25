@@ -39,8 +39,8 @@ A self-hosted app for tracking your pantry, planning meals, managing recipes, an
 
 - **Pantry tracking** — quantities, units, locations, expiry dates, low-stock alerts
 - **Barcode scanning** — use your phone camera to look up or add items
-- **Shopping list** — manual items, auto-generated from low-stock thresholds, or pulled from recipes
 - **Servings scaling** — scale any recipe up or down with a servings stepper; cooking, shopping lists and the meal calendar scale ingredient quantities to match
+- **Shopping list** — manual items, auto-generated from per-item par levels (restock to par), or pulled from recipes
 - **Recipe import** — paste a URL from any major recipe site; ingredients auto-link to your pantry
 - **Meal calendar** — plan breakfast/lunch/dinner for the week; cooking a meal deducts ingredients
 - **Meal history & cost tracking** — log meals cooked and see weekly/monthly spend
@@ -79,7 +79,7 @@ Leave everything else blank for now. You can add Google login later.
 ### 3. Start the app
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 ```
 
 Open **http://localhost:8080** in your browser. That's it.
@@ -88,13 +88,13 @@ Open **http://localhost:8080** in your browser. That's it.
 
 ```bash
 # Stop
-docker compose -f deploy/docker-compose.yml down
+docker compose --env-file .env -f deploy/docker-compose.yml down
 
 # Start again
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 
 # View logs
-docker compose -f deploy/docker-compose.yml logs -f
+docker compose --env-file .env -f deploy/docker-compose.yml logs -f
 ```
 
 ---
@@ -154,10 +154,20 @@ All data is stored in a single SQLite file (`kitchen.db`). There are two ways to
 
 **From the app:** Click the 💾 button in the top-right corner of the app. A `.db` file will download to your computer.
 
-**From the server:**
+The download is a consistent snapshot (made with SQLite `VACUUM INTO` into a temp file) and is safe to take while the app is running.
+
+**From the server:** a plain `cp` of a live database can be torn, so either stop the app first or use:
 ```bash
-cp /data/kitchen.db ~/kitchen-backup-$(date +%Y%m%d).db
+sqlite3 /data/kitchen.db "VACUUM INTO '/backups/kitchen-$(date +%Y%m%d).db'"
 ```
+
+### Scheduled off-box backups
+
+Example crontab entry (note the escaped `%`), then copy the files to another machine (rsync/rclone) and keep a few rotations:
+```
+0 3 * * * curl -fsS -o /backups/kitchen-$(date +\%Y\%m\%d).db http://localhost:8080/api/backup
+```
+If the app sits behind OAuth, hit the container port directly from the host, or use the `sqlite3 ... VACUUM INTO` command above instead.
 
 To restore, stop the app, replace `kitchen.db` with your backup, and restart.
 
@@ -176,6 +186,7 @@ All settings go in your `.env` file:
 | `GOOGLE_CLIENT_ID` | — | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | — | From Google Cloud Console |
 | `SESSION_SECRET` | — | Random string for securing login cookies (`openssl rand -hex 32`) |
+| `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
 | `BASE_URL` | — | Your app's public URL including any path prefix, e.g. `https://kitchen.example.com` or `https://host/kitchen-manager` |
 
 ---
@@ -228,3 +239,8 @@ MIT — see [LICENSE](LICENSE)
 ## Frontend dependencies
 
 Alpine.js and ZXing are vendored in `static/vendor/` and Tailwind CSS is pre-built to `static/tailwind.css` (no CDN at runtime). Rebuild CSS after changing classes: `npx tailwindcss@3.4.19 -c tailwind.config.js -i web/tailwind.input.css -o static/tailwind.css --minify`. Asset URLs are relative, so behind the `/kitchen-manager` prefix the app must be opened with a trailing slash (the Traefik config redirects automatically).
+
+## Container notes
+
+- The container runs as UID/GID 10001, so the host data dir must be writable by it: `mkdir -p deploy/data && sudo chown -R 10001:10001 deploy/data`. **Existing deployments:** the DB (and `kitchen.db-wal`/`-shm`) was created by the old root container, so run that chown before redeploying or the app can't open the DB.
+- `GET /healthz` (outside auth) returns 200 `ok` when the DB is reachable; the Docker HEALTHCHECK uses it. Check with `docker inspect --format '{{.State.Health.Status}}' <container>`.

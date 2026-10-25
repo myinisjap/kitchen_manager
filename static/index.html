@@ -95,13 +95,14 @@
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
                       <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
-                      <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
+                      <template x-if="group.below_par">
                         <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
                       </template>
                     </div>
                     <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                       <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span>
                       &bull; <span x-text="group.locations[0].location || 'No location'"></span>
+                      <template x-if="group.par_level > 0"><span> &bull; Par: <span x-text="group.par_level"></span> <span x-text="group.par_unit"></span></span></template>
                       <template x-if="group.locations[0].expiration_date">
                         <span> &bull; Exp: <span x-text="group.locations[0].expiration_date"></span></span>
                       </template>
@@ -156,7 +157,7 @@
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
                       <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
-                      <template x-if="group.low_threshold > 0 && group.total_quantity <= group.low_threshold">
+                      <template x-if="group.below_par">
                         <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
                       </template>
                       <span class="text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded"
@@ -164,6 +165,7 @@
                     </div>
                     <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                       <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span> total
+                      <template x-if="group.par_level > 0"><span> &bull; Par: <span x-text="group.par_level"></span> <span x-text="group.par_unit"></span></span></template>
                     </div>
                   </div>
                   <div class="flex items-center gap-2 ml-2">
@@ -549,9 +551,11 @@
       <input x-model="itemForm.location" placeholder="Location (fridge, pantry...)" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
       <input x-model="itemForm.expiration_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
       <div class="flex gap-2">
-        <label class="text-sm text-gray-600 dark:text-gray-300 self-center">Low threshold:</label>
-        <input x-model.number="itemForm.low_threshold" type="number" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        <label class="text-sm text-gray-600 dark:text-gray-300 self-center">Par level:</label>
+        <input x-model.number="itemForm.low_threshold" type="number" min="0" step="any" placeholder="0 = no restock rule" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        <span class="text-sm text-gray-500 dark:text-gray-400 self-center" x-text="itemForm.preferred_unit || itemForm.unit"></span>
       </div>
+      <p class="text-xs text-gray-400 dark:text-gray-500">Shared by every location/lot of this item. Restock tops up to this amount.</p>
       <div class="flex gap-2 items-center">
         <input x-model="itemForm.barcode"
                placeholder="Barcode"

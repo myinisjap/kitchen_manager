@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     labels:
       - traefik.enable=true
-      - traefik.http.routers.kitchen.rule=Host(`myinisjap.tplinkdns.com`) && PathPrefix(`/kitchen-manager`)
+      - traefik.http.routers.kitchen.rule=Host(`${APP_HOST:?set APP_HOST in .env}`) && PathPrefix(`/kitchen-manager`)
       - traefik.http.routers.kitchen.entrypoints=websecure
       - traefik.http.routers.kitchen.tls.certresolver=le
       - traefik.http.services.kitchen.loadbalancer.server.port=8080
