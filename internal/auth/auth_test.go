@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -118,5 +119,47 @@ func TestCallbackRenewsToken(t *testing.T) {
 	}
 	if r := do(h, "/api/items", t1); r.Code != 401 {
 		t.Fatalf("old token: %d", r.Code)
+	}
+}
+
+func TestForwardedUserMiddlewareSetsContext(t *testing.T) {
+	var got string
+	h := ForwardedUserMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = EmailFromContext(r.Context())
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Forwarded-User", "bob@example.com")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if got != "bob@example.com" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestForwardedUserMiddlewareDoesNotOverride(t *testing.T) {
+	var got string
+	h := ForwardedUserMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = EmailFromContext(r.Context())
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req = req.WithContext(context.WithValue(req.Context(), emailContextKey, "a@x"))
+	req.Header.Set("X-Forwarded-User", "bob@example.com")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if got != "a@x" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestHandleMeIgnoresUntrustedHeader(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("X-Forwarded-User", "bob@example.com")
+	w := httptest.NewRecorder()
+	HandleMe(nil)(w, req)
+	if !strings.Contains(w.Body.String(), `"email":""`) {
+		t.Errorf("body %s", w.Body)
+	}
+	w = httptest.NewRecorder()
+	ForwardedUserMiddleware(HandleMe(nil)).ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), "bob@example.com") {
+		t.Errorf("body %s", w.Body)
 	}
 }

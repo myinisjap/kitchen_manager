@@ -176,16 +176,30 @@ func HandleCallback(sm *scs.SessionManager, oauthCfg *oauth2.Config, allowed map
 	}
 }
 
-// HandleMe returns the currently logged-in email. When app auth is disabled,
-// falls back to the X-Forwarded-User header injected by Traefik forward-auth.
+// TrustForwardedUser reports whether X-Forwarded-User may be trusted.
+func TrustForwardedUser() bool { return os.Getenv("TRUST_FORWARDED_USER") == "true" }
+
+// ForwardedUserMiddleware copies X-Forwarded-User (set by Traefik forward-auth)
+// into the request context when no email is there yet. Use it only when
+// TRUST_FORWARDED_USER=true, i.e. when the app is reachable only through the proxy.
+func ForwardedUserMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if EmailFromContext(r.Context()) == "" {
+			if u := strings.TrimSpace(r.Header.Get("X-Forwarded-User")); u != "" {
+				r = r.WithContext(context.WithValue(r.Context(), emailContextKey, u))
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// HandleMe returns the current user's email from the request context (OAuth
+// session or trusted forwarded user), falling back to the session.
 func HandleMe(sm *scs.SessionManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		email := ""
-		if sm != nil {
+		email := EmailFromContext(r.Context())
+		if email == "" && sm != nil {
 			email = sm.GetString(r.Context(), "email")
-		}
-		if email == "" {
-			email = r.Header.Get("X-Forwarded-User")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"email": email})
