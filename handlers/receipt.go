@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -44,8 +45,13 @@ func RegisterReceipt(mux *http.ServeMux, db *sql.DB) {
 }
 
 func handleReceiptParse(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxReceiptUploadBytes)
 	if err := r.ParseMultipartForm(maxReceiptBytes); err != nil {
-		WriteError(w, http.StatusBadRequest, "file too large (max 20 MB)")
+		if isBodyTooLarge(err) {
+			WriteError(w, http.StatusRequestEntityTooLarge, "file too large (max 20 MB)")
+		} else {
+			WriteError(w, http.StatusBadRequest, "invalid multipart form")
+		}
 		return
 	}
 	file, hdr, err := r.FormFile("file")
@@ -67,6 +73,15 @@ func handleReceiptParse(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	if !strings.HasPrefix(mediaType, "image/") {
 		WriteError(w, http.StatusBadRequest, "file must be an image")
+		return
+	}
+
+	if err := checkImageDimensions(imgBytes); err != nil {
+		if errors.Is(err, errImageTooLarge) {
+			WriteError(w, http.StatusRequestEntityTooLarge, "image dimensions too large (max 50 megapixels)")
+		} else {
+			WriteError(w, http.StatusBadRequest, "could not read image (supported: JPEG, PNG, GIF)")
+		}
 		return
 	}
 
@@ -99,6 +114,9 @@ func handleReceiptParse(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 func prepareForAPI(imgBytes []byte) ([]byte, string, error) {
 	const maxBytes = 4 << 20 // 4 MB — safely under Anthropic's 5 MB limit
 
+	if err := checkImageDimensions(imgBytes); err != nil {
+		return nil, "", err
+	}
 	img, _, err := image.Decode(bytes.NewReader(imgBytes))
 	if err != nil {
 		return nil, "", fmt.Errorf("could not decode image: %w", err)

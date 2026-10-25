@@ -151,8 +151,13 @@ func handleImportURL(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleImportPDF(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxPDFUploadBytes)
 	if err := r.ParseMultipartForm(maxPDFBytes); err != nil {
-		WriteError(w, http.StatusBadRequest, "file too large (max 10 MB)")
+		if isBodyTooLarge(err) {
+			WriteError(w, http.StatusRequestEntityTooLarge, "file too large (max 10 MB)")
+		} else {
+			WriteError(w, http.StatusBadRequest, "invalid multipart form")
+		}
 		return
 	}
 	file, _, err := r.FormFile("file")
@@ -176,7 +181,11 @@ func handleImportPDF(w http.ResponseWriter, r *http.Request) {
 	}
 	tmpFile.Close()
 
-	plainText, err := extractPDFText(tmpFile.Name())
+	plainText, err := extractPDFTextWithTimeout(r.Context(), tmpFile.Name())
+	if errors.Is(err, errPDFTimeout) {
+		WriteError(w, http.StatusUnprocessableEntity, "PDF took too long to parse")
+		return
+	}
 	if err != nil {
 		WriteError(w, http.StatusUnprocessableEntity, "could not parse PDF: "+err.Error())
 		return

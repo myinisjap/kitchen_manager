@@ -139,7 +139,7 @@ OAUTH_ENABLED=true
 GOOGLE_CLIENT_ID=your-client-id-here
 GOOGLE_CLIENT_SECRET=your-client-secret-here
 SESSION_SECRET=paste-the-64-char-hex-string-here
-BASE_URL=https://your-domain.com
+BASE_URL=https://your-domain.com   # include any path prefix, e.g. https://your-domain.com/kitchen-manager
 OAUTH_ALLOWED_EMAILS=you@gmail.com,partner@gmail.com
 ```
 
@@ -175,7 +175,7 @@ All settings go in your `.env` file:
 | `GOOGLE_CLIENT_ID` | — | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | — | From Google Cloud Console |
 | `SESSION_SECRET` | — | Random string for securing login cookies (`openssl rand -hex 32`) |
-| `BASE_URL` | — | Your app's public URL, e.g. `https://kitchen.example.com` |
+| `BASE_URL` | — | Your app's public URL including any path prefix, e.g. `https://kitchen.example.com` or `https://host/kitchen-manager` |
 
 ---
 
