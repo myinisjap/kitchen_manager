@@ -66,7 +66,7 @@ docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/doc
 | `GOOGLE_CLIENT_ID` | — | Google Cloud OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | — | Google Cloud OAuth client secret |
 | `SESSION_SECRET` | — | 64-char hex string for cookie signing (`openssl rand -hex 32`) |
-| `BASE_URL` | — | Public URL, used for OAuth redirect URI |
+| `BASE_URL` | — | Public URL incl. any path prefix (e.g. `https://host/kitchen-manager`); used for OAuth and auth redirects |
 
 ## Auth
 
@@ -107,6 +107,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Testing:** Tests use in-memory SQLite (not mocks). `handlers/inventory_test.go` builds the schema in-process; `units/units_test.go` tests conversion logic directly.
 
 **Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units).
+
+**In-app OAuth (`OAUTH_ENABLED`):** optional second layer behind Traefik forward-auth. Unauthenticated HTML requests redirect to `BASE_URL/auth/login`; `/api/*` and `/ws` get 401 JSON; session token is renewed on login.
 
 **Reverse proxy (Traefik):** The app runs at `/kitchen-manager` behind Traefik's `stripprefix` middleware. Auth redirects must use absolute URLs via `BASE_URL` (not relative paths like `/auth/login`) so the browser preserves the path prefix.
 
