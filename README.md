@@ -204,6 +204,8 @@ The app supports 14 units across three categories:
 
 Units in the same category can be converted automatically. Each pantry item has a **preferred unit** — this is used for display and for calculating how much of an item is low.
 
+When a recipe's unit cannot be converted to the pantry item's unit (e.g. cups vs grams), shopping lists add the full amount in the recipe's unit without subtracting stock, and the recipe is not shown as available. The recipe list reports these ingredients under `incompatible_ingredients`.
+
 ---
 
 ## Recipe import
