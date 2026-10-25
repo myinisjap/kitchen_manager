@@ -41,7 +41,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if recipeServings == 0 {
@@ -64,7 +64,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Load ingredients
 		ingRows, err := db.Query(`SELECT id, inventory_id, name, quantity, unit FROM recipe_ingredients WHERE recipe_id=?`, input.RecipeID)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		type ingredient struct {
@@ -79,7 +79,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var ing ingredient
 			if err := ingRows.Scan(&ing.ID, &ing.InventoryID, &ing.Name, &ing.Quantity, &ing.Unit); err != nil {
 				ingRows.Close()
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			ingredients = append(ingredients, ing)
@@ -89,7 +89,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Begin transaction
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -152,7 +152,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					warnings = append(warnings, fmt.Sprintf("Couldn't deduct %s %s of %s: stock is tracked in %s", strconv.FormatFloat(qtyUsed, 'f', -1, 64), ing.Unit, ing.Name, dres.Unit))
 				default:
 					tx.Rollback()
-					WriteError(w, http.StatusInternalServerError, derr.Error())
+					WriteServerError(w, r, derr)
 					return
 				}
 			}
@@ -178,7 +178,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		)
 		if err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		mealID, _ := res.LastInsertId()
@@ -190,13 +190,13 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				mealID, mi.inventoryID, mi.name, mi.qtyUsed, mi.unit, mi.costCents,
 			); err != nil {
 				tx.Rollback()
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -248,13 +248,13 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 		var total int
 		if err := db.QueryRow(countQ, args...).Scan(&total); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
 		rows, err := db.Query(listQ, append(args, limit, offset)...)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -268,7 +268,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var servingsMade int
 			var totalCost sql.NullInt64
 			if err := rows.Scan(&id, &recipeID, &recipeName, &cookedAt, &servingsMade, &totalCost, &notes); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			var recipeIDVal any
@@ -293,7 +293,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			mealIDs = append(mealIDs, id)
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if meals == nil {
@@ -368,11 +368,11 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var mealsThisWeek, mealsThisMonth int
 		var spendWeek, spendMonth sql.NullInt64
 		if err := db.QueryRow(`SELECT COUNT(*), SUM(total_cost_cents) FROM meal_history WHERE cooked_at >= ?`, weekStartStr).Scan(&mealsThisWeek, &spendWeek); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if err := db.QueryRow(`SELECT COUNT(*), SUM(total_cost_cents) FROM meal_history WHERE cooked_at >= ?`, monthStartStr).Scan(&mealsThisMonth, &spendMonth); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -384,7 +384,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			ORDER BY cnt DESC
 			LIMIT 5`)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer mcRows.Close()

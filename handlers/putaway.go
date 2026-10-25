@@ -240,7 +240,7 @@ func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback()
@@ -252,17 +252,17 @@ func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {
 			case errors.Is(err, errIncompatibleUnits), errors.Is(err, errInvalidPutAway):
 				WriteError(w, http.StatusBadRequest, err.Error())
 			default:
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 			}
 			return
 		}
 		lot, err := readInventoryLot(tx, res.InventoryID)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{
@@ -292,13 +292,13 @@ func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback()
 		rows, err := tx.Query(`SELECT id,name FROM shopping_list WHERE checked=1 ORDER BY id`)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		type checkedRow struct {
@@ -310,14 +310,14 @@ func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {
 			var c checkedRow
 			if err := rows.Scan(&c.id, &c.name); err != nil {
 				rows.Close()
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			checked = append(checked, c)
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		by := auth.EmailFromContext(r.Context())
@@ -331,18 +331,18 @@ func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {
 					skipped = append(skipped, map[string]any{"shopping_id": c.id, "name": c.name, "reason": err.Error()})
 					continue
 				}
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			lot, err := readInventoryLot(tx, res.InventoryID)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			putAway = append(putAway, map[string]any{"shopping_id": c.id, "inventory": lot, "created": res.Created})
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"put_away": putAway, "skipped": skipped})
