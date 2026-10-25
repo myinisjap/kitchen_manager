@@ -85,7 +85,9 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `units/` — unit enum definitions, dimension validation, and conversion math
 - `internal/database/` — SQLite schema creation and migration (runs on startup)
 - `internal/auth/` — OAuth flow, session management, auth middleware
-- `internal/tlscert/` — self-signed TLS certificate generation
+- `internal/tlscert/` — self-signed TLS certificate generation (key.pem is written 0600)
+
+**CSRF / origin guard:** `handlers.APIGuard` (wired in main.go) requires `Content-Type: application/json` on POST/PUT/PATCH/DELETE under `/api/` (multipart only for `/api/receipt/parse` and `/api/recipes/import/pdf`) and rejects a cross-origin `Origin` with 403. The WS upgrader uses the same `SameOrigin` check (host match vs request Host or BASE_URL host). New frontend mutating fetches must send the JSON header. `PATCH /api/settings` only accepts keys in `allowedSettingKeys`; add new settings there.
 - `deploy/` — Dockerfile, docker-compose.yml (Traefik reverse proxy, not Caddy)
   Do not add a headless-browser renderer (e.g. Splash) to the compose network; it was removed for security (it could reach app:8080 bypassing forward-auth). Recipe URL import is a direct SSRF-safe fetch (`handlers/safefetch.go`).
 - `static/index.html` — frontend markup; logic in `static/app.js`, dark-mode bootstrap in `static/theme-init.js`, styles in generated `static/tailwind.css`, third-party JS in `static/vendor/`. No inline scripts/styles (CSP)
@@ -103,6 +105,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Stock deductions:** inventory PATCH deductions, cooking (`POST /api/meals`) and remove-stock scans all go through `deductStock` in `handlers/deduct.go`. It converts the requested unit to `preferred_unit` (or `unit`), cascades expiry-first across lots, retires emptied lots, and returns an incompatible-units error for cross-dimension deductions (e.g. cups vs grams); cooking skips that ingredient and adds a `warnings` entry to the 201 response.
 
 **Stock additions:** `POST /api/inventory/` (merge-or-insert, incl. SKU-alias merge), `POST /api/skus/item/{id}` and `merge-into` each run in a single transaction and add via `addStock` (`handlers/stock.go`, `quantity = quantity + ?`), never a quantity computed in Go. Because `OpenDB` uses `SetMaxOpenConns(1)`, a handler must not touch `db` while its `tx` is open (it deadlocks) — pass `tx` to `LogHistory` and read back via `tx`. Receipt import posts lines sequentially.
+
+**Putting away shopping:** `POST /api/shopping/{id}/bought` and `POST /api/shopping/put-away` (all checked rows; per-row overrides by id, rows that fail unit/validation checks are skipped and reported) live in `handlers/putaway.go`, one transaction, stock added via `addStock`. The product is the linked `inventory_id` (or override), else an existing product matching the normalised name, else a new product. Quantity converts into the product's effective unit (`preferred_unit`, else `unit`); cross-dimension units give 400 and change nothing. Lot rule: same name+unit+location+expiry, else reuse a zero-quantity lot, else a new lot (inherits par). The shopping row is deleted (a second call is 404). History source `shopping_bought`; broadcasts `inventory_updated` + `shopping_updated`.
 
 **Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips products that already have an unchecked list row (any lot of the same name) to avoid duplicates.
 

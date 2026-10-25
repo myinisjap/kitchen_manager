@@ -244,6 +244,7 @@
         <button @click="openReceiptImport()" class="bg-orange-500 text-white rounded-lg px-3 py-2 text-sm font-medium">🧾 Receipt</button>
         <button @click="openAddShoppingItem()" class="bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-medium">+ Add</button>
       </div>
+      <button @click="openPutAwayChecked()" class="mb-3 w-full bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-medium">📦 Put away checked items</button>
       <button @click="clearCheckedItems()" class="mb-4 text-sm text-red-500 underline w-full text-center">
         Clear checked items
       </button>
@@ -262,6 +263,7 @@
                 <span class="ml-1 text-xs text-gray-400 dark:text-gray-500" x-text="'(' + item.source + ')'"></span>
               </div>
             </div>
+            <button @click="openBought(item)" title="Bought — add to pantry" class="text-sm">📦</button>
             <button @click="deleteShoppingItem(item.id)" class="text-red-400 text-sm">✕</button>
           </div>
         </template>
@@ -830,6 +832,67 @@
       <div class="flex gap-2 pt-2">
         <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
         <button @click="saveShoppingItem()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bought Modal -->
+  <div x-show="modal === 'bought'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4">
+      <h2 class="text-lg font-bold dark:text-gray-100">Bought — add to pantry</h2>
+      <div class="font-medium dark:text-gray-100" x-text="putAwayForm.name"></div>
+      <div class="flex gap-2">
+        <input x-model.number="putAwayForm.quantity" type="number" placeholder="Qty" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        <select x-model="putAwayForm.unit" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+          <option value="">Unit</option>
+          <template x-for="dim in ['mass','volume','count']" :key="dim">
+            <optgroup :label="dim">
+              <template x-for="u in (unitGroups[dim] || [])" :key="u">
+                <option :value="u" x-text="u"></option>
+              </template>
+            </optgroup>
+          </template>
+        </select>
+      </div>
+      <input x-model="putAwayForm.location" list="putaway-locations" placeholder="Location" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
+      <datalist id="putaway-locations">
+        <template x-for="l in locations" :key="l"><option :value="l"></option></template>
+      </datalist>
+      <input x-model="putAwayForm.expiration_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
+        <button @click="saveBought()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Put Away Checked Modal -->
+  <div x-show="modal === 'putAway'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+      <h2 class="text-lg font-bold dark:text-gray-100">Put away checked items</h2>
+      <template x-for="row in putAwayBatch" :key="row.id">
+        <div class="space-y-2 border-b dark:border-gray-700 pb-3">
+          <div class="font-medium dark:text-gray-100" x-text="row.name"></div>
+          <div class="flex gap-2">
+            <input x-model.number="row.quantity" type="number" placeholder="Qty" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+            <select x-model="row.unit" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+              <option value="">Unit</option>
+              <template x-for="dim in ['mass','volume','count']" :key="dim">
+                <optgroup :label="dim">
+                  <template x-for="u in (unitGroups[dim] || [])" :key="u">
+                    <option :value="u" x-text="u"></option>
+                  </template>
+                </optgroup>
+              </template>
+            </select>
+          </div>
+          <input x-model="row.location" list="putaway-locations" placeholder="Location" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
+          <input x-model="row.expiration_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        </div>
+      </template>
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>
+        <button @click="savePutAway()" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">Put away</button>
       </div>
     </div>
   </div>

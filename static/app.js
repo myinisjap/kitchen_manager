@@ -66,6 +66,8 @@ function app() {
     // Shopping
     shoppingItems: [],
     shoppingForm: { name: '', quantity_needed: 1, unit: '' },
+    putAwayForm: { id: null, name: '', quantity: 1, unit: '', location: '', expiration_date: '' },
+    putAwayBatch: [],
 
     // Receipt import
     receiptFile: null,
@@ -755,7 +757,7 @@ function app() {
 
     async deleteItem(id) {
       if (!confirm('Delete this item?')) return;
-      await fetch(this.baseUrl + '/api/inventory/' + id, { method: 'DELETE' });
+      await fetch(this.baseUrl + '/api/inventory/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       await this.fetchInventory();
       this.showToast('Item deleted');
     },
@@ -783,6 +785,57 @@ function app() {
       this.showToast('Added to list');
     },
 
+    openBought(item) {
+      this.putAwayForm = { id: item.id, name: item.name, quantity: item.quantity_needed, unit: item.unit || '', location: '', expiration_date: '' };
+      this.modal = 'bought';
+    },
+
+    async saveBought() {
+      const f = this.putAwayForm;
+      const res = await fetch(this.baseUrl + '/api/shopping/' + f.id + '/bought', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quantity: f.quantity, unit: f.unit, location: f.location, expiration_date: f.expiration_date }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        this.showToast(err.error || 'Could not add to pantry');
+        return;
+      }
+      this.modal = null;
+      await Promise.all([this.fetchShoppingList(), this.fetchInventory()]);
+      this.showToast('Added to pantry');
+    },
+
+    openPutAwayChecked() {
+      const checked = this.shoppingItems.filter(i => i.checked);
+      if (checked.length === 0) {
+        this.showToast('No checked items');
+        return;
+      }
+      this.putAwayBatch = checked.map(i => ({ id: i.id, name: i.name, quantity: i.quantity_needed, unit: i.unit || '', location: '', expiration_date: '' }));
+      this.modal = 'putAway';
+    },
+
+    async savePutAway() {
+      const res = await fetch(this.baseUrl + '/api/shopping/put-away', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: this.putAwayBatch.map(r => ({ id: r.id, quantity: r.quantity, unit: r.unit, location: r.location, expiration_date: r.expiration_date })) }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        this.showToast(err.error || 'Could not put away items');
+        return;
+      }
+      const data = await res.json();
+      this.modal = null;
+      await Promise.all([this.fetchShoppingList(), this.fetchInventory()]);
+      let msg = `Put away ${data.put_away.length} item(s)`;
+      if (data.skipped.length) msg += '; skipped: ' + data.skipped.map(s => s.name + ' (' + s.reason + ')').join(', ');
+      this.showToast(msg);
+    },
+
     async toggleShoppingItem(item) {
       await fetch(this.baseUrl + '/api/shopping/' + item.id, {
         method: 'PATCH',
@@ -793,18 +846,18 @@ function app() {
     },
 
     async deleteShoppingItem(id) {
-      await fetch(this.baseUrl + '/api/shopping/' + id, { method: 'DELETE' });
+      await fetch(this.baseUrl + '/api/shopping/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       await this.fetchShoppingList();
     },
 
     async clearCheckedItems() {
-      await fetch(this.baseUrl + '/api/shopping/checked', { method: 'DELETE' });
+      await fetch(this.baseUrl + '/api/shopping/checked', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       await this.fetchShoppingList();
       this.showToast('Cleared checked items');
     },
 
     async generateFromThresholds() {
-      const res = await fetch(this.baseUrl + '/api/shopping/generate-from-thresholds', { method: 'POST' });
+      const res = await fetch(this.baseUrl + '/api/shopping/generate-from-thresholds', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const data = await res.json();
       await this.fetchShoppingList();
       this.showToast(`Added ${data.added} low-stock items`);
@@ -1081,7 +1134,7 @@ function app() {
 
     async addRecipeToShoppingList(recipe, servings) {
       const s = servings || this.recipeScaleServings(recipe);
-      const res = await fetch(this.baseUrl + '/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST' });
+      const res = await fetch(this.baseUrl + '/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const data = await res.json();
       this.modal = null;
       this.showToast(`Added ${data.added} missing ingredient(s) to shopping list`);
@@ -1137,7 +1190,7 @@ function app() {
         }
       } catch (e) { /* fall through to plain confirm */ }
       if (!confirm(msg)) return;
-      const delRes = await fetch(this.baseUrl + '/api/recipes/' + id, { method: 'DELETE' });
+      const delRes = await fetch(this.baseUrl + '/api/recipes/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       if (!delRes.ok) {
         const body = await delRes.text();
         this.showToast(`Failed to delete: ${body}`, 'error');
@@ -1232,14 +1285,14 @@ function app() {
     },
 
     async deleteCalendarEntry(id) {
-      await fetch(this.baseUrl + '/api/calendar/' + id, { method: 'DELETE' });
+      await fetch(this.baseUrl + '/api/calendar/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       await this.fetchCalendar();
       this.showToast('Meal removed');
     },
 
     async generateWeeklyShopping() {
       const start = this.calendarWeekStart.toISOString().split('T')[0];
-      const res = await fetch(this.baseUrl + '/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST' });
+      const res = await fetch(this.baseUrl + '/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const data = await res.json();
       this.showToast(`Added ${data.items.length} item(s) to shopping list`);
       await this.fetchShoppingList();
@@ -1444,7 +1497,7 @@ function app() {
 
     async deleteSkuAlias(itemId, skuId) {
       try {
-        const res = await fetch(this.baseUrl + '/api/skus/' + skuId, { method: 'DELETE' });
+        const res = await fetch(this.baseUrl + '/api/skus/' + skuId, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
         if (res.ok) {
           this.skusByItem[itemId] = (this.skusByItem[itemId] || []).filter(s => s.id !== skuId);
           this.showToast('Alias removed');
