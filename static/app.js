@@ -109,7 +109,8 @@ function app() {
     // Calendar
     calendarEntries: [],
     calendarWeekStart: null,
-    calendarEntryForm: { date: '', meal_slot: 'dinner', recipe_id: '', servings: null },
+    mealSlots: ['breakfast', 'lunch', 'dinner', 'snack'],
+    calendarEntryForm: { id: null, date: '', meal_slot: 'dinner', recipe_id: '', servings: null },
 
     toggleDark() {
       this.darkMode = !this.darkMode;
@@ -1164,18 +1165,20 @@ function app() {
       await this.fetchShoppingList();
     },
 
-    cookIt(recipe, servings) {
+    cookIt(recipe, servings, calendarEntryId = null) {
       const s = servings || this.recipeScaleServings(recipe);
-      this.cookItConfirm = { recipe, servings: s };
+      this.cookItConfirm = { recipe, servings: s, calendarEntryId };
       this.modal = 'cookItConfirm';
     },
 
     async confirmCookIt() {
-      const { recipe, servings } = this.cookItConfirm;
+      const { recipe, servings, calendarEntryId } = this.cookItConfirm;
+      const payload = { recipe_id: recipe.id, servings_made: servings };
+      if (calendarEntryId) payload.calendar_entry_id = calendarEntryId;
       const res = await this.apiFetch('/api/meals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipe_id: recipe.id, servings_made: servings }),
+        body: JSON.stringify(payload),
       }, { errorPrefix: 'Failed to log meal' });
       if (!res) return;
       this.modal = null;
@@ -1184,6 +1187,7 @@ function app() {
       try { const b = await res.json(); (b.warnings || []).forEach(w => this.showToast(w, 'error')); } catch (e) {}
       await this.fetchInventory();
       await this.fetchExpiring();
+      if (calendarEntryId) await this.fetchCalendar();
     },
 
     async setRecipeArchived(id, archive) {
@@ -1268,8 +1272,12 @@ function app() {
       this.calendarEntries = await res.json();
     },
 
-    getCalendarEntry(date, slot) {
-      return this.calendarEntries.find(e => e.date === date && e.meal_slot === slot) || null;
+    getCalendarEntries(date, slot) {
+      return this.calendarEntries.filter(e => e.date === date && e.meal_slot === slot);
+    },
+
+    getOtherCalendarEntries(date) {
+      return this.calendarEntries.filter(e => e.date === date && !this.mealSlots.includes(e.meal_slot));
     },
 
     getRecipeName(recipeId) {
@@ -1278,22 +1286,42 @@ function app() {
     },
 
     openAddCalendarEntry(date, slot) {
-      this.calendarEntryForm = { date, meal_slot: slot, recipe_id: '', servings: null };
+      this.calendarEntryForm = { id: null, date, meal_slot: slot, recipe_id: '', servings: null };
+      this.modal = 'calendarEntry';
+    },
+
+    openEditCalendarEntry(entry) {
+      this.calendarEntryForm = {
+        id: entry.id, date: entry.date,
+        meal_slot: this.mealSlots.includes(entry.meal_slot) ? entry.meal_slot : 'dinner',
+        recipe_id: entry.recipe_id, servings: entry.servings,
+      };
       this.modal = 'calendarEntry';
     },
 
     async saveCalendarEntry() {
-      if (!this.calendarEntryForm.recipe_id) return;
-      if (!(this.calendarEntryForm.servings > 0)) this.onCalendarRecipeChange();
-      const res = await this.apiFetch('/api/calendar/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(this.calendarEntryForm),
-      });
+      const f = this.calendarEntryForm;
+      let res;
+      if (f.id) {
+        if (!f.date || !(f.servings > 0)) { this.showToast('Date and servings are required', 'error'); return; }
+        res = await this.apiFetch('/api/calendar/' + f.id, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: f.date, meal_slot: f.meal_slot, servings: f.servings }),
+        });
+      } else {
+        if (!f.recipe_id) return;
+        if (!(f.servings > 0)) this.onCalendarRecipeChange();
+        res = await this.apiFetch('/api/calendar/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(f),
+        });
+      }
       if (!res) return;
       this.modal = null;
       await this.fetchCalendar();
-      this.showToast('Meal added');
+      this.showToast(f.id ? 'Meal updated' : 'Meal added');
     },
 
     async deleteCalendarEntry(id) {

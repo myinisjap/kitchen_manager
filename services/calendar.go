@@ -40,6 +40,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 		FROM meal_calendar mc
 		JOIN recipes r ON r.id = mc.recipe_id
 		WHERE mc.date >= ? AND mc.date <= ?
+		AND NOT EXISTS (SELECT 1 FROM meal_history mh WHERE mh.calendar_entry_id = mc.id)
 		ORDER BY mc.date`, weekStart, end)
 	if err != nil {
 		return nil, err

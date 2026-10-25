@@ -54,6 +54,7 @@ var migrations = []migration{
 	{name: "recipes_archived", up: migrateRecipesArchived},
 	{name: "meal_history_nullable_recipe", disableFK: true, up: migrateMealHistoryNullableRecipe},
 	{name: "shopping_list_sources", up: migrateShoppingListSources},
+	{name: "meal_calendar_link_and_slots", up: migrateCalendarLinkAndSlots},
 }
 
 // LatestVersion is the schema version produced by all known migrations.
@@ -443,4 +444,29 @@ func migrateShoppingListSources(tx *sql.Tx) error {
 	);
 	CREATE INDEX IF NOT EXISTS shopping_list_sources_shopping_idx ON shopping_list_sources(shopping_id);`)
 	return err
+}
+
+// migrateCalendarLinkAndSlots links meal_history to the calendar entry it was
+// cooked from (nullable, unique when set) and normalizes legacy free-text meal
+// slots into the fixed set (breakfast, lunch, dinner, snack). Unmatched slot
+// text is left untouched.
+func migrateCalendarLinkAndSlots(tx *sql.Tx) error {
+	if err := addColumnIfMissing(tx, "meal_history", "calendar_entry_id",
+		"calendar_entry_id INTEGER REFERENCES meal_calendar(id) ON DELETE SET NULL"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS meal_history_calendar_entry_idx ON meal_history(calendar_entry_id) WHERE calendar_entry_id IS NOT NULL`); err != nil {
+		return err
+	}
+	for _, q := range []string{
+		`UPDATE meal_calendar SET meal_slot = LOWER(TRIM(meal_slot))
+			WHERE LOWER(TRIM(meal_slot)) IN ('breakfast','lunch','dinner','snack') AND meal_slot <> LOWER(TRIM(meal_slot))`,
+		`UPDATE meal_calendar SET meal_slot='snack' WHERE LOWER(TRIM(meal_slot))='snacks'`,
+		`UPDATE meal_calendar SET meal_slot='dinner' WHERE LOWER(TRIM(meal_slot))='supper'`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return err
+		}
+	}
+	return nil
 }

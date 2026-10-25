@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	_ "time/tzdata"
 
@@ -26,10 +27,44 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			ServingsMade int    `json:"servings_made"`
 			CookedAt     string `json:"cooked_at"`
 			Notes        string `json:"notes"`
+
+			CalendarEntryID *int64 `json:"calendar_entry_id"`
 		}
-		if err := ReadJSON(r, &input); err != nil || input.RecipeID == 0 {
+		if err := ReadJSON(r, &input); err != nil || (input.RecipeID == 0 && input.CalendarEntryID == nil) {
 			WriteError(w, http.StatusBadRequest, "invalid body")
 			return
+		}
+		if input.CalendarEntryID != nil {
+			if *input.CalendarEntryID <= 0 {
+				WriteError(w, http.StatusBadRequest, "invalid calendar_entry_id")
+				return
+			}
+			var entryRecipe int64
+			var entryServings int
+			var cooked bool
+			err := db.QueryRow(`SELECT mc.recipe_id, mc.servings, EXISTS(SELECT 1 FROM meal_history WHERE calendar_entry_id=mc.id) FROM meal_calendar mc WHERE mc.id=?`,
+				*input.CalendarEntryID).Scan(&entryRecipe, &entryServings, &cooked)
+			if err == sql.ErrNoRows {
+				WriteError(w, http.StatusNotFound, "calendar entry not found")
+				return
+			}
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if cooked {
+				WriteError(w, http.StatusConflict, "calendar entry already cooked")
+				return
+			}
+			if input.RecipeID == 0 {
+				input.RecipeID = entryRecipe
+			} else if input.RecipeID != entryRecipe {
+				WriteError(w, http.StatusBadRequest, "recipe_id does not match calendar entry")
+				return
+			}
+			if input.ServingsMade <= 0 && entryServings > 0 {
+				input.ServingsMade = entryServings
+			}
 		}
 
 		// Validate recipe exists
@@ -171,13 +206,31 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			totalCostPtr = &totalCost
 		}
 
+		if input.CalendarEntryID != nil {
+			var exists bool
+			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM meal_history WHERE calendar_entry_id=?)`, *input.CalendarEntryID).Scan(&exists); err != nil {
+				tx.Rollback()
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if exists {
+				tx.Rollback()
+				WriteError(w, http.StatusConflict, "calendar entry already cooked")
+				return
+			}
+		}
+
 		// Insert meal_history row
 		res, err := tx.Exec(
-			`INSERT INTO meal_history (recipe_id, recipe_name, cooked_at, servings_made, total_cost_cents, notes) VALUES (?,?,?,?,?,?)`,
-			input.RecipeID, recipeName, cookedAt, input.ServingsMade, totalCostPtr, input.Notes,
+			`INSERT INTO meal_history (recipe_id, recipe_name, cooked_at, servings_made, total_cost_cents, notes, calendar_entry_id) VALUES (?,?,?,?,?,?,?)`,
+			input.RecipeID, recipeName, cookedAt, input.ServingsMade, totalCostPtr, input.Notes, input.CalendarEntryID,
 		)
 		if err != nil {
 			tx.Rollback()
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				WriteError(w, http.StatusConflict, "calendar entry already cooked")
+				return
+			}
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -202,17 +255,21 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 		if wsHub != nil {
 			wsHub.Broadcast("inventory_updated")
+			if input.CalendarEntryID != nil {
+				wsHub.Broadcast("calendar_updated")
+			}
 		}
 
 		WriteJSON(w, http.StatusCreated, map[string]any{
-			"id":               mealID,
-			"recipe_id":        input.RecipeID,
-			"recipe_name":      recipeName,
-			"cooked_at":        cookedAt,
-			"servings_made":    input.ServingsMade,
-			"total_cost_cents": totalCostPtr,
-			"notes":            input.Notes,
-			"warnings":         warnings,
+			"id":                mealID,
+			"recipe_id":         input.RecipeID,
+			"recipe_name":       recipeName,
+			"cooked_at":         cookedAt,
+			"servings_made":     input.ServingsMade,
+			"total_cost_cents":  totalCostPtr,
+			"notes":             input.Notes,
+			"warnings":          warnings,
+			"calendar_entry_id": input.CalendarEntryID,
 		})
 	})
 
@@ -235,7 +292,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 
 		countQ := `SELECT COUNT(*) FROM meal_history`
-		listQ := `SELECT id, recipe_id, recipe_name, cooked_at, servings_made, total_cost_cents, notes FROM meal_history`
+		listQ := `SELECT id, recipe_id, recipe_name, cooked_at, servings_made, total_cost_cents, notes, calendar_entry_id FROM meal_history`
 		args := []any{}
 		if recipeIDStr != "" {
 			if rid, err := strconv.ParseInt(recipeIDStr, 10, 64); err == nil {
@@ -266,8 +323,8 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var recipeID sql.NullInt64
 			var recipeName, cookedAt, notes string
 			var servingsMade int
-			var totalCost sql.NullInt64
-			if err := rows.Scan(&id, &recipeID, &recipeName, &cookedAt, &servingsMade, &totalCost, &notes); err != nil {
+			var totalCost, calEntry sql.NullInt64
+			if err := rows.Scan(&id, &recipeID, &recipeName, &cookedAt, &servingsMade, &totalCost, &notes, &calEntry); err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -283,6 +340,11 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				"servings_made": servingsMade,
 				"notes":         notes,
 				"ingredients":   []map[string]any{},
+			}
+			if calEntry.Valid {
+				m["calendar_entry_id"] = calEntry.Int64
+			} else {
+				m["calendar_entry_id"] = nil
 			}
 			if totalCost.Valid {
 				m["total_cost_cents"] = totalCost.Int64
