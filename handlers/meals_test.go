@@ -2,24 +2,21 @@ package handlers_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"kitchen_manager/handlers"
-	"kitchen_manager/internal/database"
+	"kitchen_manager/internal/testutil"
 )
 
 func newMealsMux(t *testing.T) (*http.ServeMux, *sql.DB) {
 	t.Helper()
-	db, err := database.OpenDB(filepath.Join(t.TempDir(), "kitchen.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := testutil.NewDB(t)
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db)
 	handlers.RegisterMeals(mux, db)
@@ -174,5 +171,131 @@ func TestCookCountUnits(t *testing.T) {
 	}
 	if q := qtyOf(t, db, id); q != 9 {
 		t.Fatalf("qty %v", q)
+	}
+}
+
+func newRecipe(t *testing.T, db *sql.DB, name string, servings int) int64 {
+	t.Helper()
+	var id int64
+	if err := db.QueryRow(`INSERT INTO recipes (name, servings) VALUES (?, ?) RETURNING id`, name, servings).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestCookValidation(t *testing.T) {
+	mux, _ := newMealsMux(t)
+	if w := call(t, mux, "POST", "/api/meals", `{}`); w.Code != http.StatusBadRequest {
+		t.Errorf("empty body: %d", w.Code)
+	}
+	if w := call(t, mux, "POST", "/api/meals", `{"recipe_id":9999}`); w.Code != http.StatusNotFound {
+		t.Errorf("missing recipe: %d", w.Code)
+	}
+}
+
+func TestCookDefaultsAndNotes(t *testing.T) {
+	mux, db := newMealsMux(t)
+	rid := newRecipe(t, db, "stew", 4)
+	notes := strings.Repeat("n", 600)
+	body := fmt.Sprintf(`{"recipe_id":%d,"cooked_at":"2024-03-05T12:00:00Z","notes":%q}`, rid, notes)
+	if w := call(t, mux, "POST", "/api/meals", body); w.Code != http.StatusCreated {
+		t.Fatalf("code %d: %s", w.Code, w.Body.String())
+	}
+	var servings int
+	var cookedAt, gotNotes string
+	if err := db.QueryRow(`SELECT servings_made, cooked_at, notes FROM meal_history WHERE recipe_id=?`, rid).Scan(&servings, &cookedAt, &gotNotes); err != nil {
+		t.Fatal(err)
+	}
+	if servings != 4 {
+		t.Errorf("servings_made %d, want recipe default 4", servings)
+	}
+	if !strings.HasPrefix(cookedAt, "2024-03-05T12:00:00") {
+		t.Errorf("cooked_at %q", cookedAt)
+	}
+	if len(gotNotes) != 500 {
+		t.Errorf("notes len %d", len(gotNotes))
+	}
+}
+
+func TestListMealsPagingAndFilter(t *testing.T) {
+	mux, db := newMealsMux(t)
+	a := newRecipe(t, db, "a", 1)
+	b := newRecipe(t, db, "b", 1)
+	for _, rid := range []int64{a, a, b} {
+		if code := cook(t, mux, rid); code != http.StatusCreated {
+			t.Fatalf("cook %d", code)
+		}
+	}
+	get := func(q string) (int, int) {
+		w := call(t, mux, "GET", "/api/meals"+q, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d", q, w.Code)
+		}
+		var resp struct {
+			Total int              `json:"total"`
+			Meals []map[string]any `json:"meals"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp.Total, len(resp.Meals)
+	}
+	if tot, n := get(""); tot != 3 || n != 3 {
+		t.Errorf("all: %d %d", tot, n)
+	}
+	if _, n := get("?limit=2"); n != 2 {
+		t.Errorf("limit: %d", n)
+	}
+	if _, n := get("?offset=2"); n != 1 {
+		t.Errorf("offset: %d", n)
+	}
+	if tot, n := get(fmt.Sprintf("?recipe_id=%d", a)); tot != 2 || n != 2 {
+		t.Errorf("filter: %d %d", tot, n)
+	}
+	if _, n := get("?limit=500"); n != 3 {
+		t.Errorf("big limit: %d", n)
+	}
+}
+
+func TestMealStats(t *testing.T) {
+	mux, db := newMealsMux(t)
+	stats := func() map[string]any {
+		w := call(t, mux, "GET", "/api/meals/stats", "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("code %d", w.Code)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	m := stats()
+	if m["total_spend_this_week_cents"] != nil || len(m["most_cooked"].([]any)) != 0 {
+		t.Errorf("empty: %v", m)
+	}
+
+	a := newRecipe(t, db, "a", 1)
+	b := newRecipe(t, db, "b", 1)
+	now := time.Now().UTC().Format(time.RFC3339)
+	old := time.Now().UTC().AddDate(0, 0, -60).Format(time.RFC3339)
+	ins := func(rid int64, name, at string, cents int) {
+		if _, err := db.Exec(`INSERT INTO meal_history (recipe_id, recipe_name, cooked_at, servings_made, total_cost_cents) VALUES (?,?,?,1,?)`, rid, name, at, cents); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ins(a, "a", now, 100)
+	ins(a, "a", now, 200)
+	ins(b, "b", old, 1000)
+	m = stats()
+	if m["total_meals_this_week"].(float64) != 2 || m["total_spend_this_week_cents"].(float64) != 300 {
+		t.Errorf("week: %v", m)
+	}
+	if m["total_meals_this_month"].(float64) != 2 {
+		t.Errorf("month: %v", m)
+	}
+	mc := m["most_cooked"].([]any)
+	if len(mc) != 2 || mc[0].(map[string]any)["recipe_name"] != "a" {
+		t.Errorf("most_cooked: %v", mc)
 	}
 }

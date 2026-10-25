@@ -11,111 +11,11 @@ import (
 	"time"
 
 	"kitchen_manager/handlers"
-	_ "modernc.org/sqlite"
+	"kitchen_manager/internal/testutil"
 )
 
-func newTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`PRAGMA foreign_keys = ON;
-	CREATE TABLE IF NOT EXISTS inventory (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL,
-		quantity REAL NOT NULL DEFAULT 0,
-		unit TEXT NOT NULL DEFAULT '',
-		location TEXT NOT NULL DEFAULT '',
-		expiration_date TEXT NOT NULL DEFAULT '',
-		low_threshold REAL NOT NULL DEFAULT 1,
-		barcode TEXT NOT NULL DEFAULT '',
-		preferred_unit TEXT NOT NULL DEFAULT '',
-		unit_cost_cents INTEGER NOT NULL DEFAULT 0,
-		quantity_per_scan REAL NOT NULL DEFAULT 0
-	);
-	CREATE TABLE IF NOT EXISTS inventory_history (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		inventory_id INTEGER NOT NULL,
-		item_name TEXT NOT NULL DEFAULT '',
-		changed_at TEXT NOT NULL,
-		changed_by TEXT NOT NULL DEFAULT 'system',
-		change_type TEXT NOT NULL,
-		quantity_before REAL,
-		quantity_after REAL,
-		unit TEXT NOT NULL DEFAULT '',
-		source TEXT NOT NULL DEFAULT '',
-		recipe_id INTEGER REFERENCES recipes(id)
-	);
-	CREATE TABLE IF NOT EXISTS shopping_list (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		inventory_id INTEGER REFERENCES inventory(id),
-		name TEXT NOT NULL,
-		quantity_needed REAL NOT NULL DEFAULT 1,
-		unit TEXT NOT NULL DEFAULT '',
-		checked INTEGER NOT NULL DEFAULT 0,
-		source TEXT NOT NULL DEFAULT 'manual'
-	);
-	CREATE TABLE IF NOT EXISTS recipes (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL,
-		description TEXT NOT NULL DEFAULT '',
-		instructions TEXT NOT NULL DEFAULT '',
-		tags TEXT NOT NULL DEFAULT '',
-		servings INTEGER NOT NULL DEFAULT 1
-	);
-	CREATE TABLE IF NOT EXISTS recipe_ingredients (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
-		inventory_id INTEGER REFERENCES inventory(id),
-		name TEXT NOT NULL,
-		quantity REAL NOT NULL,
-		unit TEXT NOT NULL DEFAULT ''
-	);
-	CREATE TABLE IF NOT EXISTS meal_calendar (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		date TEXT NOT NULL,
-		meal_slot TEXT NOT NULL DEFAULT 'dinner',
-		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
-		servings INTEGER NOT NULL DEFAULT 1
-	);
-	CREATE TABLE IF NOT EXISTS settings (
-		key TEXT PRIMARY KEY,
-		value TEXT NOT NULL DEFAULT ''
-	);
-	CREATE TABLE IF NOT EXISTS meal_history (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
-		recipe_name TEXT NOT NULL DEFAULT '',
-		cooked_at TEXT NOT NULL,
-		servings_made INTEGER NOT NULL DEFAULT 1,
-		total_cost_cents INTEGER,
-		notes TEXT NOT NULL DEFAULT ''
-	);
-	CREATE TABLE IF NOT EXISTS meal_history_ingredients (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		meal_history_id INTEGER NOT NULL REFERENCES meal_history(id),
-		inventory_id INTEGER REFERENCES inventory(id),
-		ingredient_name TEXT NOT NULL DEFAULT '',
-		quantity_used REAL NOT NULL DEFAULT 0,
-		unit TEXT NOT NULL DEFAULT '',
-		cost_cents INTEGER
-	);
-	CREATE TABLE IF NOT EXISTS inventory_skus (
-		id                INTEGER PRIMARY KEY AUTOINCREMENT,
-		inventory_id      INTEGER NOT NULL REFERENCES inventory(id) ON DELETE CASCADE,
-		barcode           TEXT    NOT NULL UNIQUE,
-		quantity_per_scan REAL    NOT NULL DEFAULT 1
-	);`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
-
 func TestPreferredUnitColumnExists(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewDB(t)
 	rows, err := db.Query(`PRAGMA table_info(inventory)`)
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +39,7 @@ func TestPreferredUnitColumnExists(t *testing.T) {
 }
 
 func newMux(t *testing.T) (*http.ServeMux, *sql.DB) {
-	db := newTestDB(t)
+	db := testutil.NewDB(t)
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db)
 	handlers.RegisterShopping(mux, db)
@@ -1002,7 +902,7 @@ func TestGetInventoryItemByBarcode(t *testing.T) {
 }
 
 func TestDuplicateMergeOnPost(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewDB(t)
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db)
 
@@ -1066,7 +966,7 @@ func TestDuplicateMergeOnPost(t *testing.T) {
 }
 
 func TestExpiryFirstDeductionCascade(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewDB(t)
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db)
 
