@@ -78,7 +78,7 @@ Leave everything else blank for now. You can add Google login later.
 ### 3. Start the app
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 ```
 
 Open **http://localhost:8080** in your browser. That's it.
@@ -87,13 +87,13 @@ Open **http://localhost:8080** in your browser. That's it.
 
 ```bash
 # Stop
-docker compose -f deploy/docker-compose.yml down
+docker compose --env-file .env -f deploy/docker-compose.yml down
 
 # Start again
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 
 # View logs
-docker compose -f deploy/docker-compose.yml logs -f
+docker compose --env-file .env -f deploy/docker-compose.yml logs -f
 ```
 
 ---
@@ -185,6 +185,7 @@ All settings go in your `.env` file:
 | `GOOGLE_CLIENT_ID` | — | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | — | From Google Cloud Console |
 | `SESSION_SECRET` | — | Random string for securing login cookies (`openssl rand -hex 32`) |
+| `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
 | `BASE_URL` | — | Your app's public URL including any path prefix, e.g. `https://kitchen.example.com` or `https://host/kitchen-manager` |
 
 ---
@@ -237,3 +238,8 @@ MIT — see [LICENSE](LICENSE)
 ## Frontend dependencies
 
 Alpine.js and ZXing are vendored in `static/vendor/` and Tailwind CSS is pre-built to `static/tailwind.css` (no CDN at runtime). Rebuild CSS after changing classes: `npx tailwindcss@3.4.19 -c tailwind.config.js -i web/tailwind.input.css -o static/tailwind.css --minify`. Asset URLs are relative, so behind the `/kitchen-manager` prefix the app must be opened with a trailing slash (the Traefik config redirects automatically).
+
+## Container notes
+
+- The container runs as UID/GID 10001, so the host data dir must be writable by it: `mkdir -p deploy/data && sudo chown -R 10001:10001 deploy/data`. **Existing deployments:** the DB (and `kitchen.db-wal`/`-shm`) was created by the old root container, so run that chown before redeploying or the app can't open the DB.
+- `GET /healthz` (outside auth) returns 200 `ok` when the DB is reachable; the Docker HEALTHCHECK uses it. Check with `docker inspect --format '{{.State.Health.Status}}' <container>`.
