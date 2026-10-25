@@ -223,3 +223,7 @@ go test ./...
 ## License
 
 MIT — see [LICENSE](LICENSE)
+
+## Frontend dependencies
+
+Alpine.js and ZXing are vendored in `static/vendor/` and Tailwind CSS is pre-built to `static/tailwind.css` (no CDN at runtime). Rebuild CSS after changing classes: `npx tailwindcss@3.4.19 -c tailwind.config.js -i web/tailwind.input.css -o static/tailwind.css --minify`. Asset URLs are relative, so behind the `/kitchen-manager` prefix the app must be opened with a trailing slash (the Traefik config redirects automatically).

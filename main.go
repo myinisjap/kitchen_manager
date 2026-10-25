@@ -72,19 +72,21 @@ func main() {
 		mux.HandleFunc("GET /api/me", auth.HandleMe(nil))
 	}
 
+	handler = securityHeaders(handler)
+
 	if os.Getenv("SELF_SIGNED_TLS") == "true" {
 		if err := tlscert.EnsureCert(certFile, keyFile); err != nil {
 			log.Fatal("tls cert:", err)
 		}
 		go func() {
 			log.Println("HTTP redirect listening on", httpAddr)
-			log.Fatal(http.ListenAndServe(httpAddr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Fatal(http.ListenAndServe(httpAddr, securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				host, _, err := parseHost(r.Host)
 				if err != nil {
 					host = r.Host
 				}
 				http.Redirect(w, r, "https://"+host+httpsAddr+r.RequestURI, http.StatusMovedPermanently)
-			})))
+			}))))
 		}()
 		log.Println("HTTPS listening on", httpsAddr)
 		log.Fatal(http.ListenAndServeTLS(httpsAddr, certFile, keyFile, handler))
@@ -97,4 +99,30 @@ func main() {
 func parseHost(hostport string) (string, string, error) {
 	host, port, err := net.SplitHostPort(hostport)
 	return host, port, err
+}
+
+// contentSecurityPolicy allows only same-origin resources plus the Open Food
+// Facts API (barcode lookups). 'unsafe-eval' is required by the standard
+// Alpine.js build, which compiles x-* attribute expressions with new Function();
+// the @alpinejs/csp build cannot evaluate the inline expressions used
+// throughout static/index.html. No 'unsafe-inline' is needed: all scripts and
+// styles are same-origin files. New external origins must be added here.
+const contentSecurityPolicy = "default-src 'self'; " +
+	"script-src 'self' 'unsafe-eval'; " +
+	"style-src 'self'; " +
+	"img-src 'self' data: blob:; " +
+	"media-src 'self' blob: mediastream:; " +
+	"connect-src 'self' https://world.openfoodfacts.org; " +
+	"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+// securityHeaders sets CSP and other hardening headers on every response.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		h.Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(w, r)
+	})
 }
