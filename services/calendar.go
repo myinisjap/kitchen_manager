@@ -95,6 +95,9 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 		name  string
 		unit  string
 		total float64
+		// incompatible: recipe unit can't convert to the item's unit; total is
+		// in the recipe's unit and stock is not subtracted.
+		incompatible bool
 	}
 	totals := map[string]*totalNeed{}
 
@@ -138,18 +141,26 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 				targetUnit := units.Unit(inv.preferredUnit)
 
 				// Convert ingredient quantity to the inventory item's preferred unit
+				// If units can't be converted, file the need in the recipe's own
+				// unit under a separate key and don't subtract stock.
 				needed := rawNeeded
+				key := fmt.Sprintf("%d|%s", ing.invID.Int64, string(targetUnit))
+				unit := string(targetUnit)
+				incompatible := false
 				if converted, err := units.Convert(rawNeeded, ingUnit, targetUnit); err == nil {
 					needed = converted
+				} else {
+					key = fmt.Sprintf("%d|%s|incompatible", ing.invID.Int64, ing.unit)
+					unit = ing.unit
+					incompatible = true
 				}
-
-				key := fmt.Sprintf("%d|%s", ing.invID.Int64, string(targetUnit))
 				if totals[key] == nil {
 					v := ing.invID.Int64
 					totals[key] = &totalNeed{
-						invID: &v,
-						name:  ing.name,
-						unit:  string(targetUnit),
+						invID:        &v,
+						name:         ing.name,
+						unit:         unit,
+						incompatible: incompatible,
 					}
 				}
 				totals[key].total += needed
@@ -171,7 +182,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	needs := map[string]*ShoppingNeed{}
 	for key, t := range totals {
 		var shortfall float64
-		if t.invID != nil {
+		if t.invID != nil && !t.incompatible {
 			available := simulated[*t.invID]
 			shortfall = t.total - available
 		} else {

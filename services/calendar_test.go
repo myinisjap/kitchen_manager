@@ -114,7 +114,7 @@ func TestWeeklyShoppingUnits(t *testing.T) {
 	bad := insertInv(t, db, "bad", 0, "g", "", 0)
 	insertIng(t, db, r, &kg, "pref", 1, "kg")
 	insertIng(t, db, r, &plain, "plain", 1, "kg")
-	// current behaviour: incompatible units keep the raw quantity, labelled in inventory unit
+	// incompatible units: need reported in the recipe unit
 	insertIng(t, db, r, &bad, "bad", 2, "cup")
 	insertIng(t, db, r, nil, "unlinked", 3, "tbsp")
 	schedule(t, db, "2024-01-01", r, 1)
@@ -129,10 +129,28 @@ func TestWeeklyShoppingUnits(t *testing.T) {
 	if g := m["plain"]; g.Unit != "kg" || !near(g.QuantityNeeded, 1) {
 		t.Errorf("plain: %+v", g)
 	}
-	if g := m["bad"]; g.Unit != "g" || !near(g.QuantityNeeded, 2) {
+	if g := m["bad"]; g.Unit != "cup" || !near(g.QuantityNeeded, 2) {
 		t.Errorf("bad: %+v", g)
 	}
 	if g := m["unlinked"]; g.InventoryID != nil || g.Unit != "tbsp" || !near(g.QuantityNeeded, 3) {
 		t.Errorf("unlinked: %+v", g)
+	}
+}
+
+func TestWeeklyShoppingIncompatibleUnitsIgnoreStock(t *testing.T) {
+	db := testutil.NewDB(t)
+	r := insertRecipe(t, db, 1)
+	sugar := insertInv(t, db, "sugar", 500, "g", "", 0)
+	insertIng(t, db, r, &sugar, "sugar", 2, "cup")
+	schedule(t, db, "2024-01-01", r, 1)
+	res, err := services.GenerateWeeklyShopping(db, "2024-01-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("want 1 need, got %+v", res)
+	}
+	if g := res[0]; g.Unit != "cup" || !near(g.QuantityNeeded, 2) || g.InventoryID == nil || *g.InventoryID != sugar {
+		t.Errorf("sugar: %+v", g)
 	}
 }

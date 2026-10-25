@@ -567,193 +567,151 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		var patch map[string]any
-		if err := ReadJSON(r, &patch); err != nil {
+		var p inventoryPatch
+		if err := ReadJSON(r, &p); err != nil {
+			var ute *json.UnmarshalTypeError
+			if errors.As(err, &ute) {
+				WriteError(w, http.StatusBadRequest, "invalid type for field "+ute.Field)
+				return
+			}
 			WriteError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
-		if expDate, ok := patch["expiration_date"]; ok {
-			if expStr, ok := expDate.(string); ok && expStr != "" {
-				if _, err := time.Parse("2006-01-02", expStr); err != nil {
-					WriteError(w, http.StatusBadRequest, "invalid expiration_date format, expected YYYY-MM-DD")
-					return
-				}
-			}
-		}
-		if qty, ok := patch["quantity"]; ok {
-			if q, ok := qty.(float64); ok && q < 0 {
-				WriteError(w, http.StatusBadRequest, "quantity cannot be negative")
+		const unitMsg = "valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch"
+		if p.ExpirationDate != nil && *p.ExpirationDate != "" {
+			if _, err := time.Parse("2006-01-02", *p.ExpirationDate); err != nil {
+				WriteError(w, http.StatusBadRequest, "invalid expiration_date format, expected YYYY-MM-DD")
 				return
 			}
 		}
-		if thresh, ok := patch["low_threshold"]; ok {
-			if t, ok := thresh.(float64); ok && t < 0 {
-				WriteError(w, http.StatusBadRequest, "low_threshold cannot be negative")
-				return
-			}
-		}
-		if u, ok := patch["unit"]; ok {
-			if uStr, ok := u.(string); ok && uStr != "" && !units.IsValid(units.Unit(uStr)) {
-				WriteError(w, http.StatusBadRequest, "invalid unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
-				return
-			}
-		}
-		if pu, ok := patch["preferred_unit"]; ok {
-			if puStr, ok := pu.(string); ok && puStr != "" {
-				if !units.IsValid(units.Unit(puStr)) {
-					WriteError(w, http.StatusBadRequest, "invalid preferred_unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
-					return
-				}
-				if u, ok := patch["unit"]; ok {
-					if uStr, ok := u.(string); ok && uStr != "" {
-						if units.BaseDimension(units.Unit(uStr)) != units.BaseDimension(units.Unit(puStr)) {
-							WriteError(w, http.StatusBadRequest, "preferred_unit must be in the same dimension as unit")
-							return
-						}
-					}
-				}
-			}
-		}
-		// Fetch current quantity before patching (for history)
-		var qtyBefore float64
-		var nameBefore, unitBefore string
-		_ = db.QueryRow(`SELECT quantity, name, unit FROM inventory WHERE id=?`, id).Scan(&qtyBefore, &nameBefore, &unitBefore)
-
-		if n, ok := patch["name"]; ok {
-			if nStr, ok := n.(string); ok {
-				patch["name"] = strings.ToLower(strings.TrimSpace(nStr))
-			}
-		}
-		newQtyVal, hasQty := patch["quantity"]
-		newQty, isFloat := newQtyVal.(float64)
-		isDeduction := hasQty && isFloat && newQty < qtyBefore
-
-		if isDeduction {
-			// Cascade deduction across all siblings (same name+unit) ordered by
-			// earliest expiration first, via the shared deductStock helper.
-			req := deductRequest{
-				ItemID:    id,
-				Qty:       qtyBefore - newQty,
-				Source:    r.URL.Query().Get("source"),
-				ChangedBy: auth.EmailFromContext(r.Context()),
-			}
-			if req.Source == "" {
-				req.Source = "manual"
-			}
-
-			// If location_id is provided and non-zero, bypass cascade and deduct only from that row.
-			if locIDVal, ok := patch["location_id"]; ok {
-				if locIDFloat, ok := locIDVal.(float64); ok && locIDFloat != 0 {
-					locID := int64(locIDFloat)
-					var exists int64
-					err := db.QueryRow(`SELECT id FROM inventory WHERE id=?`, locID).Scan(&exists)
-					if err == sql.ErrNoRows {
-						WriteError(w, http.StatusNotFound, "location not found")
-						return
-					}
-					if err != nil {
-						WriteError(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-					req.ItemID = locID
-					req.SingleLot = true
-				}
-			}
-
-			tx, err := db.Begin()
-			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			dres, err := deductStock(db, tx, req)
-			if err != nil {
-				tx.Rollback()
-				if errors.Is(err, errItemNotFound) {
-					WriteError(w, http.StatusNotFound, err.Error())
-				} else if errors.Is(err, errIncompatibleUnits) {
-					WriteError(w, http.StatusUnprocessableEntity, err.Error())
-				} else {
-					WriteError(w, http.StatusInternalServerError, err.Error())
-				}
-				return
-			}
-			if err := tx.Commit(); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			lastSibID := dres.LastLotID
-			if lt, ok := patch["low_threshold"].(float64); ok && lt >= 0 {
-				if err := setProductPar(db, nameBefore, lt); err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-			}
-
-			if lastSibID != 0 {
-				row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, lastSibID)
-				item, err := scanInventoryRow(row)
-				if err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-				WriteJSON(w, http.StatusOK, item)
-			} else {
-				// All sibling stock exhausted
-				WriteJSON(w, http.StatusOK, map[string]any{"id": id, "quantity": 0})
-			}
-			broadcastInventory()
+		if p.Quantity != nil && *p.Quantity < 0 {
+			WriteError(w, http.StatusBadRequest, "quantity cannot be negative")
 			return
 		}
-
-		// Non-deduction patch: apply fields directly.
-		allowed := []string{"name", "quantity", "unit", "location", "expiration_date", "low_threshold", "barcode", "preferred_unit", "unit_cost_cents", "quantity_per_scan"}
-		for _, field := range allowed {
-			if val, ok := patch[field]; ok {
-				if _, err := db.Exec(`UPDATE inventory SET `+field+`=? WHERE id=?`, val, id); err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-			}
-		}
-		var curName string
-		if err := db.QueryRow(`SELECT name FROM inventory WHERE id=?`, id).Scan(&curName); err == nil {
-			if lt, ok := patch["low_threshold"].(float64); ok && lt >= 0 {
-				if err := setProductPar(db, curName, lt); err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-			} else if _, renamed := patch["name"]; renamed {
-				// Lot moved to another product: adopt that product's par, if it has other lots.
-				var other sql.NullFloat64
-				if err := db.QueryRow(`SELECT MAX(low_threshold) FROM inventory WHERE name=? AND id<>?`, curName, id).Scan(&other); err == nil && other.Valid {
-					if _, err := db.Exec(`UPDATE inventory SET low_threshold=? WHERE id=?`, other.Float64, id); err != nil {
-						WriteError(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-				}
-			}
-		}
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id)
-		item, err := scanInventoryRow(row)
-		if err == sql.ErrNoRows {
-			WriteError(w, http.StatusNotFound, "not found")
+		if p.LowThreshold != nil && *p.LowThreshold < 0 {
+			WriteError(w, http.StatusBadRequest, "low_threshold cannot be negative")
 			return
-		} else if err != nil {
+		}
+		if p.Unit != nil && *p.Unit != "" && !units.IsValid(units.Unit(*p.Unit)) {
+			WriteError(w, http.StatusBadRequest, "invalid unit; "+unitMsg)
+			return
+		}
+		if p.PreferredUnit != nil && *p.PreferredUnit != "" && !units.IsValid(units.Unit(*p.PreferredUnit)) {
+			WriteError(w, http.StatusBadRequest, "invalid preferred_unit; "+unitMsg)
+			return
+		}
+		if p.Name != nil {
+			n := strings.ToLower(strings.TrimSpace(*p.Name))
+			p.Name = &n
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// Log the change
-		source := r.URL.Query().Get("source")
-		if source == "" {
-			source = "manual"
+		defer tx.Rollback()
+
+		var qtyBefore float64
+		var nameBefore, unitBefore, prefBefore string
+		err = tx.QueryRow(`SELECT quantity, name, unit, preferred_unit FROM inventory WHERE id=?`, id).
+			Scan(&qtyBefore, &nameBefore, &unitBefore, &prefBefore)
+		if err == sql.ErrNoRows {
+			WriteError(w, http.StatusNotFound, "not found")
+			return
 		}
-		if hasQty {
-			qtyAfter := item["quantity"].(float64)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		finalName, finalUnit, finalPref := nameBefore, unitBefore, prefBefore
+		if p.Name != nil {
+			finalName = *p.Name
+		}
+		if p.Unit != nil {
+			finalUnit = *p.Unit
+		}
+		if p.PreferredUnit != nil {
+			finalPref = *p.PreferredUnit
+		}
+		if p.PreferredUnit != nil && *p.PreferredUnit != "" && finalUnit != "" &&
+			units.BaseDimension(units.Unit(finalUnit)) != units.BaseDimension(units.Unit(*p.PreferredUnit)) {
+			WriteError(w, http.StatusBadRequest, "preferred_unit must be in the same dimension as unit")
+			return
+		}
+		_ = finalPref
+
+		var sets []string
+		var args []any
+		add := func(col string, v any) {
+			sets = append(sets, col+"=?")
+			args = append(args, v)
+		}
+		if p.Name != nil {
+			add("name", *p.Name)
+		}
+		if p.Quantity != nil {
+			add("quantity", *p.Quantity)
+		}
+		if p.Unit != nil {
+			add("unit", *p.Unit)
+		}
+		if p.Location != nil {
+			add("location", *p.Location)
+		}
+		if p.ExpirationDate != nil {
+			add("expiration_date", *p.ExpirationDate)
+		}
+		if p.LowThreshold != nil {
+			add("low_threshold", *p.LowThreshold)
+		}
+		if p.Barcode != nil {
+			add("barcode", *p.Barcode)
+		}
+		if p.PreferredUnit != nil {
+			add("preferred_unit", *p.PreferredUnit)
+		}
+		if p.UnitCostCents != nil {
+			add("unit_cost_cents", *p.UnitCostCents)
+		}
+		if p.QuantityPerScan != nil {
+			add("quantity_per_scan", *p.QuantityPerScan)
+		}
+		if len(sets) > 0 {
+			args = append(args, id)
+			if _, err := tx.Exec(`UPDATE inventory SET `+strings.Join(sets, ", ")+` WHERE id=?`, args...); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if p.LowThreshold != nil {
+			if err := setProductPar(tx, finalName, *p.LowThreshold); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		} else if p.Name != nil {
+			// Lot moved to another product: adopt that product's par, if it has other lots.
+			var other sql.NullFloat64
+			if err := tx.QueryRow(`SELECT MAX(low_threshold) FROM inventory WHERE name=? AND id<>?`, finalName, id).Scan(&other); err == nil && other.Valid {
+				if _, err := tx.Exec(`UPDATE inventory SET low_threshold=? WHERE id=?`, other.Float64, id); err != nil {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+		}
+		if p.Quantity != nil {
+			source := r.URL.Query().Get("source")
+			if source == "" {
+				source = "manual"
+			}
+			qtyAfter := *p.Quantity
 			changeType := "edit"
 			if qtyAfter > qtyBefore {
 				changeType = "add"
+			} else if qtyAfter < qtyBefore {
+				changeType = "deduct"
 			}
-			_ = LogHistory(db, nil, LogHistoryParams{
+			_ = LogHistory(db, tx, LogHistoryParams{
 				InventoryID:    id,
 				ItemName:       nameBefore,
 				ChangeType:     changeType,
@@ -764,7 +722,99 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				ChangedBy:      auth.EmailFromContext(r.Context()),
 			})
 		}
+		var survivor int64
+		if p.Quantity != nil && *p.Quantity == 0 && qtyBefore > 0 {
+			_, survivor, err = retireEmptyLots(tx, []int64{id}, finalName, finalUnit)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		item, err := scanInventoryRow(db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id))
+		if err == sql.ErrNoRows && survivor != 0 {
+			item, err = scanInventoryRow(db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, survivor))
+		}
+		if err == sql.ErrNoRows {
+			WriteJSON(w, http.StatusOK, map[string]any{"id": id, "quantity": 0})
+			broadcastInventory()
+			return
+		}
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		WriteJSON(w, http.StatusOK, item)
+		broadcastInventory()
+	})
+
+	mux.HandleFunc("POST /api/inventory/{id}/deduct", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := pathIDFromPattern(r, "id")
+		if !ok {
+			WriteError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		var body struct {
+			Quantity  float64 `json:"quantity"`
+			Unit      string  `json:"unit"`
+			SingleLot bool    `json:"single_lot"`
+		}
+		if err := ReadJSON(r, &body); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		if body.Quantity <= 0 {
+			WriteError(w, http.StatusBadRequest, "quantity must be positive")
+			return
+		}
+		if body.Unit != "" && !units.IsValid(units.Unit(body.Unit)) {
+			WriteError(w, http.StatusBadRequest, "invalid unit")
+			return
+		}
+		source := r.URL.Query().Get("source")
+		if source == "" {
+			source = "manual"
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer tx.Rollback()
+		dres, err := deductStock(db, tx, deductRequest{
+			ItemID: id, Qty: body.Quantity, Unit: body.Unit, Source: source,
+			ChangedBy: auth.EmailFromContext(r.Context()), SingleLot: body.SingleLot,
+		})
+		if err != nil {
+			if errors.Is(err, errItemNotFound) {
+				WriteError(w, http.StatusNotFound, err.Error())
+			} else if errors.Is(err, errIncompatibleUnits) {
+				WriteError(w, http.StatusUnprocessableEntity, err.Error())
+			} else {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+			}
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out := map[string]any{"id": id, "quantity": 0}
+		if dres.ResultItemID != 0 {
+			item, err := scanInventoryRow(db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, dres.ResultItemID))
+			if err == nil {
+				out = item
+			} else if err != sql.ErrNoRows {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		out["deducted"] = dres.Deducted
+		WriteJSON(w, http.StatusOK, out)
 		broadcastInventory()
 	})
 
@@ -1218,4 +1268,17 @@ func setProductPar(ex interface {
 }, name string, par float64) error {
 	_, err := ex.Exec(`UPDATE inventory SET low_threshold=? WHERE name=?`, par, name)
 	return err
+}
+
+type inventoryPatch struct {
+	Name            *string  `json:"name"`
+	Quantity        *float64 `json:"quantity"`
+	Unit            *string  `json:"unit"`
+	Location        *string  `json:"location"`
+	ExpirationDate  *string  `json:"expiration_date"`
+	LowThreshold    *float64 `json:"low_threshold"`
+	Barcode         *string  `json:"barcode"`
+	PreferredUnit   *string  `json:"preferred_unit"`
+	UnitCostCents   *int64   `json:"unit_cost_cents"`
+	QuantityPerScan *float64 `json:"quantity_per_scan"`
 }

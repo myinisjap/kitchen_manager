@@ -51,6 +51,8 @@ var migrations = []migration{
 	{name: "sync_low_threshold", up: migrateSyncLowThreshold},
 	{name: "normalize_meal_cooked_at", up: normalizeMealCookedAt},
 	{name: "inventory_fk_on_delete_set_null", disableFK: true, up: migrateInventoryFKSetNull},
+	{name: "recipes_archived", up: migrateRecipesArchived},
+	{name: "meal_history_nullable_recipe", disableFK: true, up: migrateMealHistoryNullableRecipe},
 }
 
 // LatestVersion is the schema version produced by all known migrations.
@@ -383,5 +385,45 @@ func normalizeMealCookedAt(tx *sql.Tx) error {
 		}
 	}
 	log.Printf("normalized cooked_at on %d meal_history rows", len(ups))
+	return nil
+}
+
+func migrateRecipesArchived(tx *sql.Tx) error {
+	return addColumnIfMissing(tx, "recipes", "archived", "archived INTEGER NOT NULL DEFAULT 0")
+}
+
+// migrateMealHistoryNullableRecipe rebuilds meal_history on databases where
+// recipe_id is still NOT NULL, so deleting a recipe can keep its history.
+// Runs with foreign_keys=OFF (see runMigration).
+func migrateMealHistoryNullableRecipe(tx *sql.Tx) error {
+	var notnull int
+	if err := tx.QueryRow(`SELECT "notnull" FROM pragma_table_info('meal_history') WHERE name='recipe_id'`).Scan(&notnull); err != nil {
+		return err
+	}
+	if notnull == 0 {
+		return nil
+	}
+	stmts := []string{
+		`CREATE TABLE meal_history_new (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			recipe_id        INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+			recipe_name      TEXT    NOT NULL DEFAULT '',
+			cooked_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			servings_made    INTEGER NOT NULL DEFAULT 1,
+			total_cost_cents INTEGER,
+			notes            TEXT    NOT NULL DEFAULT ''
+		)`,
+		`INSERT INTO meal_history_new (id,recipe_id,recipe_name,cooked_at,servings_made,total_cost_cents,notes)
+			SELECT id,recipe_id,recipe_name,cooked_at,servings_made,total_cost_cents,notes FROM meal_history`,
+		`DROP TABLE meal_history`,
+		`ALTER TABLE meal_history_new RENAME TO meal_history`,
+		`CREATE INDEX IF NOT EXISTS meal_history_recipe_idx ON meal_history(recipe_id, cooked_at)`,
+		`CREATE INDEX IF NOT EXISTS meal_history_cooked_at_idx ON meal_history(cooked_at)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return err
+		}
+	}
 	return nil
 }

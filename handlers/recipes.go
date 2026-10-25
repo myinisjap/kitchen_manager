@@ -80,7 +80,11 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		tag := r.URL.Query().Get("tag")
 		availableOnly := r.URL.Query().Get("available_only") == "true"
 
-		rows, err := db.Query(`SELECT id,name,description,instructions,tags,servings FROM recipes`)
+		q := `SELECT id,name,description,instructions,tags,servings FROM recipes`
+		if r.URL.Query().Get("include_archived") != "true" {
+			q += ` WHERE archived=0`
+		}
+		rows, err := db.Query(q)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -128,14 +132,19 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			available, err := recipeIsAvailable(db, recipe)
+			avail, err := recipeIsAvailable(db, recipe)
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if availableOnly && !available {
+			if availableOnly && !avail.Available {
 				continue
 			}
+			incompatible := avail.Incompatible
+			if incompatible == nil {
+				incompatible = []string{}
+			}
+			recipe["incompatible_ingredients"] = incompatible
 			result = append(result, recipe)
 		}
 		if result == nil {
@@ -177,6 +186,34 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		WriteJSON(w, http.StatusOK, map[string]any{"count": count})
 	})
 
+	setArchived := func(val int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			id, ok := pathIDFromPattern(r, "id")
+			if !ok {
+				WriteError(w, http.StatusBadRequest, "invalid id")
+				return
+			}
+			res, err := db.Exec(`UPDATE recipes SET archived=? WHERE id=?`, val, id)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				WriteError(w, http.StatusNotFound, "not found")
+				return
+			}
+			recipe, err := getRecipeWithIngredients(db, id)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			WriteJSON(w, http.StatusOK, recipe)
+			broadcastRecipes()
+		}
+	}
+	mux.HandleFunc("POST /api/recipes/{id}/archive", setArchived(1))
+	mux.HandleFunc("POST /api/recipes/{id}/unarchive", setArchived(0))
+
 	mux.HandleFunc("DELETE /api/recipes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathIDFromPattern(r, "id")
 		if !ok {
@@ -197,13 +234,13 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// Delete meal_history_ingredients for all meals of this recipe
-		if _, err := tx.Exec(`DELETE FROM meal_history_ingredients WHERE meal_history_id IN (SELECT id FROM meal_history WHERE recipe_id=?)`, id); err != nil {
+		// Keep cooking history (meal_history stores recipe_name): just unlink the recipe.
+		if _, err := tx.Exec(`UPDATE meal_history SET recipe_id=NULL WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if _, err := tx.Exec(`DELETE FROM meal_history WHERE recipe_id=?`, id); err != nil {
+		if _, err := tx.Exec(`UPDATE inventory_history SET recipe_id=NULL WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -362,15 +399,14 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					if prefUnit != "" {
 						targetUnit = units.Unit(prefUnit)
 					}
-					displayUnit = targetUnit
 					converted, convErr := units.Convert(needed, ingUnit, targetUnit)
 					if convErr == nil {
 						needed = converted
 						have = invQty
-					} else {
-						// Units in different dimensions: compare as-is
-						have = invQty
+						displayUnit = targetUnit
 					}
+					// else: units can't be compared; add the full need in the
+					// recipe's unit and don't subtract mismatched stock.
 				}
 			}
 
@@ -405,11 +441,11 @@ func resolveInventoryID(db *sql.DB, name string) *int64 {
 }
 
 func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
-	row := db.QueryRow(`SELECT id,name,description,instructions,tags,servings FROM recipes WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id,name,description,instructions,tags,servings,archived FROM recipes WHERE id=?`, id)
 	var rid int64
 	var name, desc, instructions, tags string
-	var servings int
-	if err := row.Scan(&rid, &name, &desc, &instructions, &tags, &servings); err != nil {
+	var servings, archived int
+	if err := row.Scan(&rid, &name, &desc, &instructions, &tags, &servings, &archived); err != nil {
 		return nil, err
 	}
 	rows, err := db.Query(`SELECT id,recipe_id,inventory_id,name,quantity,unit FROM recipe_ingredients WHERE recipe_id=?`, id)
@@ -444,43 +480,52 @@ func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
 	return map[string]any{
 		"id": rid, "name": name, "description": desc,
 		"instructions": instructions, "tags": tags, "servings": servings,
-		"ingredients": ings,
+		"ingredients": ings, "archived": archived != 0,
 	}, nil
 }
 
-func recipeIsAvailable(db *sql.DB, recipe map[string]any) (bool, error) {
+type recipeAvailability struct {
+	Available    bool
+	Incompatible []string // ingredients whose unit can't be compared to stock
+}
+
+func recipeIsAvailable(db *sql.DB, recipe map[string]any) (recipeAvailability, error) {
+	res := recipeAvailability{}
 	ings := recipe["ingredients"].([]map[string]any)
 	if len(ings) == 0 {
-		return false, nil
+		return res, nil
 	}
+	available := true
 	for _, ing := range ings {
 		invID, hasInvID := ing["inventory_id"]
 		if !hasInvID || invID == nil {
-			// Unlinked ingredient — treat as not in inventory
-			return false, nil
+			available = false
+			continue
 		}
 		var invQty float64
 		var invUnit string
 		err := db.QueryRow(`SELECT quantity, unit FROM inventory WHERE id=?`, invID).Scan(&invQty, &invUnit)
 		if err == sql.ErrNoRows {
-			return false, nil
+			available = false
+			continue
 		}
 		if err != nil {
-			return false, err
+			return res, err
 		}
 		ingQty := ing["quantity"].(float64)
 		ingUnit := units.Unit(ing["unit"].(string))
-		invUnitTyped := units.Unit(invUnit)
 
-		// Convert ingredient quantity to inventory unit for comparison
-		converted, err := units.Convert(ingQty, ingUnit, invUnitTyped)
+		converted, err := units.Convert(ingQty, ingUnit, units.Unit(invUnit))
 		if err != nil {
-			// Different dimensions: compare as-is
-			converted = ingQty
+			name, _ := ing["name"].(string)
+			res.Incompatible = append(res.Incompatible, name)
+			available = false
+			continue
 		}
 		if invQty < converted {
-			return false, nil
+			available = false
 		}
 	}
-	return true, nil
+	res.Available = available
+	return res, nil
 }
