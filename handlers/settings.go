@@ -2,34 +2,48 @@ package handlers
 
 import (
 	"database/sql"
-	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 )
 
 func RegisterSettings(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/backup", func(w http.ResponseWriter, r *http.Request) {
-		dbPath := os.Getenv("DB_PATH")
-		if dbPath == "" {
-			dbPath = "./kitchen.db"
-		}
-		f, err := os.Open(dbPath)
+		dir, err := os.MkdirTemp("", "kitchen-backup-*")
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, "could not open database")
+			log.Printf("backup: mkdtemp: %v", err)
+			WriteError(w, http.StatusInternalServerError, "could not create backup")
+			return
+		}
+		defer os.RemoveAll(dir)
+		path := filepath.Join(dir, "kitchen.db")
+		if _, err := db.ExecContext(r.Context(), "VACUUM INTO ?", path); err != nil {
+			log.Printf("backup: vacuum into: %v", err)
+			WriteError(w, http.StatusInternalServerError, "could not create backup")
+			return
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			log.Printf("backup: open: %v", err)
+			WriteError(w, http.StatusInternalServerError, "could not create backup")
 			return
 		}
 		defer f.Close()
 		stat, err := f.Stat()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, "could not stat database")
+			log.Printf("backup: stat: %v", err)
+			WriteError(w, http.StatusInternalServerError, "could not create backup")
 			return
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", `attachment; filename="kitchen.db"`)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
-		io.Copy(w, f)
+		w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
+		if _, err := io.Copy(w, f); err != nil {
+			log.Printf("backup: copy: %v", err)
+		}
 	})
 
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
