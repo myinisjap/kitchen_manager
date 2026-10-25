@@ -498,24 +498,25 @@ function app() {
     },
 
     async commitGroceryItems() {
-      let successCount = 0;
+      let successCount = 0, failed = 0;
       for (const pending of this.groceryPendingItems) {
         try {
           const cur = await fetch(this.baseUrl + '/api/inventory/barcode/' + encodeURIComponent(pending.barcode));
-          if (!cur.ok) continue;
+          if (!cur.ok) { failed++; continue; }
           const item = await cur.json();
           const newQty = parseFloat((item.quantity + pending.qty).toFixed(4));
-          const patch = await fetch(this.baseUrl + '/api/inventory/' + pending.id, {
+          const patch = await this.apiFetch('/api/inventory/' + pending.id, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ quantity: newQty }),
-          });
-          if (patch.ok) successCount++;
-        } catch { /* skip failed items silently */ }
+          }, { onError: () => {} });
+          if (patch) successCount++; else failed++;
+        } catch { failed++; }
       }
       this.fetchInventory();
       this.closeGroceryScanner();
-      this.showToast(`Updated ${successCount} item(s)`);
+      if (failed > 0) this.showToast(`Updated ${successCount} item(s), ${failed} failed`, 'error');
+      else this.showToast(`Updated ${successCount} item(s)`);
     },
 
     async onGroceryBarcodeScanned(code) {
@@ -628,20 +629,14 @@ function app() {
     },
 
     async confirmGroceryNewItem() {
-      try {
-        const res = await fetch(this.baseUrl + '/api/inventory/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(this.groceryItemForm),
-        });
-        if (res.ok) {
-          this.showToast(`Added ${this.groceryItemForm.name || 'item'} to inventory`);
-          this.fetchInventory(); // background refresh, no await
-        } else {
-          this.showToast('Failed to add item', 'error');
-        }
-      } catch {
-        this.showToast('Failed to add item', 'error');
+      const res = await this.apiFetch('/api/inventory/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.groceryItemForm),
+      }, { errorPrefix: 'Failed to add item' });
+      if (res) {
+        this.showToast(`Added ${this.groceryItemForm.name || 'item'} to inventory`);
+        this.fetchInventory(); // background refresh, no await
       }
       this.skipGroceryNewItem();
     },
@@ -657,7 +652,33 @@ function app() {
       this.toast = msg;
       this.toastStyle = style;
       this.toastBadge = badge;
-      this._toastTimer = setTimeout(() => { this.toast = ''; this.toastStyle = ''; this.toastBadge = ''; }, 2500);
+      this._toastTimer = setTimeout(() => { this.toast = ''; this.toastStyle = ''; this.toastBadge = ''; }, style === 'error' ? 5000 : 2500);
+    },
+
+    // All mutating requests go through here. Returns the Response on 2xx, else null
+    // (after reporting the error), so callers must not update local state on null.
+    async apiFetch(path, opts = {}, { errorPrefix = 'Save failed', onError = null } = {}) {
+      const report = (m) => onError ? onError(m) : this.showToast(errorPrefix + ': ' + m, 'error');
+      let res;
+      try {
+        res = await fetch(this.baseUrl + path, opts);
+      } catch (e) {
+        report('network error');
+        return null;
+      }
+      if (!res.ok) {
+        let msg = res.statusText || ('HTTP ' + res.status);
+        try {
+          const text = (await res.text()).trim();
+          if (text) {
+            try { const j = JSON.parse(text); msg = (j && j.error) || msg; }
+            catch { msg = text.slice(0, 200); }
+          }
+        } catch {}
+        report(msg);
+        return null;
+      }
+      return res;
     },
 
     // --- Inventory ---
@@ -714,37 +735,36 @@ function app() {
       const loc = group.locations.find(l => l.id === selectedLocationId);
       if (!loc || qty <= 0) return;
       const newQty = Math.max(0, parseFloat((loc.quantity - qty).toFixed(4)));
-      const res = await fetch(this.baseUrl + '/api/inventory/' + selectedLocationId, {
+      const res = await this.apiFetch('/api/inventory/' + selectedLocationId, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quantity: newQty, location_id: selectedLocationId }),
-      });
-      if (res.ok) {
-        this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
-        this.modal = null;
-        this.deductModal = null;
-        await this.fetchInventory();
-        await this.fetchExpiring();
-      } else {
-        this.showToast('Deduct failed', 'error');
-      }
+      }, { errorPrefix: 'Deduct failed' });
+      if (!res) return;
+      this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
+      this.modal = null;
+      this.deductModal = null;
+      await this.fetchInventory();
+      await this.fetchExpiring();
     },
 
     async saveItem() {
       if (!this.itemForm.name) return;
       if (this.editingItem) {
-        await fetch(this.baseUrl + '/api/inventory/' + this.editingItem.id, {
+        const res = await this.apiFetch('/api/inventory/' + this.editingItem.id, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.itemForm),
         });
+        if (!res) return;
         this.showToast('Item updated');
       } else {
-        await fetch(this.baseUrl + '/api/inventory/', {
+        const res = await this.apiFetch('/api/inventory/', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.itemForm),
         });
+        if (!res) return;
         this.showToast('Item added');
       }
       this.modal = null;
@@ -754,7 +774,8 @@ function app() {
 
     async deleteItem(id) {
       if (!confirm('Delete this item?')) return;
-      await fetch(this.baseUrl + '/api/inventory/' + id, { method: 'DELETE' });
+      const res = await this.apiFetch('/api/inventory/' + id, { method: 'DELETE' }, { errorPrefix: 'Delete failed' });
+      if (!res) return;
       await this.fetchInventory();
       this.showToast('Item deleted');
     },
@@ -772,38 +793,44 @@ function app() {
 
     async saveShoppingItem() {
       if (!this.shoppingForm.name) return;
-      await fetch(this.baseUrl + '/api/shopping/', {
+      const res = await this.apiFetch('/api/shopping/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(this.shoppingForm),
       });
+      if (!res) return;
       this.modal = null;
       await this.fetchShoppingList();
       this.showToast('Added to list');
     },
 
     async toggleShoppingItem(item) {
-      await fetch(this.baseUrl + '/api/shopping/' + item.id, {
+      const res = await this.apiFetch('/api/shopping/' + item.id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ checked: !item.checked }),
       });
+      // On failure, refetch so the checkbox reverts to the server state.
       await this.fetchShoppingList();
+      if (!res) return;
     },
 
     async deleteShoppingItem(id) {
-      await fetch(this.baseUrl + '/api/shopping/' + id, { method: 'DELETE' });
+      const res = await this.apiFetch('/api/shopping/' + id, { method: 'DELETE' }, { errorPrefix: 'Delete failed' });
+      if (!res) return;
       await this.fetchShoppingList();
     },
 
     async clearCheckedItems() {
-      await fetch(this.baseUrl + '/api/shopping/checked', { method: 'DELETE' });
+      const res = await this.apiFetch('/api/shopping/checked', { method: 'DELETE' }, { errorPrefix: 'Clear failed' });
+      if (!res) return;
       await this.fetchShoppingList();
       this.showToast('Cleared checked items');
     },
 
     async generateFromThresholds() {
-      const res = await fetch(this.baseUrl + '/api/shopping/generate-from-thresholds', { method: 'POST' });
+      const res = await this.apiFetch('/api/shopping/generate-from-thresholds', { method: 'POST' });
+      if (!res) return;
       const data = await res.json();
       await this.fetchShoppingList();
       this.showToast(`Added ${data.added} low-stock items`);
@@ -820,7 +847,8 @@ function app() {
     },
 
     async logout() {
-      await fetch(this.baseUrl + '/auth/logout', { method: 'POST' });
+      const res = await this.apiFetch('/auth/logout', { method: 'POST' }, { errorPrefix: 'Sign out failed' });
+      if (!res) return;
       window.location.href = this.baseUrl + '/auth/login';
     },
 
@@ -839,9 +867,9 @@ function app() {
       try {
         const fd = new FormData();
         fd.append('file', this.receiptFile);
-        const res = await fetch(this.baseUrl + '/api/receipt/parse', { method: 'POST', body: fd });
+        const res = await this.apiFetch('/api/receipt/parse', { method: 'POST', body: fd }, { onError: m => { this.receiptError = m; } });
+        if (!res) return;
         const data = await res.json();
-        if (!res.ok) { this.receiptError = data.error || 'Parsing failed'; return; }
         this.receiptItems = data.items.map(item => ({
           ...item,
           _include: true,
@@ -873,12 +901,12 @@ function app() {
           quantity_per_scan: qtyPerScan || 0,
         };
         try {
-          const res = await fetch(this.baseUrl + '/api/inventory/', {
+          const res = await this.apiFetch('/api/inventory/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
-          });
-          if (res.ok) { added++; } else { failed++; }
+          }, { onError: () => {} });
+          if (res) { added++; } else { failed++; }
         } catch (e) { failed++; }
       }
       this.modal = '';
@@ -947,16 +975,13 @@ function app() {
         if (!this.recipeImportUrl) return;
         this.recipeImporting = true;
         try {
-          const res = await fetch(this.baseUrl + '/api/recipes/import/url', {
+          const res = await this.apiFetch('/api/recipes/import/url', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: this.recipeImportUrl }),
-          });
+          }, { onError: m => { this.recipeImportError = m + ' — try the Paste tab instead.'; } });
+          if (!res) return;
           const data = await res.json();
-          if (!res.ok) {
-            this.recipeImportError = (data.error || 'Import failed') + ' — try the Paste tab instead.';
-            return;
-          }
           this._applyImportData(data);
         } catch (e) {
           this.recipeImportError = 'Network error — try the Paste tab instead.';
@@ -971,9 +996,9 @@ function app() {
         try {
           const fd = new FormData();
           fd.append('file', this.recipeImportFile);
-          const res = await fetch(this.baseUrl + '/api/recipes/import/pdf', { method: 'POST', body: fd });
+          const res = await this.apiFetch('/api/recipes/import/pdf', { method: 'POST', body: fd }, { onError: m => { this.recipeImportError = m; } });
+          if (!res) return;
           const data = await res.json();
-          if (!res.ok) { this.recipeImportError = data.error || 'Import failed'; return; }
           this._applyImportData(data);
         } catch (e) {
           this.recipeImportError = 'Network error';
@@ -1007,11 +1032,12 @@ function app() {
     async saveRecipe() {
       if (!this.recipeForm.name) return;
       const isEdit = !!this.recipeForm.id;
-      await fetch(isEdit ? this.baseUrl + '/api/recipes/' + this.recipeForm.id : this.baseUrl + '/api/recipes/', {
+      const res = await this.apiFetch(isEdit ? '/api/recipes/' + this.recipeForm.id : '/api/recipes/', {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(this.recipeForm),
       });
+      if (!res) return;
       this.modal = null;
       await this.fetchRecipes();
       this.showToast(isEdit ? 'Recipe updated' : 'Recipe saved');
@@ -1067,11 +1093,12 @@ function app() {
 
     async addRecipeToCalendar(recipe, servings) {
       if (!this.recipeViewDate) return;
-      await fetch(this.baseUrl + '/api/calendar/', {
+      const res = await this.apiFetch('/api/calendar/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: this.recipeViewDate, meal_slot: this.recipeViewSlot, recipe_id: recipe.id, servings }),
       });
+      if (!res) return;
       this.modal = null;
       await this.fetchCalendar();
       this.showToast(`Added to calendar: ${this.recipeViewDate}`);
@@ -1079,7 +1106,8 @@ function app() {
 
     async addRecipeToShoppingList(recipe, servings) {
       const s = servings || this.recipeScaleServings(recipe);
-      const res = await fetch(this.baseUrl + '/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST' });
+      const res = await this.apiFetch('/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST' });
+      if (!res) return;
       const data = await res.json();
       this.modal = null;
       this.showToast(`Added ${data.added} missing ingredient(s) to shopping list`);
@@ -1094,23 +1122,18 @@ function app() {
 
     async confirmCookIt() {
       const { recipe, servings } = this.cookItConfirm;
-      const res = await fetch(this.baseUrl + '/api/meals', {
+      const res = await this.apiFetch('/api/meals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipe_id: recipe.id, servings_made: servings }),
-      });
-      if (res.ok) {
-        this.modal = null;
-        this.cookItConfirm = null;
-        this.showToast(`Cooked ${recipe.name} (${servings} serving${servings !== 1 ? 's' : ''})`, 'success');
-        try { const b = await res.clone().json(); (b.warnings || []).forEach(w => this.showToast(w, 'error')); } catch (e) {}
-        await this.fetchInventory();
-        await this.fetchExpiring();
-      } else {
-        let msg = 'Failed to log meal';
-        try { const b = await res.json(); if (b.error) msg += ': ' + b.error; } catch (e) {}
-        this.showToast(msg, 'error');
-      }
+      }, { errorPrefix: 'Failed to log meal' });
+      if (!res) return;
+      this.modal = null;
+      this.cookItConfirm = null;
+      this.showToast(`Cooked ${recipe.name} (${servings} serving${servings !== 1 ? 's' : ''})`, 'success');
+      try { const b = await res.json(); (b.warnings || []).forEach(w => this.showToast(w, 'error')); } catch (e) {}
+      await this.fetchInventory();
+      await this.fetchExpiring();
     },
 
     async deleteRecipe(id) {
@@ -1123,12 +1146,8 @@ function app() {
         }
       } catch (e) { /* fall through to plain confirm */ }
       if (!confirm(msg)) return;
-      const delRes = await fetch(this.baseUrl + '/api/recipes/' + id, { method: 'DELETE' });
-      if (!delRes.ok) {
-        const body = await delRes.text();
-        this.showToast(`Failed to delete: ${body}`, 'error');
-        return;
-      }
+      const delRes = await this.apiFetch('/api/recipes/' + id, { method: 'DELETE' }, { errorPrefix: 'Failed to delete' });
+      if (!delRes) return;
       await this.fetchRecipes();
       this.showToast('Recipe deleted');
     },
@@ -1201,25 +1220,28 @@ function app() {
     async saveCalendarEntry() {
       if (!this.calendarEntryForm.recipe_id) return;
       if (!(this.calendarEntryForm.servings > 0)) this.onCalendarRecipeChange();
-      await fetch(this.baseUrl + '/api/calendar/', {
+      const res = await this.apiFetch('/api/calendar/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(this.calendarEntryForm),
       });
+      if (!res) return;
       this.modal = null;
       await this.fetchCalendar();
       this.showToast('Meal added');
     },
 
     async deleteCalendarEntry(id) {
-      await fetch(this.baseUrl + '/api/calendar/' + id, { method: 'DELETE' });
+      const res = await this.apiFetch('/api/calendar/' + id, { method: 'DELETE' }, { errorPrefix: 'Remove failed' });
+      if (!res) return;
       await this.fetchCalendar();
       this.showToast('Meal removed');
     },
 
     async generateWeeklyShopping() {
       const start = this.calendarWeekStart.toISOString().split('T')[0];
-      const res = await fetch(this.baseUrl + '/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST' });
+      const res = await this.apiFetch('/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST' });
+      if (!res) return;
       const data = await res.json();
       this.showToast(`Added ${data.items.length} item(s) to shopping list`);
       await this.fetchShoppingList();
@@ -1291,16 +1313,14 @@ function app() {
         const item = await res.json();
         const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
         const newQty = Math.max(0, parseFloat((item.quantity - scanQty).toFixed(4)));
-        const patch = await fetch(this.baseUrl + '/api/inventory/' + item.id + '?source=barcode_remove', {
+        const patch = await this.apiFetch('/api/inventory/' + item.id + '?source=barcode_remove', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ quantity: newQty }),
-        });
-        if (patch.ok) {
+        }, { errorPrefix: 'Update failed' });
+        if (patch) {
           this.showToast(`${item.name}: ${item.quantity} → ${newQty} ${item.unit}`, 'success');
           this.fetchInventory();
-        } else {
-          this.showToast('Update failed', 'error');
         }
       } catch {
         this.showToast('Scan error', 'error');
@@ -1329,26 +1349,19 @@ function app() {
         // If dimensions differ, POST as-is and let the backend handle it
       }
 
-      try {
-        const res = await fetch(this.baseUrl + '/api/skus/item/' + candidate.id, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            barcode: dialog.barcode,
-            quantity_per_scan: dialog.quantity || 1,
-            quantity: mergeQty,
-            unit: mergeUnit,
-          }),
-        });
-        if (res.ok) {
-          this.showToast(`Merged "${dialog.name || dialog.barcode}" → ${candidate.name}`, 'success');
-          this.fetchInventory();
-        } else {
-          const err = await res.json();
-          this.showToast(err.error || 'Merge failed', 'error');
-        }
-      } catch {
-        this.showToast('Merge failed', 'error');
+      const mergeRes = await this.apiFetch('/api/skus/item/' + candidate.id, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          barcode: dialog.barcode,
+          quantity_per_scan: dialog.quantity || 1,
+          quantity: mergeQty,
+          unit: mergeUnit,
+        }),
+      }, { errorPrefix: 'Merge failed' });
+      if (mergeRes) {
+        this.showToast(`Merged "${dialog.name || dialog.barcode}" → ${candidate.name}`, 'success');
+        this.fetchInventory();
       }
       this.skuMergeDialog = null;
       // Resume grocery scanner if in grocery mode
@@ -1398,38 +1411,31 @@ function app() {
 
     async addSkuAlias(itemId) {
       if (!this.skuNewForm.barcode) return;
+      const res = await this.apiFetch('/api/skus/item/' + itemId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          barcode: this.skuNewForm.barcode,
+          quantity_per_scan: this.skuNewForm.quantity_per_scan,
+          quantity: 0,
+          unit: '',
+        }),
+      }, { errorPrefix: 'Failed to add alias' });
+      if (!res) return;
+      this.showToast('Alias added');
       try {
-        const res = await fetch(this.baseUrl + '/api/skus/item/' + itemId, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            barcode: this.skuNewForm.barcode,
-            quantity_per_scan: this.skuNewForm.quantity_per_scan,
-            quantity: 0,
-            unit: '',
-          }),
-        });
-        if (res.ok) {
-          this.showToast('Alias added');
-          // Refresh the SKU list in place without toggling visibility
-          const listRes = await fetch(this.baseUrl + '/api/skus/item/' + itemId);
-          if (listRes.ok) this.skusByItem[itemId] = await listRes.json();
-          this.skuNewForm = { barcode: '', quantity_per_scan: 1 };
-        } else {
-          const err = await res.json();
-          this.showToast(err.error || 'Failed', 'error');
-        }
-      } catch { this.showToast('Failed', 'error'); }
+        // Refresh the SKU list in place without toggling visibility
+        const listRes = await fetch(this.baseUrl + '/api/skus/item/' + itemId);
+        if (listRes.ok) this.skusByItem[itemId] = await listRes.json();
+      } catch {}
+      this.skuNewForm = { barcode: '', quantity_per_scan: 1 };
     },
 
     async deleteSkuAlias(itemId, skuId) {
-      try {
-        const res = await fetch(this.baseUrl + '/api/skus/' + skuId, { method: 'DELETE' });
-        if (res.ok) {
-          this.skusByItem[itemId] = (this.skusByItem[itemId] || []).filter(s => s.id !== skuId);
-          this.showToast('Alias removed');
-        }
-      } catch { this.showToast('Failed', 'error'); }
+      const res = await this.apiFetch('/api/skus/' + skuId, { method: 'DELETE' }, { errorPrefix: 'Failed to remove alias' });
+      if (!res) return;
+      this.skusByItem[itemId] = (this.skusByItem[itemId] || []).filter(s => s.id !== skuId);
+      this.showToast('Alias removed');
     },
 
     // --- History ---
