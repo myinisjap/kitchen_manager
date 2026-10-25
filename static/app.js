@@ -80,7 +80,7 @@ function app() {
     selectedRecipe: null,
     settings: {},
     recipeServings: {},
-    recipeForm: { id: null, name: '', description: '', instructions: '', tags: '', servings: this.defaultServings(), ingredients: [] },
+    recipeForm: { id: null, name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] },
     recipeViewDate: '',
     recipeViewSlot: 'dinner',
     recipeImportTab: 'url',
