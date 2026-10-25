@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"kitchen_manager/units"
@@ -40,6 +41,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 		FROM meal_calendar mc
 		JOIN recipes r ON r.id = mc.recipe_id
 		WHERE mc.date >= ? AND mc.date <= ?
+		AND NOT EXISTS (SELECT 1 FROM meal_history mh WHERE mh.calendar_entry_id = mc.id)
 		ORDER BY mc.date`, weekStart, end)
 	if err != nil {
 		return nil, err
@@ -172,7 +174,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 				markRecipe(totals[key].recipes, e.recipeName)
 			} else {
 				// Unlinked ingredient: no conversion, use as-is
-				key := ing.name + "|" + ing.unit
+				key := strings.ToLower(ing.name) + "|" + ing.unit
 				if totals[key] == nil {
 					totals[key] = &totalNeed{
 						name:    ing.name,

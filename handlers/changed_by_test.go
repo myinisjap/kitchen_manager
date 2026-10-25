@@ -24,7 +24,7 @@ func changedBy(t *testing.T, trust bool) string {
 		t.Fatalf("want 201, got %d: %s", w.Code, w.Body)
 	}
 	var got string
-	if err := db.QueryRow(`SELECT COALESCE(changed_by,'') FROM inventory_history WHERE item_name='milk'`).Scan(&got); err != nil {
+	if err := db.QueryRow(`SELECT COALESCE(changed_by,'') FROM inventory_history WHERE item_name='Milk'`).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	return got

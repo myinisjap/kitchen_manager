@@ -68,6 +68,8 @@ docker compose --env-file .env -f deploy/docker-compose.yml down && docker compo
 | `GOOGLE_CLIENT_SECRET` | — | Google Cloud OAuth client secret |
 | `SESSION_SECRET` | — | 64-char hex string for cookie signing (`openssl rand -hex 32`) |
 | `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key for receipt scanning; receipt import errors when unset |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Claude model used to parse receipts |
 | `BASE_URL` | — | Public URL incl. any path prefix (e.g. `https://host/kitchen-manager`); used for OAuth and auth redirects |
 
 ## Auth
@@ -100,7 +102,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 - **Servings scaling:** every ingredient quantity is scaled by `units.ServingsScale(selected, recipe.servings)` (recipe.servings 0→1) when cooking, adding to the shopping list (default = recipe servings) and generating weekly shopping. Calendar entries default to the recipe's servings. The frontend mirrors the math in `scaledQty`; `settings.default_servings` seeds new recipes and is the stepper fallback.
 
-**Request limits & timeouts:** `ReadJSON` caps JSON bodies at 1 MB. Receipt uploads (20 MB) and PDFs (10 MB) use `http.MaxBytesReader` (413 when exceeded). Receipt images go through `image.DecodeConfig` first and are rejected above 50 MP (413). PDF extraction is bounded by `pdfParseTimeout` plus a concurrency semaphore (`handlers/limits.go`). `main.go` sets Read/ReadHeader/Write/Idle timeouts; WriteTimeout must stay above the 60 s Claude call.
+**Request limits & timeouts:** `ReadJSON` caps JSON bodies at 1 MB. Receipt uploads (20 MB) and PDFs (10 MB) use `http.MaxBytesReader` (413 when exceeded). Receipt images go through `image.DecodeConfig` first and are rejected above 50 MP (413). PDF extraction is bounded by `pdfParseTimeout` plus a concurrency semaphore (`handlers/limits.go`). `main.go` sets Read/ReadHeader/Write/Idle timeouts; WriteTimeout must stay above the 90 s Claude call.
 
 **Units system:** 14 units across 3 dimensions (mass, volume, count). Units must be same-dimension to convert. Count units don't inter-convert. The `preferred_unit` on an inventory item is the canonical unit for display and aggregation.
 
@@ -112,7 +114,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips products that already have an unchecked list row (any lot of the same name) to avoid duplicates. Weekly and recipe additions go through `services.MergeIntoShoppingList`: the amount merges into the lowest-id *unchecked* row for the same inventory product or normalised name with a compatible unit (converted into the row's unit); otherwise a new row is inserted. Provenance is stored in `shopping_list_sources` (one row per shopping_id+source+ref, with a display label), returned as `sources` on the shopping API and shown in the UI. Weekly generation is **idempotent per `week_start`** (its previous contribution is replaced; items no longer needed are left alone, rows are never shrunk or deleted); adding a recipe is **additive** (user explicitly asked again, so it doubles the quantity on the same row). Checked rows are never merge targets. Any code deleting shopping rows must delete their `shopping_list_sources` first (FK; use the tx on the single connection).
 
-**Weekly shopping simulation:** `services/calendar.go` simulates inventory depletion day-by-day across the week, aggregating shortfalls. It handles unit conversion to each item's `preferred_unit`.
+**Weekly shopping simulation:** `services/calendar.go` simulates inventory depletion day-by-day across the week, aggregating shortfalls. It handles unit conversion to each item's `preferred_unit`. Entries already cooked (a linked `meal_history` row exists) are skipped, since their stock was already deducted.
 
 **TLS:** Self-signed certificates are auto-generated on startup (`tls.go`) with IP SANs so mobile devices on the same network can connect without cert errors. Certs are persisted as `cert.pem`/`key.pem`.
 
@@ -134,6 +136,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
 - Recipes have an `archived` flag (startup migration); archived recipes are hidden from `GET /api/recipes/` unless `?include_archived=true`. `POST /api/recipes/{id}/archive|unarchive` toggle it and touch nothing else.
 - Recipe hard delete is transactional: nulls `meal_history.recipe_id` and `inventory_history.recipe_id` (history and `recipe_name` kept), deletes calendar entries, ingredients, then the recipe. `meal_history.recipe_id` is nullable (rebuild migration for old DBs).
+- **Calendar ↔ cooking link:** `meal_history.calendar_entry_id` (nullable, added by ALTER after the rebuild migration; unique when set via a partial index). An entry is "cooked" iff a linked meal_history row exists (no separate flag). Deleting a calendar entry or hard-deleting a recipe sets the link to NULL (history kept; handlers do it explicitly). `meal_slot` is a fixed set (breakfast, lunch, dinner, snack); a startup migration lowercases/trims legacy text and maps snacks→snack, supper→dinner, leaving unmatched text untouched (UI shows it under "Other").
+- `PATCH /api/calendar/{id}` updates date / meal_slot / servings (any subset; 400 on bad values or empty body, 404 unknown id). `POST /api/meals` accepts `calendar_entry_id`: 404 unknown entry, 400 recipe_id mismatch (recipe_id may be omitted), 409 if already cooked; servings default to the entry's servings.
 
 **Security headers / CSP:** `securityHeaders` middleware in `main.go` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on all responses. CSP allows `'unsafe-eval'` because the standard Alpine build needs it (the CSP build can't run the inline expressions in index.html). Any new external origin must be added to `contentSecurityPolicy`; don't add inline scripts/styles or CDN tags.
 
@@ -143,3 +147,5 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 - Container runs as non-root UID 10001; base images are pinned by digest (bump the digest with the tag).
 - `/healthz` is auth-exempt: served outside auth/session middleware via `withHealthz` in main.go; used by the Dockerfile HEALTHCHECK.
+
+**Receipt parsing:** `handlers/receipt.go` forces the `record_receipt_items` tool, so output is schema-validated JSON (no fence stripping). `stop_reason == "max_tokens"` → `errReceiptTruncated`. Model comes from `ANTHROPIC_MODEL`. PLU enrichment checks `inventory.barcode`, then `inventory_skus` aliases (alias `quantity_per_scan` wins).

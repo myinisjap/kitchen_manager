@@ -9,6 +9,37 @@ import (
 	"kitchen_manager/services"
 )
 
+var mealSlots = map[string]bool{"breakfast": true, "lunch": true, "dinner": true, "snack": true}
+
+func normalizeMealSlot(s string) (string, bool) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return s, mealSlots[s]
+}
+
+const calendarEntrySelect = `SELECT mc.id, mc.date, mc.meal_slot, mc.recipe_id, mc.servings, mh.id
+	FROM meal_calendar mc LEFT JOIN meal_history mh ON mh.calendar_entry_id = mc.id`
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanCalendarEntry(s rowScanner) (map[string]any, error) {
+	var id, recipeID int64
+	var date, mealSlot string
+	var servings int
+	var mh sql.NullInt64
+	if err := s.Scan(&id, &date, &mealSlot, &recipeID, &servings, &mh); err != nil {
+		return nil, err
+	}
+	var mhID any
+	if mh.Valid {
+		mhID = mh.Int64
+	}
+	return map[string]any{
+		"id": id, "date": date, "meal_slot": mealSlot,
+		"recipe_id": recipeID, "servings": servings,
+		"cooked": mh.Valid, "meal_history_id": mhID,
+	}, nil
+}
+
 func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	var wsHub *Hub
 	if len(hub) > 0 {
@@ -19,6 +50,71 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			wsHub.Broadcast("calendar_updated")
 		}
 	}
+
+	mux.HandleFunc("PATCH /api/calendar/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := pathIDFromPattern(r, "id")
+		if !ok {
+			WriteError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		var input struct {
+			Date     *string `json:"date"`
+			MealSlot *string `json:"meal_slot"`
+			Servings *int    `json:"servings"`
+		}
+		if err := ReadJSON(r, &input); err != nil {
+			WriteError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+		if input.Date == nil && input.MealSlot == nil && input.Servings == nil {
+			WriteError(w, http.StatusBadRequest, "no fields to update")
+			return
+		}
+		sets := []string{}
+		args := []any{}
+		if input.Date != nil {
+			if _, err := time.Parse("2006-01-02", *input.Date); err != nil {
+				WriteError(w, http.StatusBadRequest, "invalid date format, use YYYY-MM-DD")
+				return
+			}
+			sets = append(sets, "date=?")
+			args = append(args, *input.Date)
+		}
+		if input.MealSlot != nil {
+			s, ok := normalizeMealSlot(*input.MealSlot)
+			if !ok {
+				WriteError(w, http.StatusBadRequest, "invalid meal_slot (breakfast, lunch, dinner, snack)")
+				return
+			}
+			sets = append(sets, "meal_slot=?")
+			args = append(args, s)
+		}
+		if input.Servings != nil {
+			if *input.Servings <= 0 {
+				WriteError(w, http.StatusBadRequest, "servings must be positive")
+				return
+			}
+			sets = append(sets, "servings=?")
+			args = append(args, *input.Servings)
+		}
+		args = append(args, id)
+		res, err := db.Exec(`UPDATE meal_calendar SET `+strings.Join(sets, ", ")+` WHERE id=?`, args...)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		e, err := scanCalendarEntry(db.QueryRow(calendarEntrySelect+` WHERE mc.id=?`, id))
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, e)
+		broadcastCalendar()
+	})
 
 	mux.HandleFunc("POST /api/calendar/", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -31,8 +127,13 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
-		if input.MealSlot == "" {
+		if strings.TrimSpace(input.MealSlot) == "" {
 			input.MealSlot = "dinner"
+		} else if s, ok := normalizeMealSlot(input.MealSlot); ok {
+			input.MealSlot = s
+		} else {
+			WriteError(w, http.StatusBadRequest, "invalid meal_slot (breakfast, lunch, dinner, snack)")
+			return
 		}
 		// Validate date format
 		if _, err := time.Parse("2006-01-02", input.Date); err != nil {
@@ -63,6 +164,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		WriteJSON(w, http.StatusCreated, map[string]any{
 			"id": id, "date": input.Date, "meal_slot": input.MealSlot,
 			"recipe_id": input.RecipeID, "servings": input.Servings,
+			"cooked": false, "meal_history_id": nil,
 		})
 		broadcastCalendar()
 	})
@@ -78,7 +180,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		endStr := t.AddDate(0, 0, 6).Format("2006-01-02")
-		rows, err := db.Query(`SELECT id,date,meal_slot,recipe_id,servings FROM meal_calendar WHERE date>=? AND date<=? ORDER BY date`, startStr, endStr)
+		rows, err := db.Query(calendarEntrySelect+` WHERE mc.date>=? AND mc.date<=? ORDER BY mc.date, mc.id`, startStr, endStr)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -86,17 +188,12 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		defer rows.Close()
 		var entries []map[string]any
 		for rows.Next() {
-			var id, recipeID int64
-			var date, mealSlot string
-			var servings int
-			if err := rows.Scan(&id, &date, &mealSlot, &recipeID, &servings); err != nil {
+			e, err := scanCalendarEntry(rows)
+			if err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			entries = append(entries, map[string]any{
-				"id": id, "date": date, "meal_slot": mealSlot,
-				"recipe_id": recipeID, "servings": servings,
-			})
+			entries = append(entries, e)
 		}
 		if err := rows.Err(); err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
@@ -114,14 +211,29 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		res, err := db.Exec(`DELETE FROM meal_calendar WHERE id=?`, id)
+		tx, err := db.Begin()
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
+		if _, err := tx.Exec(`UPDATE meal_history SET calendar_entry_id=NULL WHERE calendar_entry_id=?`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		res, err := tx.Exec(`DELETE FROM meal_calendar WHERE id=?`, id)
+		if err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			tx.Rollback()
 			WriteError(w, http.StatusNotFound, "not found")
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)

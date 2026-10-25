@@ -81,7 +81,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		if item.QuantityPerScan < 0 {
 			item.QuantityPerScan = 0
 		}
-		item.Name = strings.ToLower(strings.TrimSpace(item.Name))
+		item.Name = strings.TrimSpace(item.Name)
 
 		// Check for an existing item with identical identifying fields; if found, add quantity instead of inserting.
 		// Only merge when barcode is non-empty to avoid incorrectly merging unrelated items with no barcode.
@@ -96,7 +96,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var existingID int64
 		if item.Barcode != "" {
 			err = tx.QueryRow(
-				`SELECT id FROM inventory WHERE name=? AND unit=? AND location=? AND barcode=? AND expiration_date=? LIMIT 1`,
+				`SELECT id FROM inventory WHERE name=? COLLATE NOCASE AND unit=? AND location=? AND barcode=? AND expiration_date=? LIMIT 1`,
 				item.Name, item.Unit, item.Location, item.Barcode, item.ExpirationDate,
 			).Scan(&existingID)
 		} else {
@@ -202,7 +202,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 		if item.LowThreshold == 0 {
 			// Unset: inherit the product's existing par level (0 if none).
-			if err := tx.QueryRow(`SELECT COALESCE(MAX(low_threshold),0) FROM inventory WHERE name=?`, item.Name).Scan(&item.LowThreshold); err != nil {
+			if err := tx.QueryRow(`SELECT COALESCE(MAX(low_threshold),0) FROM inventory WHERE name=? COLLATE NOCASE`, item.Name).Scan(&item.LowThreshold); err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
@@ -267,9 +267,9 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var rows *sql.Rows
 		var err error
 		if q == "" {
-			rows, err = db.Query(`SELECT i.name, MAX(i.unit) AS unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold, COALESCE((SELECT inv.location FROM inventory inv JOIN inventory_history h ON h.inventory_id = inv.id WHERE inv.name = i.name ORDER BY h.changed_at DESC LIMIT 1), MAX(i.location)) AS location FROM inventory i GROUP BY i.name ORDER BY i.name LIMIT 10`)
+			rows, err = db.Query(`SELECT MIN(i.name) AS name, MAX(i.unit) AS unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold, COALESCE((SELECT inv.location FROM inventory inv JOIN inventory_history h ON h.inventory_id = inv.id WHERE inv.name = i.name COLLATE NOCASE ORDER BY h.changed_at DESC LIMIT 1), MAX(i.location)) AS location FROM inventory i GROUP BY i.name COLLATE NOCASE ORDER BY name COLLATE NOCASE LIMIT 10`)
 		} else {
-			rows, err = db.Query(`SELECT i.name, MAX(i.unit) AS unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold, COALESCE((SELECT inv.location FROM inventory inv JOIN inventory_history h ON h.inventory_id = inv.id WHERE inv.name = i.name ORDER BY h.changed_at DESC LIMIT 1), MAX(i.location)) AS location FROM inventory i WHERE i.name LIKE ? GROUP BY i.name ORDER BY i.name LIMIT 10`, q+"%")
+			rows, err = db.Query(`SELECT MIN(i.name) AS name, MAX(i.unit) AS unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold, COALESCE((SELECT inv.location FROM inventory inv JOIN inventory_history h ON h.inventory_id = inv.id WHERE inv.name = i.name COLLATE NOCASE ORDER BY h.changed_at DESC LIMIT 1), MAX(i.location)) AS location FROM inventory i WHERE i.name LIKE ? GROUP BY i.name COLLATE NOCASE ORDER BY name COLLATE NOCASE LIMIT 10`, q+"%")
 		}
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
@@ -410,7 +410,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			q += ` AND name LIKE ?`
 			args = append(args, "%"+nameFilter+"%")
 		}
-		q += ` GROUP BY name, unit ORDER BY name`
+		q += ` GROUP BY name COLLATE NOCASE, unit ORDER BY name COLLATE NOCASE`
 
 		rows, err := db.Query(q, args...)
 		if err != nil {
@@ -594,7 +594,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if p.Name != nil {
-			n := strings.ToLower(strings.TrimSpace(*p.Name))
+			n := strings.TrimSpace(*p.Name)
 			p.Name = &n
 		}
 
@@ -685,7 +685,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		} else if p.Name != nil {
 			// Lot moved to another product: adopt that product's par, if it has other lots.
 			var other sql.NullFloat64
-			if err := tx.QueryRow(`SELECT MAX(low_threshold) FROM inventory WHERE name=? AND id<>?`, finalName, id).Scan(&other); err == nil && other.Valid {
+			if err := tx.QueryRow(`SELECT MAX(low_threshold) FROM inventory WHERE name=? COLLATE NOCASE AND id<>?`, finalName, id).Scan(&other); err == nil && other.Valid {
 				if _, err := tx.Exec(`UPDATE inventory SET low_threshold=? WHERE id=?`, other.Float64, id); err != nil {
 					WriteError(w, http.StatusInternalServerError, err.Error())
 					return
@@ -1259,7 +1259,7 @@ func pathIDFromPattern(r *http.Request, param string) (int64, bool) {
 func setProductPar(ex interface {
 	Exec(string, ...any) (sql.Result, error)
 }, name string, par float64) error {
-	_, err := ex.Exec(`UPDATE inventory SET low_threshold=? WHERE name=?`, par, name)
+	_, err := ex.Exec(`UPDATE inventory SET low_threshold=? WHERE name=? COLLATE NOCASE`, par, name)
 	return err
 }
 
