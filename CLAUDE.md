@@ -84,7 +84,9 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `units/` — unit enum definitions, dimension validation, and conversion math
 - `internal/database/` — SQLite schema creation and migration (runs on startup)
 - `internal/auth/` — OAuth flow, session management, auth middleware
-- `internal/tlscert/` — self-signed TLS certificate generation
+- `internal/tlscert/` — self-signed TLS certificate generation (key.pem is written 0600)
+
+**CSRF / origin guard:** `handlers.APIGuard` (wired in main.go) requires `Content-Type: application/json` on POST/PUT/PATCH/DELETE under `/api/` (multipart only for `/api/receipt/parse` and `/api/recipes/import/pdf`) and rejects a cross-origin `Origin` with 403. The WS upgrader uses the same `SameOrigin` check (host match vs request Host or BASE_URL host). New frontend mutating fetches must send the JSON header. `PATCH /api/settings` only accepts keys in `allowedSettingKeys`; add new settings there.
 - `deploy/` — Dockerfile, docker-compose.yml (Traefik reverse proxy, not Caddy)
   Do not add a headless-browser renderer (e.g. Splash) to the compose network; it was removed for security (it could reach app:8080 bypassing forward-auth). Recipe URL import is a direct SSRF-safe fetch (`handlers/safefetch.go`).
 - `static/index.html` — frontend markup; logic in `static/app.js`, dark-mode bootstrap in `static/theme-init.js`, styles in generated `static/tailwind.css`, third-party JS in `static/vendor/`. No inline scripts/styles (CSP)

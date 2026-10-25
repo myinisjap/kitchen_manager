@@ -752,7 +752,7 @@ function app() {
 
     async deleteItem(id) {
       if (!confirm('Delete this item?')) return;
-      await fetch(this.baseUrl + '/api/inventory/' + id, { method: 'DELETE' });
+      await fetch(this.baseUrl + '/api/inventory/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       await this.fetchInventory();
       this.showToast('Item deleted');
     },
@@ -790,18 +790,18 @@ function app() {
     },
 
     async deleteShoppingItem(id) {
-      await fetch(this.baseUrl + '/api/shopping/' + id, { method: 'DELETE' });
+      await fetch(this.baseUrl + '/api/shopping/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       await this.fetchShoppingList();
     },
 
     async clearCheckedItems() {
-      await fetch(this.baseUrl + '/api/shopping/checked', { method: 'DELETE' });
+      await fetch(this.baseUrl + '/api/shopping/checked', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       await this.fetchShoppingList();
       this.showToast('Cleared checked items');
     },
 
     async generateFromThresholds() {
-      const res = await fetch(this.baseUrl + '/api/shopping/generate-from-thresholds', { method: 'POST' });
+      const res = await fetch(this.baseUrl + '/api/shopping/generate-from-thresholds', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const data = await res.json();
       await this.fetchShoppingList();
       this.showToast(`Added ${data.added} low-stock items`);
@@ -1037,7 +1037,7 @@ function app() {
 
     async addRecipeToShoppingList(recipe, servings) {
       const s = servings || recipe.servings || 1;
-      const res = await fetch(this.baseUrl + '/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST' });
+      const res = await fetch(this.baseUrl + '/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const data = await res.json();
       this.modal = null;
       this.showToast(`Added ${data.added} missing ingredient(s) to shopping list`);
@@ -1081,7 +1081,7 @@ function app() {
         }
       } catch (e) { /* fall through to plain confirm */ }
       if (!confirm(msg)) return;
-      const delRes = await fetch(this.baseUrl + '/api/recipes/' + id, { method: 'DELETE' });
+      const delRes = await fetch(this.baseUrl + '/api/recipes/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       if (!delRes.ok) {
         const body = await delRes.text();
         this.showToast(`Failed to delete: ${body}`, 'error');
@@ -1169,14 +1169,14 @@ function app() {
     },
 
     async deleteCalendarEntry(id) {
-      await fetch(this.baseUrl + '/api/calendar/' + id, { method: 'DELETE' });
+      await fetch(this.baseUrl + '/api/calendar/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
       await this.fetchCalendar();
       this.showToast('Meal removed');
     },
 
     async generateWeeklyShopping() {
       const start = this.calendarWeekStart.toISOString().split('T')[0];
-      const res = await fetch(this.baseUrl + '/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST' });
+      const res = await fetch(this.baseUrl + '/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const data = await res.json();
       this.showToast(`Added ${data.items.length} item(s) to shopping list`);
       await this.fetchShoppingList();
@@ -1381,7 +1381,7 @@ function app() {
 
     async deleteSkuAlias(itemId, skuId) {
       try {
-        const res = await fetch(this.baseUrl + '/api/skus/' + skuId, { method: 'DELETE' });
+        const res = await fetch(this.baseUrl + '/api/skus/' + skuId, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
         if (res.ok) {
           this.skusByItem[itemId] = (this.skusByItem[itemId] || []).filter(s => s.id !== skuId);
           this.showToast('Alias removed');
