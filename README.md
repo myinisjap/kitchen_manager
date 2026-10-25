@@ -39,7 +39,7 @@ A self-hosted app for tracking your pantry, planning meals, managing recipes, an
 
 - **Pantry tracking** — quantities, units, locations, expiry dates, low-stock alerts
 - **Barcode scanning** — use your phone camera to look up or add items
-- **Shopping list** — manual items, auto-generated from per-item par levels (restock to par), or pulled from recipes; tick items off and put them away into the pantry in one tap (Bought / Put away checked items)
+- **Shopping list** — manual items, auto-generated from per-item par levels (restock to par), or pulled from recipes; tick items off and put them away into the pantry in one tap (Bought / Put away checked items) Weekly-plan and recipe items merge into existing unchecked rows (no duplicates) and show which recipes or week they came from
 - **Servings scaling** — scale any recipe up or down with a servings stepper; cooking, shopping lists and the meal calendar scale ingredient quantities to match
 - **Recipe import** — paste a URL from any major recipe site; ingredients auto-link to your pantry
 - **Recipe archiving** — archive a recipe to hide it without losing its cooking history; deleting a recipe also keeps past cooking history
@@ -170,7 +170,9 @@ Example crontab entry (note the escaped `%`), then copy the files to another mac
 ```
 If the app sits behind OAuth, hit the container port directly from the host, or use the `sqlite3 ... VACUUM INTO` command above instead.
 
-To restore, stop the app, replace `kitchen.db` with your backup, and restart.
+To restore, stop the app, replace `kitchen.db` with your backup, **delete any `kitchen.db-wal` and `kitchen.db-shm`**, and restart.
+
+The database runs in WAL mode, so `kitchen.db-wal` and `kitchen.db-shm` sit next to `kitchen.db` while the app runs. Schema migrations run automatically on startup; an older binary refuses a newer database.
 
 ---
 

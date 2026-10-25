@@ -85,7 +85,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `handlers/` — HTTP request handlers (one file per domain: inventory, shopping, recipes, calendar)
 - `services/` — business logic that spans multiple DB tables (threshold generation, weekly shopping simulation)
 - `units/` — unit enum definitions, dimension validation, and conversion math
-- `internal/database/` — SQLite schema creation and migration (runs on startup)
+- `internal/database/` — SQLite setup + numbered, append-only migrations tracked by `PRAGMA user_version` (run on startup). `foreign_keys`, `busy_timeout` and WAL are set in the DSN so they apply to every connection.
 - `internal/auth/` — OAuth flow, session management, auth middleware
 - `internal/tlscert/` — self-signed TLS certificate generation (key.pem is written 0600)
 
@@ -106,11 +106,11 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Stock deductions:** `POST /api/inventory/{id}/deduct` (remove-stock scans, deduct modal with `single_lot`) and cooking (`POST /api/meals`) go through `deductStock` in `handlers/deduct.go`. It converts the requested unit to `preferred_unit` (or `unit`), cascades expiry-first across lots, retires emptied lots, and returns an incompatible-units error for cross-dimension deductions (e.g. cups vs grams); cooking skips that ingredient and adds a `warnings` entry to the 201 response. `PATCH /api/inventory/{id}` edits only that lot (typed fields, one UPDATE in one tx, wrong types → 400; quantity 0 retires the lot via `retireEmptyLots`).
 
-**Stock additions:** `POST /api/inventory/` (merge-or-insert, incl. SKU-alias merge), `POST /api/skus/item/{id}` and `merge-into` each run in a single transaction and add via `addStock` (`handlers/stock.go`, `quantity = quantity + ?`), never a quantity computed in Go. Because `OpenDB` uses `SetMaxOpenConns(1)`, a handler must not touch `db` while its `tx` is open (it deadlocks) — pass `tx` to `LogHistory` and read back via `tx`. Receipt import posts lines sequentially.
+**Stock additions:** `POST /api/inventory/` (merge-or-insert, incl. SKU-alias merge), `POST /api/skus/item/{id}` and `merge-into` each run in a single transaction and add via `addStock` (`handlers/stock.go`, `quantity = quantity + ?`), never a quantity computed in Go. Because `OpenDB` uses `SetMaxOpenConns(1)` (kept for single-writer and `:memory:` reasons, not for FKs), a handler must not touch `db` while its `tx` is open (it deadlocks) — pass `tx` to `LogHistory` and read back via `tx`. Receipt import posts lines sequentially.
 
 **Putting away shopping:** `POST /api/shopping/{id}/bought` and `POST /api/shopping/put-away` (all checked rows; per-row overrides by id, rows that fail unit/validation checks are skipped and reported) live in `handlers/putaway.go`, one transaction, stock added via `addStock`. The product is the linked `inventory_id` (or override), else an existing product matching the normalised name, else a new product. Quantity converts into the product's effective unit (`preferred_unit`, else `unit`); cross-dimension units give 400 and change nothing. Lot rule: same name+unit+location+expiry, else reuse a zero-quantity lot, else a new lot (inherits par). The shopping row is deleted (a second call is 404). History source `shopping_bought`; broadcasts `inventory_updated` + `shopping_updated`.
 
-**Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips products that already have an unchecked list row (any lot of the same name) to avoid duplicates.
+**Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips products that already have an unchecked list row (any lot of the same name) to avoid duplicates. Weekly and recipe additions go through `services.MergeIntoShoppingList`: the amount merges into the lowest-id *unchecked* row for the same inventory product or normalised name with a compatible unit (converted into the row's unit); otherwise a new row is inserted. Provenance is stored in `shopping_list_sources` (one row per shopping_id+source+ref, with a display label), returned as `sources` on the shopping API and shown in the UI. Weekly generation is **idempotent per `week_start`** (its previous contribution is replaced; items no longer needed are left alone, rows are never shrunk or deleted); adding a recipe is **additive** (user explicitly asked again, so it doubles the quantity on the same row). Checked rows are never merge targets. Any code deleting shopping rows must delete their `shopping_list_sources` first (FK; use the tx on the single connection).
 
 **Weekly shopping simulation:** `services/calendar.go` simulates inventory depletion day-by-day across the week, aggregating shortfalls. It handles unit conversion to each item's `preferred_unit`.
 
@@ -118,7 +118,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Testing:** Tests use in-memory SQLite (not mocks). `handlers/inventory_test.go` builds the schema in-process; `units/units_test.go` tests conversion logic directly.
 
-**Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units).
+**Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units). Every mutating request (POST/PUT/PATCH/DELETE) must use `apiFetch(path, opts, {errorPrefix, onError})` in `static/app.js`. It shows an error toast with the server's `error` message on non-2xx or network failure and returns null, so callers must bail out without updating state. `TestMutatingFetchesUseWrapper` enforces this.
 
 **In-app OAuth (`OAUTH_ENABLED`):** optional second layer behind Traefik forward-auth. Unauthenticated HTML requests redirect to `BASE_URL/auth/login`; `/api/*` and `/ws` get 401 JSON; session token is renewed on login.
 
@@ -126,8 +126,10 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 ## Database Schema Notes
 
+- `shopping_list_sources` — per-row provenance (shopping_id, source, ref, label, quantity; UNIQUE on shopping_id+source+ref; ON DELETE CASCADE). Used to make weekly generation idempotent and to show where a need came from.
 - `inventory.low_threshold` — par level per product (name): kept identical across all lots; `generate-from-thresholds` sums all lots of a name converted to the product unit (preferred_unit, else first lot's unit) and, when total < par, adds `par − total`. 0 = unset (no rule).
-- `inventory.preferred_unit` — added via migration on startup if the column doesn't exist
+- Migrations: append a new entry to `migrations` in `internal/database/db.go`; never edit or reorder old ones. For FK/constraint changes use `disableFK: true` plus a table rebuild. An older binary refuses a newer DB.
+- `inventory_id` FKs on `shopping_list`, `recipe_ingredients`, `meal_history_ingredients` are `ON DELETE SET NULL`.
 - `shopping_list.inventory_id` is nullable (manual items may not link to an inventory item)
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
 - Recipes have an `archived` flag (startup migration); archived recipes are hidden from `GET /api/recipes/` unless `?include_archived=true`. `POST /api/recipes/{id}/archive|unarchive` toggle it and touch nothing else.

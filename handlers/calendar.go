@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"strings"
 	"time"
 
 	"kitchen_manager/services"
@@ -145,25 +146,42 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		var items []map[string]any
+		tx, err := db.Begin()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer tx.Rollback() //nolint:errcheck
+		items := []map[string]any{}
+		created, merged := 0, 0
 		for _, n := range needs {
-			res, err := db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'calendar')`,
-				n.InventoryID, n.Name, n.QuantityNeeded, n.Unit)
+			mr, err := services.MergeIntoShoppingList(tx, services.ListAddition{
+				InventoryID: n.InventoryID, Name: n.Name, Unit: n.Unit, Quantity: n.QuantityNeeded,
+				Source: "calendar", Ref: startStr,
+				Label: "Week of " + startStr + ": " + strings.Join(n.Recipes, ", "),
+				Mode:  services.MergeReplace,
+			})
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			newID, _ := res.LastInsertId()
+			if mr.Created {
+				created++
+			} else {
+				merged++
+			}
 			items = append(items, map[string]any{
-				"id": newID, "inventory_id": n.InventoryID, "name": n.Name,
+				"id": mr.ShoppingID, "inventory_id": n.InventoryID, "name": n.Name,
 				"quantity_needed": n.QuantityNeeded, "unit": n.Unit,
-				"checked": false, "source": "calendar",
+				"checked": false, "source": "calendar", "merged": !mr.Created,
+				"total_quantity": mr.Quantity, "total_unit": mr.Unit,
 			})
 		}
-		if items == nil {
-			items = []map[string]any{}
+		if err := tx.Commit(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
-		WriteJSON(w, http.StatusOK, map[string]any{"week_start": startStr, "items": items})
+		WriteJSON(w, http.StatusOK, map[string]any{"week_start": startStr, "items": items, "added": created, "merged": merged})
 		if len(items) > 0 {
 			if wsHub != nil {
 				wsHub.Broadcast("shopping_updated")
