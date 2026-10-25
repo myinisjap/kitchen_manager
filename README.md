@@ -40,6 +40,7 @@ A self-hosted app for tracking your pantry, planning meals, managing recipes, an
 - **Pantry tracking** — quantities, units, locations, expiry dates, low-stock alerts
 - **Barcode scanning** — use your phone camera to look up or add items
 - **Shopping list** — manual items, auto-generated from per-item par levels (restock to par), or pulled from recipes; tick items off and put them away into the pantry in one tap (Bought / Put away checked items)
+- **Servings scaling** — scale any recipe up or down with a servings stepper; cooking, shopping lists and the meal calendar scale ingredient quantities to match
 - **Recipe import** — paste a URL from any major recipe site; ingredients auto-link to your pantry
 - **Meal calendar** — plan breakfast/lunch/dinner for the week; cooking a meal deducts ingredients
 - **Meal history & cost tracking** — log meals cooked and see weekly/monthly spend
@@ -182,6 +183,7 @@ All settings go in your `.env` file:
 | `SELF_SIGNED_TLS` | — | Set to `true` to serve HTTPS on port 8443 (needed for phone barcode scanning) |
 | `OAUTH_ENABLED` | — | Set to `true` to require Google login |
 | `OAUTH_ALLOWED_EMAILS` | — | Comma-separated list of emails allowed to log in |
+| `TRUST_FORWARDED_USER` | — | Set to `true` only if the app is reachable solely via Traefik forward-auth; trusts `X-Forwarded-User` for "changed by" history |
 | `GOOGLE_CLIENT_ID` | — | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | — | From Google Cloud Console |
 | `SESSION_SECRET` | — | Random string for securing login cookies (`openssl rand -hex 32`) |

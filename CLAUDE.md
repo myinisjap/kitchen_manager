@@ -62,6 +62,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml down && docker compo
 | `DB_PATH` | `./kitchen.db` | SQLite file path |
 | `SELF_SIGNED_TLS` | unset | Set to `true` to serve self-signed HTTPS on :8443 |
 | `OAUTH_ENABLED` | unset | Set to `true` to require Google OAuth |
+| `TRUST_FORWARDED_USER` | unset | Set to `true` only when the app is reachable solely through Traefik forward-auth (which must forward `X-Forwarded-User`); the header then becomes the user identity (history `changed_by`, `/api/me`). Leave unset otherwise: the header is spoofable. OAuth session email takes precedence. |
 | `OAUTH_ALLOWED_EMAILS` | — | Comma-separated email whitelist |
 | `GOOGLE_CLIENT_ID` | — | Google Cloud OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | — | Google Cloud OAuth client secret |
@@ -92,6 +93,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Request flow:** Frontend → Handler → Service (if needed) → Raw SQL → SQLite (`kitchen.db`)
 
 ## Key Design Decisions
+
+- **Servings scaling:** every ingredient quantity is scaled by `units.ServingsScale(selected, recipe.servings)` (recipe.servings 0→1) when cooking, adding to the shopping list (default = recipe servings) and generating weekly shopping. Calendar entries default to the recipe's servings. The frontend mirrors the math in `scaledQty`; `settings.default_servings` seeds new recipes and is the stepper fallback.
 
 **Request limits & timeouts:** `ReadJSON` caps JSON bodies at 1 MB. Receipt uploads (20 MB) and PDFs (10 MB) use `http.MaxBytesReader` (413 when exceeded). Receipt images go through `image.DecodeConfig` first and are rejected above 50 MP (413). PDF extraction is bounded by `pdfParseTimeout` plus a concurrency semaphore (`handlers/limits.go`). `main.go` sets Read/ReadHeader/Write/Idle timeouts; WriteTimeout must stay above the 60 s Claude call.
 
@@ -126,6 +129,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - Recipe deletion is transactional (deletes ingredients first, then recipe)
 
 **Security headers / CSP:** `securityHeaders` middleware in `main.go` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on all responses. CSP allows `'unsafe-eval'` because the standard Alpine build needs it (the CSP build can't run the inline expressions in index.html). Any new external origin must be added to `contentSecurityPolicy`; don't add inline scripts/styles or CDN tags.
+
+- `meal_history.cooked_at` is always stored as RFC3339 UTC (`2006-01-02T15:04:05Z`); POST normalizes client offsets and a startup migration normalizes legacy rows. `/api/meals/stats` takes `tz` (IANA, preferred) or `tz_offset` (minutes east of UTC), computes week/month boundaries in that zone, and queries in UTC.
 
 ## Deploy notes
 

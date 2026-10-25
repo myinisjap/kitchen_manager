@@ -223,10 +223,10 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			stats = append(stats, map[string]any{
-				"inventory_id":  inventoryID,
-				"item_name":     itemName,
-				"change_count":  count,
-				"last_changed":  lastChanged,
+				"inventory_id": inventoryID,
+				"item_name":    itemName,
+				"change_count": count,
+				"last_changed": lastChanged,
 			})
 		}
 		if err := rows.Err(); err != nil {

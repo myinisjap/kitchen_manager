@@ -301,6 +301,17 @@
                     </template>
                   </div>
                 </template>
+                <div class="flex items-center gap-2 mt-2 text-sm text-gray-600 dark:text-gray-300">
+                  <span x-text="'Serves ' + recipe.servings"></span>
+                  <button @click="setRecipeServings(recipe, recipeScaleServings(recipe) - 1)" class="border dark:border-gray-600 dark:text-gray-200 rounded px-2 py-0.5 text-sm">−</button>
+                  <span class="font-medium w-6 text-center dark:text-gray-100" x-text="recipeScaleServings(recipe)"></span>
+                  <button @click="setRecipeServings(recipe, recipeScaleServings(recipe) + 1)" class="border dark:border-gray-600 dark:text-gray-200 rounded px-2 py-0.5 text-sm">+</button>
+                </div>
+                <ul class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  <template x-for="ing in (recipe.ingredients || [])" :key="ing.id">
+                    <li x-text="formatQty(scaledQty(ing.quantity, recipeScaleServings(recipe), recipe)) + ' ' + ing.unit + ' ' + ing.name"></li>
+                  </template>
+                </ul>
               </div>
               <div class="flex gap-2 ml-2">
                 <button @click="viewRecipe(recipe)" class="text-blue-600 text-sm">View</button>
@@ -1001,7 +1012,7 @@
         <ul class="space-y-1">
           <template x-for="ing in selectedRecipe?.ingredients" :key="ing.id">
             <li class="text-sm text-gray-700 dark:text-gray-200">
-              • <span x-text="ing.quantity"></span> <span x-text="ing.unit"></span> <span x-text="ing.name"></span>
+              • <span x-text="formatQty(scaledQty(ing.quantity, recipeScaleServings(selectedRecipe), selectedRecipe))"></span> <span x-text="ing.unit"></span> <span x-text="ing.name"></span>
             </li>
           </template>
         </ul>
@@ -1014,9 +1025,10 @@
       </template>
       <div class="flex items-center gap-2 pt-2">
         <label class="text-sm text-gray-600 dark:text-gray-300 whitespace-nowrap">Servings:</label>
-        <button @click="recipeViewServings = Math.max(1, recipeViewServings - 1)" class="border dark:border-gray-600 dark:text-gray-200 rounded px-2 py-1 text-sm">−</button>
-        <span class="text-sm font-medium w-6 text-center dark:text-gray-100" x-text="recipeViewServings"></span>
-        <button @click="recipeViewServings++" class="border dark:border-gray-600 dark:text-gray-200 rounded px-2 py-1 text-sm">+</button>
+        <button @click="setRecipeServings(selectedRecipe, recipeScaleServings(selectedRecipe) - 1)" class="border dark:border-gray-600 dark:text-gray-200 rounded px-2 py-1 text-sm">−</button>
+        <span class="text-sm font-medium w-6 text-center dark:text-gray-100" x-text="selectedRecipe ? recipeScaleServings(selectedRecipe) : ''"></span>
+        <button @click="setRecipeServings(selectedRecipe, recipeScaleServings(selectedRecipe) + 1)" class="border dark:border-gray-600 dark:text-gray-200 rounded px-2 py-1 text-sm">+</button>
+        <span class="text-xs text-gray-400" x-text="'(recipe makes ' + recipeBaseServings(selectedRecipe) + ')'"></span>
       </div>
 
       <!-- Schedule on calendar -->
@@ -1030,7 +1042,7 @@
             <option value="dinner">Dinner</option>
           </select>
         </div>
-        <button @click="addRecipeToCalendar(selectedRecipe, recipeViewServings)"
+        <button @click="addRecipeToCalendar(selectedRecipe, recipeScaleServings(selectedRecipe))"
                 :disabled="!recipeViewDate"
                 class="w-full bg-purple-600 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-40">
           📅 Add to Calendar
@@ -1040,8 +1052,8 @@
       <div class="flex gap-2">
         <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Close</button>
         <button @click="editRecipe(selectedRecipe)" class="flex-1 border border-gray-400 dark:border-gray-500 dark:text-gray-200 rounded-lg py-2 text-sm font-medium">✏️ Edit</button>
-        <button @click="addRecipeToShoppingList(selectedRecipe, recipeViewServings)" class="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-medium">+ List</button>
-        <button @click="cookIt(selectedRecipe, recipeViewServings)" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">🍳</button>
+        <button @click="addRecipeToShoppingList(selectedRecipe, recipeScaleServings(selectedRecipe))" class="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-medium">+ List</button>
+        <button @click="cookIt(selectedRecipe, recipeScaleServings(selectedRecipe))" class="flex-1 bg-green-600 text-white rounded-lg py-2 text-sm font-medium">🍳</button>
       </div>
     </div>
   </div>
@@ -1063,7 +1075,7 @@
                 <span x-text="ing.name" class="text-gray-800 dark:text-gray-200"></span>
                 <span class="text-gray-500 dark:text-gray-400 shrink-0">
                   <span x-text="ing.inventory_id
-                    ? ((ing.quantity * cookItConfirm.servings / (cookItConfirm.recipe.servings || 1)).toFixed(2).replace(/\.?0+$/, ''))
+                    ? (formatQty(scaledQty(ing.quantity, cookItConfirm.servings, cookItConfirm.recipe)))
                     : '—'"></span>
                   <span x-show="ing.inventory_id" x-text="' ' + ing.unit" class="ml-0.5"></span>
                   <span x-show="!ing.inventory_id" class="text-xs text-gray-400">(not linked)</span>
@@ -1090,7 +1102,7 @@
       <p class="text-sm text-gray-500 dark:text-gray-400">
         <span x-text="calendarEntryForm.date"></span> — <span x-text="calendarEntryForm.meal_slot" class="capitalize"></span>
       </p>
-      <select x-model.number="calendarEntryForm.recipe_id" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+      <select x-model.number="calendarEntryForm.recipe_id" @change="onCalendarRecipeChange()" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
         <option value="">Select a recipe...</option>
         <template x-for="recipe in recipes" :key="recipe.id">
           <option :value="recipe.id" x-text="recipe.name"></option>
@@ -1098,7 +1110,7 @@
       </select>
       <div class="flex gap-2 items-center">
         <label class="text-sm text-gray-600 dark:text-gray-300">Servings:</label>
-        <input x-model.number="calendarEntryForm.servings" type="number" min="1" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        <input x-model.number="calendarEntryForm.servings" type="number" min="1" placeholder="Recipe default" class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
       </div>
       <div class="flex gap-2 pt-2">
         <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Cancel</button>

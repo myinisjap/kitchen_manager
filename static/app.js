@@ -80,7 +80,8 @@ function app() {
     recipeTagFilter: '',
     recipeAvailableOnly: false,
     selectedRecipe: null,
-    recipeViewServings: 2,
+    settings: {},
+    recipeServings: {},
     recipeForm: { id: null, name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] },
     recipeViewDate: '',
     recipeViewSlot: 'dinner',
@@ -107,7 +108,7 @@ function app() {
     // Calendar
     calendarEntries: [],
     calendarWeekStart: null,
-    calendarEntryForm: { date: '', meal_slot: 'dinner', recipe_id: '', servings: 1 },
+    calendarEntryForm: { date: '', meal_slot: 'dinner', recipe_id: '', servings: null },
 
     toggleDark() {
       this.darkMode = !this.darkMode;
@@ -153,6 +154,7 @@ function app() {
       await this.fetchInventory();
       await this.fetchExpiring();
       await this.fetchShoppingList();
+      await this.fetchSettings();
       await this.fetchRecipes();
       await this.fetchCalendar();
       const uRes = await fetch(this.baseUrl + '/api/units');
@@ -953,7 +955,7 @@ function app() {
     },
 
     openAddRecipe() {
-      this.recipeForm = { id: null, name: '', description: '', instructions: '', tags: '', servings: 2, ingredients: [] };
+      this.recipeForm = { id: null, name: '', description: '', instructions: '', tags: '', servings: this.defaultServings(), ingredients: [] };
       this.modal = 'recipe';
     },
 
@@ -964,7 +966,7 @@ function app() {
         description: recipe.description || '',
         instructions: recipe.instructions || '',
         tags: recipe.tags || '',
-        servings: recipe.servings || 2,
+        servings: recipe.servings || this.defaultServings(),
         ingredients: (recipe.ingredients || []).map(i => ({
           inventory_id: i.inventory_id || null,
           name: i.name,
@@ -990,7 +992,7 @@ function app() {
       if (this.recipeImportTab === 'paste') {
         const text = this.recipeImportText.trim();
         if (!text) return;
-        this.recipeForm = { id: null, name: '', description: '', instructions: text, tags: '', servings: 2, ingredients: [] };
+        this.recipeForm = { id: null, name: '', description: '', instructions: text, tags: '', servings: this.defaultServings(), ingredients: [] };
         this.modal = 'recipe';
         return;
       }
@@ -1044,13 +1046,13 @@ function app() {
           description: rec.description || '',
           instructions: rec.instructions || '',
           tags: rec.tags || '',
-          servings: rec.servings || 2,
+          servings: rec.servings || this.defaultServings(),
           ingredients: [],
         };
         this.modal = 'recipe';
         this.$nextTick(() => { this.recipeForm.ingredients = ingredients; });
       } else {
-        this.recipeForm = { id: null, name: '', description: '', instructions: data.text || '', tags: '', servings: 2, ingredients: [] };
+        this.recipeForm = { id: null, name: '', description: '', instructions: data.text || '', tags: '', servings: this.defaultServings(), ingredients: [] };
         this.modal = 'recipe';
       }
     },
@@ -1070,10 +1072,50 @@ function app() {
 
     viewRecipe(recipe) {
       this.selectedRecipe = recipe;
-      this.recipeViewServings = recipe.servings || 2;
       this.recipeViewDate = new Date().toISOString().split('T')[0];
       this.recipeViewSlot = 'dinner';
       this.modal = 'viewRecipe';
+    },
+
+    async fetchSettings() {
+      try {
+        const res = await fetch(this.baseUrl + '/api/settings');
+        if (res.ok) this.settings = await res.json();
+      } catch (e) { /* non-fatal */ }
+    },
+
+    defaultServings() {
+      const n = parseInt(this.settings && this.settings.default_servings);
+      return n > 0 ? n : 2;
+    },
+
+    // Denominator for scaling; mirrors units.ServingsScale (0 -> 1).
+    recipeBaseServings(recipe) {
+      return recipe && recipe.servings > 0 ? recipe.servings : 1;
+    },
+
+    recipeScaleServings(recipe) {
+      const v = this.recipeServings[recipe.id];
+      if (v > 0) return v;
+      return recipe.servings > 0 ? recipe.servings : this.defaultServings();
+    },
+
+    setRecipeServings(recipe, v) {
+      v = Math.max(1, parseInt(v) || 1);
+      this.recipeServings = { ...this.recipeServings, [recipe.id]: v };
+    },
+
+    scaledQty(qty, servings, recipe) {
+      return qty * servings / this.recipeBaseServings(recipe);
+    },
+
+    formatQty(n) {
+      return parseFloat(Number(n).toFixed(2)).toString();
+    },
+
+    onCalendarRecipeChange() {
+      const r = this.recipes.find(r => r.id === this.calendarEntryForm.recipe_id);
+      this.calendarEntryForm.servings = r ? this.recipeScaleServings(r) : null;
     },
 
     async addRecipeToCalendar(recipe, servings) {
@@ -1089,7 +1131,7 @@ function app() {
     },
 
     async addRecipeToShoppingList(recipe, servings) {
-      const s = servings || recipe.servings || 1;
+      const s = servings || this.recipeScaleServings(recipe);
       const res = await fetch(this.baseUrl + '/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST' });
       const data = await res.json();
       this.modal = null;
@@ -1098,7 +1140,7 @@ function app() {
     },
 
     cookIt(recipe, servings) {
-      const s = servings || recipe.servings || 1;
+      const s = servings || this.recipeScaleServings(recipe);
       this.cookItConfirm = { recipe, servings: s };
       this.modal = 'cookItConfirm';
     },
@@ -1205,12 +1247,13 @@ function app() {
     },
 
     openAddCalendarEntry(date, slot) {
-      this.calendarEntryForm = { date, meal_slot: slot, recipe_id: '', servings: 1 };
+      this.calendarEntryForm = { date, meal_slot: slot, recipe_id: '', servings: null };
       this.modal = 'calendarEntry';
     },
 
     async saveCalendarEntry() {
       if (!this.calendarEntryForm.recipe_id) return;
+      if (!(this.calendarEntryForm.servings > 0)) this.onCalendarRecipeChange();
       await fetch(this.baseUrl + '/api/calendar/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1474,7 +1517,7 @@ function app() {
 
     async fetchMealStats() {
       const tzOffset = -new Date().getTimezoneOffset();
-      const res = await fetch(this.baseUrl + '/api/meals/stats?tz_offset=' + tzOffset);
+      const res = await fetch(this.baseUrl + '/api/meals/stats?tz_offset=' + tzOffset + '&tz=' + encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || ''));
       if (res.ok) this.mealsStats = await res.json();
     },
   };

@@ -321,7 +321,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		servingsParam := r.URL.Query().Get("servings")
-		requestedServings := 1
+		requestedServings := 0
 		if servingsParam != "" {
 			var s int
 			if _, err := fmt.Sscanf(servingsParam, "%d", &s); err == nil && s > 0 {
@@ -341,7 +341,10 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		if recipeServings == 0 {
 			recipeServings = 1
 		}
-		scale := float64(requestedServings) / float64(recipeServings)
+		if requestedServings <= 0 {
+			requestedServings = recipeServings
+		}
+		scale := units.ServingsScale(requestedServings, recipeServings)
 		ings := recipe["ingredients"].([]map[string]any)
 		added := 0
 		for _, ing := range ings {
