@@ -78,6 +78,7 @@ function app() {
     // Recipes
     recipes: [],
     recipeTagFilter: '',
+    recipeShowArchived: false,
     recipeAvailableOnly: false,
     selectedRecipe: null,
     settings: {},
@@ -736,11 +737,10 @@ function app() {
       const { group, selectedLocationId, qty } = this.deductModal;
       const loc = group.locations.find(l => l.id === selectedLocationId);
       if (!loc || qty <= 0) return;
-      const newQty = Math.max(0, parseFloat((loc.quantity - qty).toFixed(4)));
-      const res = await this.apiFetch('/api/inventory/' + selectedLocationId, {
-        method: 'PATCH',
+      const res = await this.apiFetch('/api/inventory/' + selectedLocationId + '/deduct', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quantity: newQty, location_id: selectedLocationId }),
+        body: JSON.stringify({ quantity: qty, single_lot: true }),
       }, { errorPrefix: 'Deduct failed' });
       if (!res) return;
       this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
@@ -753,10 +753,14 @@ function app() {
     async saveItem() {
       if (!this.itemForm.name) return;
       if (this.editingItem) {
+        const payload = { ...this.itemForm };
+        for (const k of ['quantity', 'low_threshold', 'quantity_per_scan', 'unit_cost_cents']) {
+          if (k in payload && (typeof payload[k] !== 'number' || !Number.isFinite(payload[k]))) delete payload[k];
+        }
         const res = await this.apiFetch('/api/inventory/' + this.editingItem.id, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(this.itemForm),
+          body: JSON.stringify(payload),
         });
         if (!res) return;
         this.showToast('Item updated');
@@ -970,6 +974,7 @@ function app() {
       const params = new URLSearchParams();
       if (this.recipeTagFilter) params.set('tag', this.recipeTagFilter);
       if (this.recipeAvailableOnly) params.set('available_only', 'true');
+      params.set('include_archived', 'true'); // calendar needs archived names; list filters client-side
       const res = await fetch(this.baseUrl + '/api/recipes/?' + params);
       this.recipes = await res.json();
     },
@@ -1181,13 +1186,22 @@ function app() {
       await this.fetchExpiring();
     },
 
+    async setRecipeArchived(id, archive) {
+      const res = await this.apiFetch('/api/recipes/' + id + (archive ? '/archive' : '/unarchive'), { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: `Failed to ${archive ? 'archive' : 'restore'}` });
+      if (!res) return;
+      await this.fetchRecipes();
+      this.showToast(archive ? 'Recipe archived' : 'Recipe restored');
+    },
+    archiveRecipe(id) { return this.setRecipeArchived(id, true); },
+    unarchiveRecipe(id) { return this.setRecipeArchived(id, false); },
+
     async deleteRecipe(id) {
-      let msg = 'Delete this recipe?';
+      let msg = 'Permanently delete this recipe? Cooking history will be kept. (Tip: Archive hides it without deleting.)';
       try {
         const res = await fetch(this.baseUrl + '/api/recipes/' + id + '/future-calendar');
         if (res.ok) {
           const { count } = await res.json();
-          if (count > 0) msg = `This recipe is scheduled ${count} time${count !== 1 ? 's' : ''} on the calendar. Delete anyway?`;
+          if (count > 0) msg = `This recipe is scheduled ${count} time${count !== 1 ? 's' : ''} on the calendar; those entries will be removed. Permanently delete anyway? Cooking history will be kept.`;
         }
       } catch (e) { /* fall through to plain confirm */ }
       if (!confirm(msg)) return;
@@ -1206,6 +1220,12 @@ function app() {
       return monday;
     },
 
+    get visibleRecipes() {
+      return this.recipes.filter(r => this.recipeShowArchived || !r.archived);
+    },
+    get activeRecipes() {
+      return this.recipes.filter(r => !r.archived);
+    },
     get calendarWeekLabel() {
       if (!this.calendarWeekStart) return '';
       const end = new Date(this.calendarWeekStart);
@@ -1357,14 +1377,13 @@ function app() {
         if (!res.ok) { this.showToast('Item not found', 'error'); return; }
         const item = await res.json();
         const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
-        const newQty = Math.max(0, parseFloat((item.quantity - scanQty).toFixed(4)));
-        const patch = await this.apiFetch('/api/inventory/' + item.id + '?source=barcode_remove', {
-          method: 'PATCH',
+        const patch = await this.apiFetch('/api/inventory/' + item.id + '/deduct?source=barcode_remove', {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ quantity: newQty }),
+          body: JSON.stringify({ quantity: scanQty }),
         }, { errorPrefix: 'Update failed' });
         if (patch) {
-          this.showToast(`${item.name}: ${item.quantity} → ${newQty} ${item.unit}`, 'success');
+          this.showToast(`${item.name}: −${scanQty} ${item.preferred_unit || item.unit}`, 'success');
           this.fetchInventory();
         }
       } catch {

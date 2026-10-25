@@ -102,7 +102,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Units system:** 14 units across 3 dimensions (mass, volume, count). Units must be same-dimension to convert. Count units don't inter-convert. The `preferred_unit` on an inventory item is the canonical unit for display and aggregation.
 
-**Stock deductions:** inventory PATCH deductions, cooking (`POST /api/meals`) and remove-stock scans all go through `deductStock` in `handlers/deduct.go`. It converts the requested unit to `preferred_unit` (or `unit`), cascades expiry-first across lots, retires emptied lots, and returns an incompatible-units error for cross-dimension deductions (e.g. cups vs grams); cooking skips that ingredient and adds a `warnings` entry to the 201 response.
+**Stock deductions:** `POST /api/inventory/{id}/deduct` (remove-stock scans, deduct modal with `single_lot`) and cooking (`POST /api/meals`) go through `deductStock` in `handlers/deduct.go`. It converts the requested unit to `preferred_unit` (or `unit`), cascades expiry-first across lots, retires emptied lots, and returns an incompatible-units error for cross-dimension deductions (e.g. cups vs grams); cooking skips that ingredient and adds a `warnings` entry to the 201 response. `PATCH /api/inventory/{id}` edits only that lot (typed fields, one UPDATE in one tx, wrong types → 400; quantity 0 retires the lot via `retireEmptyLots`).
 
 **Stock additions:** `POST /api/inventory/` (merge-or-insert, incl. SKU-alias merge), `POST /api/skus/item/{id}` and `merge-into` each run in a single transaction and add via `addStock` (`handlers/stock.go`, `quantity = quantity + ?`), never a quantity computed in Go. Because `OpenDB` uses `SetMaxOpenConns(1)`, a handler must not touch `db` while its `tx` is open (it deadlocks) — pass `tx` to `LogHistory` and read back via `tx`. Receipt import posts lines sequentially.
 
@@ -128,7 +128,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `inventory.preferred_unit` — added via migration on startup if the column doesn't exist
 - `shopping_list.inventory_id` is nullable (manual items may not link to an inventory item)
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
-- Recipe deletion is transactional (deletes ingredients first, then recipe)
+- Recipes have an `archived` flag (startup migration); archived recipes are hidden from `GET /api/recipes/` unless `?include_archived=true`. `POST /api/recipes/{id}/archive|unarchive` toggle it and touch nothing else.
+- Recipe hard delete is transactional: nulls `meal_history.recipe_id` and `inventory_history.recipe_id` (history and `recipe_name` kept), deletes calendar entries, ingredients, then the recipe. `meal_history.recipe_id` is nullable (rebuild migration for old DBs).
 
 **Security headers / CSP:** `securityHeaders` middleware in `main.go` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on all responses. CSP allows `'unsafe-eval'` because the standard Alpine build needs it (the CSP build can't run the inline expressions in index.html). Any new external origin must be added to `contentSecurityPolicy`; don't add inline scripts/styles or CDN tags.
 

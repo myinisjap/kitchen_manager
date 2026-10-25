@@ -42,6 +42,7 @@ A self-hosted app for tracking your pantry, planning meals, managing recipes, an
 - **Shopping list** — manual items, auto-generated from per-item par levels (restock to par), or pulled from recipes; tick items off and put them away into the pantry in one tap (Bought / Put away checked items)
 - **Servings scaling** — scale any recipe up or down with a servings stepper; cooking, shopping lists and the meal calendar scale ingredient quantities to match
 - **Recipe import** — paste a URL from any major recipe site; ingredients auto-link to your pantry
+- **Recipe archiving** — archive a recipe to hide it without losing its cooking history; deleting a recipe also keeps past cooking history
 - **Meal calendar** — plan breakfast/lunch/dinner for the week; cooking a meal deducts ingredients
 - **Meal history & cost tracking** — log meals cooked and see weekly/monthly spend
 - **Dark mode** — toggle in the header
@@ -203,6 +204,8 @@ The app supports 14 units across three categories:
 | Count | `piece`, `clove`, `can`, `jar`, `bunch` |
 
 Units in the same category can be converted automatically. Each pantry item has a **preferred unit** — this is used for display and for calculating how much of an item is low.
+
+When a recipe's unit cannot be converted to the pantry item's unit (e.g. cups vs grams), shopping lists add the full amount in the recipe's unit without subtracting stock, and the recipe is not shown as available. The recipe list reports these ingredients under `incompatible_ingredients`.
 
 ---
 
