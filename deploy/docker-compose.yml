@@ -16,7 +16,9 @@ services:
       - traefik.http.routers.kitchen.tls.certresolver=le
       - traefik.http.services.kitchen.loadbalancer.server.port=8080
       - traefik.http.middlewares.kitchen-strip.stripprefix.prefixes=/kitchen-manager
-      - traefik.http.routers.kitchen.middlewares=forward-auth,kitchen-strip
+      - traefik.http.middlewares.kitchen-slash.redirectregex.regex=^(https?://[^/]+/kitchen-manager)$$
+      - traefik.http.middlewares.kitchen-slash.redirectregex.replacement=$${1}/
+      - traefik.http.routers.kitchen.middlewares=kitchen-slash,forward-auth,kitchen-strip
     networks:
       - proxy_net
       - default
