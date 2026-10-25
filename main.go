@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	_ "time/tzdata"
 
 	"kitchen_manager/handlers"
 	"kitchen_manager/internal/auth"
