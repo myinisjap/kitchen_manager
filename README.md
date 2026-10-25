@@ -169,7 +169,9 @@ Example crontab entry (note the escaped `%`), then copy the files to another mac
 ```
 If the app sits behind OAuth, hit the container port directly from the host, or use the `sqlite3 ... VACUUM INTO` command above instead.
 
-To restore, stop the app, replace `kitchen.db` with your backup, and restart.
+To restore, stop the app, replace `kitchen.db` with your backup, **delete any `kitchen.db-wal` and `kitchen.db-shm`**, and restart.
+
+The database runs in WAL mode, so `kitchen.db-wal` and `kitchen.db-shm` sit next to `kitchen.db` while the app runs. Schema migrations run automatically on startup; an older binary refuses a newer database.
 
 ---
 
