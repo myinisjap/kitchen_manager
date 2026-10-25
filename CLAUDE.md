@@ -110,7 +110,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips products that already have an unchecked list row (any lot of the same name) to avoid duplicates.
 
-**Weekly shopping simulation:** `services/calendar.go` simulates inventory depletion day-by-day across the week, aggregating shortfalls. It handles unit conversion to each item's `preferred_unit`.
+**Weekly shopping simulation:** `services/calendar.go` simulates inventory depletion day-by-day across the week, aggregating shortfalls. It handles unit conversion to each item's `preferred_unit`. Entries already cooked (a linked `meal_history` row exists) are skipped, since their stock was already deducted.
 
 **TLS:** Self-signed certificates are auto-generated on startup (`tls.go`) with IP SANs so mobile devices on the same network can connect without cert errors. Certs are persisted as `cert.pem`/`key.pem`.
 
@@ -130,6 +130,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
 - Recipes have an `archived` flag (startup migration); archived recipes are hidden from `GET /api/recipes/` unless `?include_archived=true`. `POST /api/recipes/{id}/archive|unarchive` toggle it and touch nothing else.
 - Recipe hard delete is transactional: nulls `meal_history.recipe_id` and `inventory_history.recipe_id` (history and `recipe_name` kept), deletes calendar entries, ingredients, then the recipe. `meal_history.recipe_id` is nullable (rebuild migration for old DBs).
+- **Calendar ↔ cooking link:** `meal_history.calendar_entry_id` (nullable, added by ALTER after the rebuild migration; unique when set via a partial index). An entry is "cooked" iff a linked meal_history row exists (no separate flag). Deleting a calendar entry or hard-deleting a recipe sets the link to NULL (history kept; handlers do it explicitly). `meal_slot` is a fixed set (breakfast, lunch, dinner, snack); a startup migration lowercases/trims legacy text and maps snacks→snack, supper→dinner, leaving unmatched text untouched (UI shows it under "Other").
+- `PATCH /api/calendar/{id}` updates date / meal_slot / servings (any subset; 400 on bad values or empty body, 404 unknown id). `POST /api/meals` accepts `calendar_entry_id`: 404 unknown entry, 400 recipe_id mismatch (recipe_id may be omitted), 409 if already cooked; servings default to the entry's servings.
 
 **Security headers / CSP:** `securityHeaders` middleware in `main.go` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on all responses. CSP allows `'unsafe-eval'` because the standard Alpine build needs it (the CSP build can't run the inline expressions in index.html). Any new external origin must be added to `contentSecurityPolicy`; don't add inline scripts/styles or CDN tags.
 

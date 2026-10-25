@@ -159,3 +159,61 @@ func TestNormalizeMealCookedAt(t *testing.T) {
 		db.Close()
 	}
 }
+
+func TestMealHistoryCalendarEntryColumnAndIndex(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "k.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if notNull(t, db, "meal_history", "calendar_entry_id") != 0 {
+		t.Fatal("calendar_entry_id should be nullable")
+	}
+	if _, err := db.Exec(`INSERT INTO meal_calendar (id,date,recipe_id) VALUES (1,'2024-01-01',1)`); err != nil {
+		// recipe FK may be enforced; create it
+		db.Exec(`INSERT INTO recipes (id,name) VALUES (1,'r')`)
+		if _, err := db.Exec(`INSERT INTO meal_calendar (id,date,recipe_id) VALUES (1,'2024-01-01',1)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO meal_history (recipe_name, calendar_entry_id) VALUES ('a',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO meal_history (recipe_name, calendar_entry_id) VALUES ('b',1)`); err == nil {
+		t.Fatal("expected unique violation")
+	}
+	if _, err := db.Exec(`INSERT INTO meal_history (recipe_name) VALUES ('c')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO meal_history (recipe_name) VALUES ('d')`); err != nil {
+		t.Fatal("multiple NULLs must be allowed:", err)
+	}
+}
+
+func TestNormalizeMealSlots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "slots.db")
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`INSERT INTO recipes (id,name) VALUES (1,'r')`)
+	for i, s := range []string{"Dinner", " LUNCH ", "snacks", "second breakfast"} {
+		if _, err := db.Exec(`INSERT INTO meal_calendar (id,date,meal_slot,recipe_id) VALUES (?,?,?,1)`, i+1, "2024-01-01", s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	db, err = OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	want := []string{"dinner", "lunch", "snack", "second breakfast"}
+	for i, w := range want {
+		var got string
+		db.QueryRow(`SELECT meal_slot FROM meal_calendar WHERE id=?`, i+1).Scan(&got)
+		if got != w {
+			t.Errorf("id %d: got %q want %q", i+1, got, w)
+		}
+	}
+}

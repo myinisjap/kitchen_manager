@@ -245,6 +245,11 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if _, err := tx.Exec(`UPDATE meal_history SET calendar_entry_id=NULL WHERE calendar_entry_id IN (SELECT id FROM meal_calendar WHERE recipe_id=?)`, id); err != nil {
+			tx.Rollback()
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		if _, err := tx.Exec(`DELETE FROM meal_calendar WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
 			WriteError(w, http.StatusInternalServerError, err.Error())

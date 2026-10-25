@@ -154,3 +154,21 @@ func TestWeeklyShoppingIncompatibleUnitsIgnoreStock(t *testing.T) {
 		t.Errorf("sugar: %+v", g)
 	}
 }
+
+func TestWeeklyShoppingSkipsCookedEntries(t *testing.T) {
+	db := testutil.NewDB(t)
+	inv := insertInv(t, db, "flour", 0, "g", "", 0)
+	r := insertRecipe(t, db, 1)
+	insertIng(t, db, r, &inv, "flour", 100, "g")
+	schedule(t, db, "2024-01-01", r, 1)
+	schedule(t, db, "2024-01-02", r, 1)
+	var first int64
+	db.QueryRow(`SELECT MIN(id) FROM meal_calendar`).Scan(&first)
+	if _, err := db.Exec(`INSERT INTO meal_history (recipe_id, recipe_name, calendar_entry_id) VALUES (?, 'r', ?)`, r, first); err != nil {
+		t.Fatal(err)
+	}
+	res, err := services.GenerateWeeklyShopping(db, "2024-01-01")
+	if err != nil || len(res) != 1 || !near(res[0].QuantityNeeded, 100) {
+		t.Fatalf("%+v %v", res, err)
+	}
+}

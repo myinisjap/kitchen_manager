@@ -351,29 +351,67 @@
             <div class="bg-gray-100 dark:bg-gray-700 px-3 py-2 text-sm font-semibold text-gray-700 dark:text-gray-200"
                  x-text="day.label"></div>
             <div class="p-3 space-y-2">
-              <template x-for="slot in ['breakfast','lunch','dinner']" :key="slot">
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0 capitalize" x-text="slot"></span>
-                  <template x-if="getCalendarEntry(day.date, slot)">
-                    <div class="flex-1 flex items-center bg-green-50 dark:bg-green-900/40 rounded-lg px-2 py-1 gap-1 min-w-0">
-                      <span class="text-sm text-green-800 dark:text-green-200 truncate min-w-0 flex-1"
-                            x-text="getRecipeName(getCalendarEntry(day.date, slot).recipe_id)"></span>
+              <template x-for="slot in mealSlots" :key="slot">
+                <div class="flex items-start gap-2 min-w-0">
+                  <span class="text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0 capitalize pt-1.5" x-text="slot"></span>
+                  <div class="flex-1 space-y-1 min-w-0">
+                    <template x-for="entry in getCalendarEntries(day.date, slot)" :key="entry.id">
+                      <div class="flex-1 flex items-center rounded-lg px-2 py-1 gap-1 min-w-0"
+                         :class="entry.cooked ? 'bg-gray-100 dark:bg-gray-700' : 'bg-green-50 dark:bg-green-900/40'">
+                      <span class="text-sm truncate min-w-0 flex-1"
+                            :class="entry.cooked ? 'line-through text-gray-500 dark:text-gray-400' : 'text-green-800 dark:text-green-200'"
+                            x-text="getRecipeName(entry.recipe_id)"></span>
+                      <span x-show="entry.cooked" class="text-xs text-gray-500 dark:text-gray-400 shrink-0">✓ Cooked</span>
+                      <span class="text-xs text-gray-400 shrink-0" x-text="'· ' + entry.servings"></span>
                       <div class="flex items-center gap-1 shrink-0">
-                        <button @click="viewRecipe(recipes.find(r => r.id === getCalendarEntry(day.date, slot).recipe_id))"
+                        <button @click="viewRecipe(recipes.find(r => r.id === entry.recipe_id))"
                                 class="text-blue-600 text-xs font-medium px-1">👁</button>
-                        <button @click="cookIt(recipes.find(r => r.id === getCalendarEntry(day.date, slot).recipe_id), getCalendarEntry(day.date, slot).servings)"
+                        <button @click="openEditCalendarEntry(entry)"
+                                class="text-gray-600 dark:text-gray-300 text-xs px-1">✏️</button>
+                        <button x-show="!entry.cooked" @click="cookIt(recipes.find(r => r.id === entry.recipe_id), entry.servings, entry.id)"
                                 class="text-green-700 text-xs font-medium px-1">🍳</button>
-                        <button @click="deleteCalendarEntry(getCalendarEntry(day.date, slot).id)"
+                        <button @click="deleteCalendarEntry(entry.id)"
                                 class="text-red-400 text-xs px-1">✕</button>
                       </div>
                     </div>
-                  </template>
-                  <template x-if="!getCalendarEntry(day.date, slot)">
-                    <button @click="openAddCalendarEntry(day.date, slot)"
-                            class="flex-1 border border-dashed border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1 text-xs text-gray-400 dark:text-gray-500 text-left hover:border-green-400">
-                      + Add meal
-                    </button>
-                  </template>
+                    </template>
+                    <template x-if="getCalendarEntries(day.date, slot).length === 0">
+                      <button @click="openAddCalendarEntry(day.date, slot)"
+                              class="w-full border border-dashed border-gray-300 dark:border-gray-600 rounded-lg px-2 py-1 text-xs text-gray-400 dark:text-gray-500 text-left hover:border-green-400">
+                        + Add meal
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              <template x-if="getOtherCalendarEntries(day.date).length > 0">
+                <div class="flex items-start gap-2 min-w-0">
+                  <span class="text-xs text-gray-400 dark:text-gray-500 w-16 shrink-0 pt-1.5">Other</span>
+                  <div class="flex-1 space-y-1 min-w-0">
+                    <template x-for="entry in getOtherCalendarEntries(day.date)" :key="entry.id">
+                      <div class="space-y-0.5">
+                        <span class="text-xs text-gray-400 dark:text-gray-500" x-text="entry.meal_slot"></span>
+                        <div class="flex-1 flex items-center rounded-lg px-2 py-1 gap-1 min-w-0"
+                         :class="entry.cooked ? 'bg-gray-100 dark:bg-gray-700' : 'bg-green-50 dark:bg-green-900/40'">
+                      <span class="text-sm truncate min-w-0 flex-1"
+                            :class="entry.cooked ? 'line-through text-gray-500 dark:text-gray-400' : 'text-green-800 dark:text-green-200'"
+                            x-text="getRecipeName(entry.recipe_id)"></span>
+                      <span x-show="entry.cooked" class="text-xs text-gray-500 dark:text-gray-400 shrink-0">✓ Cooked</span>
+                      <span class="text-xs text-gray-400 shrink-0" x-text="'· ' + entry.servings"></span>
+                      <div class="flex items-center gap-1 shrink-0">
+                        <button @click="viewRecipe(recipes.find(r => r.id === entry.recipe_id))"
+                                class="text-blue-600 text-xs font-medium px-1">👁</button>
+                        <button @click="openEditCalendarEntry(entry)"
+                                class="text-gray-600 dark:text-gray-300 text-xs px-1">✏️</button>
+                        <button x-show="!entry.cooked" @click="cookIt(recipes.find(r => r.id === entry.recipe_id), entry.servings, entry.id)"
+                                class="text-green-700 text-xs font-medium px-1">🍳</button>
+                        <button @click="deleteCalendarEntry(entry.id)"
+                                class="text-red-400 text-xs px-1">✕</button>
+                      </div>
+                    </div>
+                      </div>
+                    </template>
+                  </div>
                 </div>
               </template>
             </div>
@@ -1047,6 +1085,7 @@
             <option value="breakfast">Breakfast</option>
             <option value="lunch">Lunch</option>
             <option value="dinner">Dinner</option>
+            <option value="snack">Snack</option>
           </select>
         </div>
         <button @click="addRecipeToCalendar(selectedRecipe, recipeScaleServings(selectedRecipe))"
@@ -1105,11 +1144,20 @@
   <!-- Add Calendar Entry Modal -->
   <div x-show="modal === 'calendarEntry'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
     <div class="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4">
-      <h2 class="text-lg font-bold dark:text-gray-100">Add Meal</h2>
-      <p class="text-sm text-gray-500 dark:text-gray-400">
+      <h2 class="text-lg font-bold dark:text-gray-100" x-text="calendarEntryForm.id ? 'Edit Meal' : 'Add Meal'"></h2>
+      <p x-show="!calendarEntryForm.id" class="text-sm text-gray-500 dark:text-gray-400">
         <span x-text="calendarEntryForm.date"></span> — <span x-text="calendarEntryForm.meal_slot" class="capitalize"></span>
       </p>
-      <select x-model.number="calendarEntryForm.recipe_id" @change="onCalendarRecipeChange()" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+      <div x-show="calendarEntryForm.id" class="space-y-2">
+        <p class="text-sm font-medium dark:text-gray-100" x-text="getRecipeName(calendarEntryForm.recipe_id)"></p>
+        <input type="date" x-model="calendarEntryForm.date" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
+        <select x-model="calendarEntryForm.meal_slot" class="w-full border rounded-lg px-3 py-2 text-sm capitalize dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+          <template x-for="slot in mealSlots" :key="slot">
+            <option :value="slot" x-text="slot"></option>
+          </template>
+        </select>
+      </div>
+      <select x-show="!calendarEntryForm.id" x-model.number="calendarEntryForm.recipe_id" @change="onCalendarRecipeChange()" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
         <option value="">Select a recipe...</option>
         <template x-for="recipe in activeRecipes" :key="recipe.id">
           <option :value="recipe.id" x-text="recipe.name"></option>

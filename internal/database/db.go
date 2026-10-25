@@ -218,6 +218,20 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	// Migration: link meal_history to the calendar entry it was cooked from.
+	// Must run after migrateMealHistoryNullableRecipe (which rebuilds the table).
+	if _, err := db.Exec(`ALTER TABLE meal_history ADD COLUMN calendar_entry_id INTEGER REFERENCES meal_calendar(id) ON DELETE SET NULL`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS meal_history_calendar_entry_idx ON meal_history(calendar_entry_id) WHERE calendar_entry_id IS NOT NULL`); err != nil {
+		return err
+	}
+	if err := normalizeMealSlots(db); err != nil {
+		return err
+	}
+
 	// Par level is per product (name); keep lots consistent until products/lots split.
 	if _, err := db.Exec(`UPDATE inventory SET low_threshold = (SELECT MAX(i2.low_threshold) FROM inventory i2 WHERE i2.name = inventory.name)
 		WHERE low_threshold <> (SELECT MAX(i2.low_threshold) FROM inventory i2 WHERE i2.name = inventory.name)`); err != nil {
@@ -228,6 +242,22 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	return nil
+}
+
+// normalizeMealSlots rewrites legacy free-text meal slots into the fixed set
+// (breakfast, lunch, dinner, snack) where they match; others are left as-is.
+func normalizeMealSlots(db *sql.DB) error {
+	for _, q := range []string{
+		`UPDATE meal_calendar SET meal_slot = LOWER(TRIM(meal_slot))
+			WHERE LOWER(TRIM(meal_slot)) IN ('breakfast','lunch','dinner','snack') AND meal_slot <> LOWER(TRIM(meal_slot))`,
+		`UPDATE meal_calendar SET meal_slot='snack' WHERE LOWER(TRIM(meal_slot))='snacks'`,
+		`UPDATE meal_calendar SET meal_slot='dinner' WHERE LOWER(TRIM(meal_slot))='supper'`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
