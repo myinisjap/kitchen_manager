@@ -8,6 +8,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"kitchen_manager/internal/database"
+	"kitchen_manager/internal/testutil"
 )
 
 func TestSecurityHeaders(t *testing.T) {
@@ -59,5 +62,40 @@ func TestIndexHasNoExternalOrInlineCode(t *testing.T) {
 		if m, _ := filepath.Glob(g); len(m) == 0 {
 			t.Errorf("missing %s", g)
 		}
+	}
+}
+
+func TestHealthz(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(401) })
+	h := withHealthz(testutil.NewDB(t), next)
+	for _, m := range []string{"GET", "HEAD"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(m, "/healthz", nil))
+		if rec.Code != 200 {
+			t.Fatalf("%s: got %d", m, rec.Code)
+		}
+		if m == "GET" && rec.Body.String() != "ok" {
+			t.Fatalf("body %q", rec.Body.String())
+		}
+	}
+	for _, p := range []string{"/api/inventory/", "/healthz/x"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Code != 401 {
+			t.Fatalf("%s: got %d", p, rec.Code)
+		}
+	}
+}
+
+func TestHealthzDBDown(t *testing.T) {
+	db, err := database.OpenDB(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	rec := httptest.NewRecorder()
+	withHealthz(db, http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code != 503 {
+		t.Fatalf("got %d", rec.Code)
 	}
 }

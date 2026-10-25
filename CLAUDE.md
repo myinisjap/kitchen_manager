@@ -47,12 +47,12 @@ go run .
 **Production (Docker):**
 ```bash
 cp .env.example .env  # fill in values
-docker compose -f deploy/docker-compose.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.yml up -d
 ```
 
 **Redeploy production (after code changes):**
 ```bash
-docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/docker-compose.yml up -d --build
+docker compose --env-file .env -f deploy/docker-compose.yml down && docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 ```
 
 ## Environment Variables
@@ -67,6 +67,7 @@ docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/doc
 | `GOOGLE_CLIENT_ID` | — | Google Cloud OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | — | Google Cloud OAuth client secret |
 | `SESSION_SECRET` | — | 64-char hex string for cookie signing (`openssl rand -hex 32`) |
+| `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
 | `BASE_URL` | — | Public URL incl. any path prefix (e.g. `https://host/kitchen-manager`); used for OAuth and auth redirects |
 
 ## Auth
@@ -101,7 +102,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Stock additions:** `POST /api/inventory/` (merge-or-insert, incl. SKU-alias merge), `POST /api/skus/item/{id}` and `merge-into` each run in a single transaction and add via `addStock` (`handlers/stock.go`, `quantity = quantity + ?`), never a quantity computed in Go. Because `OpenDB` uses `SetMaxOpenConns(1)`, a handler must not touch `db` while its `tx` is open (it deadlocks) — pass `tx` to `LogHistory` and read back via `tx`. Receipt import posts lines sequentially.
 
-**Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips items already on the unchecked list to avoid duplicates.
+**Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips products that already have an unchecked list row (any lot of the same name) to avoid duplicates.
 
 **Weekly shopping simulation:** `services/calendar.go` simulates inventory depletion day-by-day across the week, aggregating shortfalls. It handles unit conversion to each item's `preferred_unit`.
 
@@ -117,10 +118,15 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 ## Database Schema Notes
 
-- `inventory.low_threshold` — when `quantity` drops below this, `generate-from-thresholds` adds the shortfall to the shopping list
+- `inventory.low_threshold` — par level per product (name): kept identical across all lots; `generate-from-thresholds` sums all lots of a name converted to the product unit (preferred_unit, else first lot's unit) and, when total < par, adds `par − total`. 0 = unset (no rule).
 - `inventory.preferred_unit` — added via migration on startup if the column doesn't exist
 - `shopping_list.inventory_id` is nullable (manual items may not link to an inventory item)
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
 - Recipe deletion is transactional (deletes ingredients first, then recipe)
 
 **Security headers / CSP:** `securityHeaders` middleware in `main.go` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on all responses. CSP allows `'unsafe-eval'` because the standard Alpine build needs it (the CSP build can't run the inline expressions in index.html). Any new external origin must be added to `contentSecurityPolicy`; don't add inline scripts/styles or CDN tags.
+
+## Deploy notes
+
+- Container runs as non-root UID 10001; base images are pinned by digest (bump the digest with the tag).
+- `/healthz` is auth-exempt: served outside auth/session middleware via `withHealthz` in main.go; used by the Dockerfile HEALTHCHECK.
