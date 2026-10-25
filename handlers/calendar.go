@@ -19,8 +19,6 @@ func normalizeMealSlot(s string) (string, bool) {
 const calendarEntrySelect = `SELECT mc.id, mc.date, mc.meal_slot, mc.recipe_id, mc.servings, mh.id
 	FROM meal_calendar mc LEFT JOIN meal_history mh ON mh.calendar_entry_id = mc.id`
 
-type rowScanner interface{ Scan(...any) error }
-
 func scanCalendarEntry(s rowScanner) (map[string]any, error) {
 	var id, recipeID int64
 	var date, mealSlot string

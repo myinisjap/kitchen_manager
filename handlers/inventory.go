@@ -26,11 +26,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 	}
 	mux.HandleFunc("GET /api/units", func(w http.ResponseWriter, r *http.Request) {
-		WriteJSON(w, http.StatusOK, map[string][]string{
-			"mass":   {"g", "kg", "oz", "lb"},
-			"volume": {"ml", "L", "cup", "tbsp", "tsp"},
-			"count":  {"piece", "clove", "can", "jar", "bunch"},
-		})
+		WriteJSON(w, http.StatusOK, units.ByDimension())
 	})
 
 	mux.HandleFunc("POST /api/inventory/", func(w http.ResponseWriter, r *http.Request) {
@@ -65,12 +61,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 		}
 		if item.Unit != "" && !units.IsValid(units.Unit(item.Unit)) {
-			WriteError(w, http.StatusBadRequest, "invalid unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
+			WriteError(w, http.StatusBadRequest, "invalid unit; valid units: "+units.ValidList())
 			return
 		}
 		if item.PreferredUnit != "" {
 			if !units.IsValid(units.Unit(item.PreferredUnit)) {
-				WriteError(w, http.StatusBadRequest, "invalid preferred_unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
+				WriteError(w, http.StatusBadRequest, "invalid preferred_unit; valid units: "+units.ValidList())
 				return
 			}
 			if item.Unit != "" && units.BaseDimension(units.Unit(item.Unit)) != units.BaseDimension(units.Unit(item.PreferredUnit)) {
@@ -243,13 +239,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 	mux.HandleFunc("GET /api/inventory/expiring", func(w http.ResponseWriter, r *http.Request) {
 		_, cutoff := expiryDaysAndCutoff(r, db)
-		rows, err := db.Query(`SELECT `+lotCols+lotFrom+` WHERE l.expiration_date != '' AND l.expiration_date <= ?`, cutoff)
-		if err != nil {
-			WriteServerError(w, r, err)
-			return
-		}
-		defer rows.Close()
-		items, err := scanLots(rows)
+		items, err := expiringLots(db, cutoff)
 		if err != nil {
 			WriteServerError(w, r, err)
 			return
@@ -323,7 +313,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteServerError(w, r, err)
 			return
 		}
-		var item map[string]any
+		var item Lot
 		if lotID != 0 {
 			item, err = getLot(db, lotID)
 		} else {
@@ -334,9 +324,9 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if skuID != 0 {
-			item["quantity_per_scan"] = qps
-			item["sku_id"] = skuID
-			item["matched_barcode"] = code
+			item.QuantityPerScan = qps
+			item.SKUID = skuID
+			item.MatchedBarcode = code
 		}
 		WriteJSON(w, http.StatusOK, item)
 	})
@@ -568,24 +558,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	})
 
 	mux.HandleFunc("GET /api/inventory/", func(w http.ResponseWriter, r *http.Request) {
-		q := `SELECT ` + lotCols + lotFrom + ` WHERE 1=1`
-		args := []any{}
-		if name := r.URL.Query().Get("name"); name != "" {
-			q += ` AND p.name LIKE ?`
-			args = append(args, "%"+name+"%")
-		}
-		if loc := r.URL.Query().Get("location"); loc != "" {
-			q += ` AND l.location=?`
-			args = append(args, loc)
-		}
-		q += ` ORDER BY l.id`
-		rows, err := db.Query(q, args...)
-		if err != nil {
-			WriteServerError(w, r, err)
-			return
-		}
-		defer rows.Close()
-		items, err := scanLots(rows)
+		items, err := listLots(db, lotFilter{Name: r.URL.Query().Get("name"), Location: r.URL.Query().Get("location")})
 		if err != nil {
 			WriteServerError(w, r, err)
 			return
@@ -609,7 +582,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
-		const unitMsg = "valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch"
+		unitMsg := "valid units: " + units.ValidList()
 		if p.ExpirationDate != nil && *p.ExpirationDate != "" {
 			if _, err := time.Parse("2006-01-02", *p.ExpirationDate); err != nil {
 				WriteError(w, http.StatusBadRequest, "invalid expiration_date format, expected YYYY-MM-DD")
@@ -647,8 +620,8 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var qtyBefore float64
 		var unitBefore string
 		var productID int64
-		err = tx.QueryRow(`SELECT quantity, unit, product_id FROM stock_lots WHERE id=?`, id).
-			Scan(&qtyBefore, &unitBefore, &productID)
+		core, err := getLotCore(tx, id)
+		qtyBefore, unitBefore, productID = core.Quantity, core.Unit, core.ProductID
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "not found")
 			return
@@ -859,9 +832,11 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			} else if err == nil {
 				stub, serr := productStub(db, prod.ID)
 				if serr != nil {
-					stub = map[string]any{"id": 0, "product_id": prod.ID, "quantity": 0}
+					WriteJSON(w, http.StatusOK, lotFallback{ProductID: prod.ID, LotID: &id})
+					broadcastInventory()
+					return
 				}
-				stub["lot_id"] = id
+				stub.LotID = &id
 				WriteJSON(w, http.StatusOK, stub)
 				broadcastInventory()
 				return
@@ -926,24 +901,26 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteServerError(w, r, err)
 			return
 		}
-		out := map[string]any{"id": id, "product_id": dres.ProductID, "quantity": 0}
+		deducted := dres.Deducted
+		var out any = lotFallback{ID: id, ProductID: dres.ProductID, Deducted: &deducted}
 		if dres.ResultItemID == 0 {
 			if stub, serr := productStub(db, dres.ProductID); serr == nil {
+				stub.LotID = &id
+				stub.Deducted = &deducted
 				out = stub
-				out["lot_id"] = id
 			}
-		}
-		if dres.ResultItemID != 0 {
+		} else {
 			item, err := getLot(db, dres.ResultItemID)
 			if err == nil {
+				item.Deducted = &deducted
 				out = item
 			} else if err != sql.ErrNoRows {
 				WriteServerError(w, r, err)
 				return
 			}
 		}
-		out["deducted"] = dres.Deducted
 		WriteJSON(w, http.StatusOK, out)
+		broadcastInventory()
 		broadcastInventory()
 	})
 
@@ -1152,7 +1129,8 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var srcUnit string
 		var srcQty float64
 		var srcProduct int64
-		err = tx.QueryRow(`SELECT quantity, unit, product_id FROM stock_lots WHERE id=?`, id).Scan(&srcQty, &srcUnit, &srcProduct)
+		srcCore, err := getLotCore(tx, id)
+		srcQty, srcUnit, srcProduct = srcCore.Quantity, srcCore.Unit, srcCore.ProductID
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "source item not found")
 			return
@@ -1163,7 +1141,8 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		var tgtUnit string
 		var tgtProduct int64
-		err = tx.QueryRow(`SELECT unit, product_id FROM stock_lots WHERE id=?`, targetID).Scan(&tgtUnit, &tgtProduct)
+		tgtCore, err := getLotCore(tx, targetID)
+		tgtUnit, tgtProduct = tgtCore.Unit, tgtCore.ProductID
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "target item not found")
 			return
@@ -1206,7 +1185,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteServerError(w, r, err)
 			return
 		}
-		if _, err := tx.Exec(`DELETE FROM stock_lots WHERE id=?`, id); err != nil {
+		if err := deleteLot(tx, id); err != nil {
 			WriteServerError(w, r, err)
 			return
 		}
@@ -1281,7 +1260,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteServerError(w, r, err)
 			return
 		}
-		if _, err := tx.Exec(`DELETE FROM stock_lots WHERE id=?`, id); err != nil {
+		if err := deleteLot(tx, id); err != nil {
 			WriteServerError(w, r, err)
 			return
 		}

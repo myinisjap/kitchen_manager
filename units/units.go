@@ -1,6 +1,9 @@
 package units
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Unit is a validated unit of measure.
 type Unit string
@@ -95,4 +98,32 @@ func Convert(qty float64, from, to Unit) (float64, error) {
 		// count: no conversion between different count units
 		return 0, fmt.Errorf("cannot convert between count units %q and %q", from, to)
 	}
+}
+
+// all lists every unit in display order (mass, volume, count). Add new units
+// here and in dimensions.
+var all = []Unit{Gram, Kilogram, Ounce, Pound, Milliliter, Liter, Cup, Tablespoon, Teaspoon, Piece, Clove, Can, Jar, Bunch}
+
+// All returns every unit in display order.
+func All() []Unit {
+	return append([]Unit(nil), all...)
+}
+
+// ByDimension groups unit symbols by dimension ("mass", "volume", "count").
+func ByDimension() map[string][]string {
+	out := map[string][]string{}
+	for _, u := range all {
+		d := dimensions[u]
+		out[d] = append(out[d], string(u))
+	}
+	return out
+}
+
+// ValidList is the comma-separated unit list used in error messages.
+func ValidList() string {
+	s := make([]string, len(all))
+	for i, u := range all {
+		s[i] = string(u)
+	}
+	return strings.Join(s, ", ")
 }
