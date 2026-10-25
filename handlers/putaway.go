@@ -104,9 +104,9 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 			return res, err
 		}
 	}
-	norm := strings.ToLower(strings.TrimSpace(name))
+	norm := strings.TrimSpace(name)
 	if !found {
-		err := tx.QueryRow(`SELECT id,name,unit,preferred_unit,location FROM inventory WHERE name=? ORDER BY quantity > 0 DESC, id LIMIT 1`, norm).
+		err := tx.QueryRow(`SELECT id,name,unit,preferred_unit,location FROM inventory WHERE name=? COLLATE NOCASE ORDER BY quantity > 0 DESC, id LIMIT 1`, norm).
 			Scan(&anchorID, &anchorName, &anchorUnit, &anchorPref, &anchorLoc)
 		if err != nil && err != sql.ErrNoRows {
 			return res, err
@@ -159,12 +159,12 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 		// Pick the lot to receive stock: same name+unit as the anchor so
 		// grouping and sibling logic keep working.
 		var lotID int64
-		err := tx.QueryRow(`SELECT id FROM inventory WHERE name=? AND unit=? AND location=? AND expiration_date=? ORDER BY id=? DESC, id LIMIT 1`,
+		err := tx.QueryRow(`SELECT id FROM inventory WHERE name=? COLLATE NOCASE AND unit=? AND location=? AND expiration_date=? ORDER BY id=? DESC, id LIMIT 1`,
 			anchorName, anchorUnit, location, expiry, anchorID).Scan(&lotID)
 		switch {
 		case err == nil:
 		case err == sql.ErrNoRows:
-			err = tx.QueryRow(`SELECT id FROM inventory WHERE name=? AND unit=? AND quantity <= 0 ORDER BY id=? DESC, id LIMIT 1`,
+			err = tx.QueryRow(`SELECT id FROM inventory WHERE name=? COLLATE NOCASE AND unit=? AND quantity <= 0 ORDER BY id=? DESC, id LIMIT 1`,
 				anchorName, anchorUnit, anchorID).Scan(&lotID)
 			if err == nil {
 				if _, err := tx.Exec(`UPDATE inventory SET location=?, expiration_date=? WHERE id=?`, location, expiry, lotID); err != nil {
@@ -185,7 +185,7 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 			invID = lotID
 		} else {
 			var par float64
-			if err := tx.QueryRow(`SELECT COALESCE(MAX(low_threshold),0) FROM inventory WHERE name=?`, anchorName).Scan(&par); err != nil {
+			if err := tx.QueryRow(`SELECT COALESCE(MAX(low_threshold),0) FROM inventory WHERE name=? COLLATE NOCASE`, anchorName).Scan(&par); err != nil {
 				return res, err
 			}
 			r, err := tx.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,?,'',?,0,0)`,

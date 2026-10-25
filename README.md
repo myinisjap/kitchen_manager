@@ -43,7 +43,7 @@ A self-hosted app for tracking your pantry, planning meals, managing recipes, an
 - **Servings scaling** — scale any recipe up or down with a servings stepper; cooking, shopping lists and the meal calendar scale ingredient quantities to match
 - **Recipe import** — paste a URL from any major recipe site; ingredients auto-link to your pantry
 - **Recipe archiving** — archive a recipe to hide it without losing its cooking history; deleting a recipe also keeps past cooking history
-- **Meal calendar** — plan breakfast/lunch/dinner for the week; cooking a meal deducts ingredients
+- **Meal calendar** — plan breakfast/lunch/dinner/snack for the week, edit or move entries; cooking from the calendar deducts ingredients, marks the meal as cooked, and weekly shopping skips it
 - **Meal history & cost tracking** — log meals cooked and see weekly/monthly spend
 - **Dark mode** — toggle in the header
 - **Data backup** — download your database any time from the 💾 button in the header
@@ -190,6 +190,8 @@ All settings go in your `.env` file:
 | `GOOGLE_CLIENT_ID` | — | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | — | From Google Cloud Console |
 | `SESSION_SECRET` | — | Random string for securing login cookies (`openssl rand -hex 32`) |
+| `ANTHROPIC_API_KEY` | — | Anthropic API key for receipt scanning; receipt import returns an error when unset |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Claude model used to parse receipts |
 | `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
 | `BASE_URL` | — | Your app's public URL including any path prefix, e.g. `https://kitchen.example.com` or `https://host/kitchen-manager` |
 

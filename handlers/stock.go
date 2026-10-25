@@ -49,7 +49,7 @@ func moveBarcodes(tx *sql.Tx, from, to int64) error {
 // findSurvivingSibling returns another inventory row with the same name and
 // unit that isn't in exclude, preferring rows that still have stock.
 func findSurvivingSibling(tx *sql.Tx, name, unit string, exclude []int64) (int64, bool, error) {
-	q := `SELECT id FROM inventory WHERE name=? AND unit=?`
+	q := `SELECT id FROM inventory WHERE name=? COLLATE NOCASE AND unit=?`
 	args := []any{name, unit}
 	if len(exclude) > 0 {
 		q += ` AND id NOT IN (?` + strings.Repeat(",?", len(exclude)-1) + `)`

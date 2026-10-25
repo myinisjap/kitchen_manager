@@ -58,7 +58,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		recipeID, _ := res.LastInsertId()
 		for _, ing := range input.Ingredients {
-			ingName := strings.ToLower(strings.TrimSpace(ing.Name))
+			ingName := strings.TrimSpace(ing.Name)
 			invID := ing.InventoryID
 			if invID == nil {
 				invID = resolveInventoryID(db, ingName)
@@ -247,6 +247,11 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteServerError(w, r, err)
 			return
 		}
+		if _, err := tx.Exec(`UPDATE meal_history SET calendar_entry_id=NULL WHERE calendar_entry_id IN (SELECT id FROM meal_calendar WHERE recipe_id=?)`, id); err != nil {
+			tx.Rollback()
+			WriteServerError(w, r, err)
+			return
+		}
 		if _, err := tx.Exec(`DELETE FROM meal_calendar WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
 			WriteServerError(w, r, err)
@@ -328,7 +333,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		for _, ing := range input.Ingredients {
-			ingName := strings.ToLower(strings.TrimSpace(ing.Name))
+			ingName := strings.TrimSpace(ing.Name)
 			invID := ing.InventoryID
 			if invID == nil {
 				invID = resolveInventoryID(db, ingName)

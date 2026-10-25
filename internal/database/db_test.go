@@ -484,7 +484,7 @@ func TestShoppingListSourcesMigration(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE shopping_list_sources`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LatestVersion()-1)); err != nil {
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LatestVersion()-2)); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -504,5 +504,65 @@ func TestShoppingListSourcesMigration(t *testing.T) {
 	}
 	if n := count(t, db, `SELECT COUNT(*) FROM shopping_list_sources`); n != 0 {
 		t.Fatalf("sources not cascaded: %d", n)
+	}
+}
+
+func TestMealHistoryCalendarEntryColumnAndIndex(t *testing.T) {
+	db, err := OpenDB(filepath.Join(t.TempDir(), "k.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if notNull(t, db, "meal_history", "calendar_entry_id") != 0 {
+		t.Fatal("calendar_entry_id should be nullable")
+	}
+	if _, err := db.Exec(`INSERT INTO recipes (id,name) VALUES (1,'r')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO meal_calendar (id,date,recipe_id) VALUES (1,'2024-01-01',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO meal_history (recipe_name, calendar_entry_id) VALUES ('a',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO meal_history (recipe_name, calendar_entry_id) VALUES ('b',1)`); err == nil {
+		t.Fatal("expected unique violation")
+	}
+	for _, n := range []string{"c", "d"} {
+		if _, err := db.Exec(`INSERT INTO meal_history (recipe_name) VALUES (?)`, n); err != nil {
+			t.Fatal("multiple NULLs must be allowed:", err)
+		}
+	}
+}
+
+func TestNormalizeMealSlots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "slots.db")
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`INSERT INTO recipes (id,name) VALUES (1,'r')`)
+	for i, s := range []string{"Dinner", " LUNCH ", "snacks", "second breakfast"} {
+		if _, err := db.Exec(`INSERT INTO meal_calendar (id,date,meal_slot,recipe_id) VALUES (?,?,?,1)`, i+1, "2024-01-01", s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Roll back to before the slot migration so it runs again on reopen.
+	if _, err := db.Exec(`PRAGMA user_version = ` + fmt.Sprint(LatestVersion()-1)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	db, err = OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	want := []string{"dinner", "lunch", "snack", "second breakfast"}
+	for i, w := range want {
+		var got string
+		db.QueryRow(`SELECT meal_slot FROM meal_calendar WHERE id=?`, i+1).Scan(&got)
+		if got != w {
+			t.Errorf("id %d: got %q want %q", i+1, got, w)
+		}
 	}
 }
