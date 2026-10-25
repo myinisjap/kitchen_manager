@@ -2,8 +2,8 @@ package database
 
 import (
 	"database/sql"
-	"strings"
 	_ "modernc.org/sqlite"
+	"strings"
 )
 
 // OpenDB opens the SQLite database at path, sets connection limits, and
@@ -32,7 +32,7 @@ func createSchema(db *sql.DB) error {
 		unit            TEXT    NOT NULL DEFAULT '',
 		location        TEXT    NOT NULL DEFAULT '',
 		expiration_date TEXT    NOT NULL DEFAULT '',
-		low_threshold   REAL    NOT NULL DEFAULT 1,
+		low_threshold   REAL    NOT NULL DEFAULT 0,
 		barcode         TEXT    NOT NULL DEFAULT '',
 		preferred_unit  TEXT    NOT NULL DEFAULT ''
 	);
@@ -201,6 +201,12 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS inventory_skus_barcode_idx ON inventory_skus(barcode)`); err != nil {
+		return err
+	}
+
+	// Par level is per product (name); keep lots consistent until products/lots split.
+	if _, err := db.Exec(`UPDATE inventory SET low_threshold = (SELECT MAX(i2.low_threshold) FROM inventory i2 WHERE i2.name = inventory.name)
+		WHERE low_threshold <> (SELECT MAX(i2.low_threshold) FROM inventory i2 WHERE i2.name = inventory.name)`); err != nil {
 		return err
 	}
 
