@@ -261,6 +261,9 @@
               <div class="text-sm text-gray-500 dark:text-gray-400">
                 <span x-text="item.quantity_needed"></span> <span x-text="item.unit"></span>
                 <span class="ml-1 text-xs text-gray-400 dark:text-gray-500" x-text="'(' + item.source + ')'"></span>
+              <template x-if="item.sources && item.sources.length">
+                <div class="text-xs text-gray-400 dark:text-gray-500" x-text="'for ' + item.sources.map(s => s.label || s.source).join(' · ')"></div>
+              </template>
               </div>
             </div>
             <button @click="openBought(item)" title="Bought — add to pantry" class="text-sm">📦</button>

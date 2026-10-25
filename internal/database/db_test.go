@@ -474,6 +474,39 @@ func TestMigrateMealHistoryNullableRecipe(t *testing.T) {
 	}
 }
 
+func TestShoppingListSourcesMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "k.db")
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a DB at the previous latest version without the table.
+	if _, err := db.Exec(`DROP TABLE shopping_list_sources`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LatestVersion()-2)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	db, err = OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if n := count(t, db, `SELECT COUNT(*) FROM sqlite_master WHERE name='shopping_list_sources'`); n != 1 {
+		t.Fatal("shopping_list_sources not created by migration")
+	}
+	// cascade delete works
+	db.Exec(`INSERT INTO shopping_list (id,name) VALUES (1,'x')`)
+	db.Exec(`INSERT INTO shopping_list_sources (shopping_id,source) VALUES (1,'recipe')`)
+	if _, err := db.Exec(`DELETE FROM shopping_list WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM shopping_list_sources`); n != 0 {
+		t.Fatalf("sources not cascaded: %d", n)
+	}
+}
+
 func TestMealHistoryCalendarEntryColumnAndIndex(t *testing.T) {
 	db, err := OpenDB(filepath.Join(t.TempDir(), "k.db"))
 	if err != nil {
