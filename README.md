@@ -139,7 +139,7 @@ OAUTH_ENABLED=true
 GOOGLE_CLIENT_ID=your-client-id-here
 GOOGLE_CLIENT_SECRET=your-client-secret-here
 SESSION_SECRET=paste-the-64-char-hex-string-here
-BASE_URL=https://your-domain.com
+BASE_URL=https://your-domain.com   # include any path prefix, e.g. https://your-domain.com/kitchen-manager
 OAUTH_ALLOWED_EMAILS=you@gmail.com,partner@gmail.com
 ```
 
@@ -153,10 +153,20 @@ All data is stored in a single SQLite file (`kitchen.db`). There are two ways to
 
 **From the app:** Click the 💾 button in the top-right corner of the app. A `.db` file will download to your computer.
 
-**From the server:**
+The download is a consistent snapshot (made with SQLite `VACUUM INTO` into a temp file) and is safe to take while the app is running.
+
+**From the server:** a plain `cp` of a live database can be torn, so either stop the app first or use:
 ```bash
-cp /data/kitchen.db ~/kitchen-backup-$(date +%Y%m%d).db
+sqlite3 /data/kitchen.db "VACUUM INTO '/backups/kitchen-$(date +%Y%m%d).db'"
 ```
+
+### Scheduled off-box backups
+
+Example crontab entry (note the escaped `%`), then copy the files to another machine (rsync/rclone) and keep a few rotations:
+```
+0 3 * * * curl -fsS -o /backups/kitchen-$(date +\%Y\%m\%d).db http://localhost:8080/api/backup
+```
+If the app sits behind OAuth, hit the container port directly from the host, or use the `sqlite3 ... VACUUM INTO` command above instead.
 
 To restore, stop the app, replace `kitchen.db` with your backup, and restart.
 
@@ -175,7 +185,7 @@ All settings go in your `.env` file:
 | `GOOGLE_CLIENT_ID` | — | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | — | From Google Cloud Console |
 | `SESSION_SECRET` | — | Random string for securing login cookies (`openssl rand -hex 32`) |
-| `BASE_URL` | — | Your app's public URL, e.g. `https://kitchen.example.com` |
+| `BASE_URL` | — | Your app's public URL including any path prefix, e.g. `https://kitchen.example.com` or `https://host/kitchen-manager` |
 
 ---
 

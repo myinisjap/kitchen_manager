@@ -38,13 +38,17 @@ func NewSessionManager(db *sql.DB) *scs.SessionManager {
 	return sm
 }
 
+// userInfoURL is the OAuth userinfo endpoint; a var so tests can override it.
+var userInfoURL = "https://www.googleapis.com/oauth2/v2/userinfo"
+
+func baseURL() string { return strings.TrimRight(os.Getenv("BASE_URL"), "/") }
+
 // NewOAuthConfig builds an *oauth2.Config from environment variables.
 func NewOAuthConfig() *oauth2.Config {
-	baseURL := os.Getenv("BASE_URL")
 	return &oauth2.Config{
 		ClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
-		RedirectURL:  baseURL + "/auth/callback",
+		RedirectURL:  baseURL() + "/auth/callback",
 		Scopes:       []string{"openid", "email"},
 		Endpoint:     google.Endpoint,
 	}
@@ -76,7 +80,9 @@ func EmailFromContext(ctx context.Context) string {
 }
 
 // AuthMiddleware requires an authenticated session for all non-/auth/ routes,
-// and injects the user's email into the request context.
+// and injects the user's email into the request context. Unauthenticated
+// /api/* and /ws requests get 401 JSON; others redirect to the absolute
+// BASE_URL/auth/login (exempt, so no loop).
 func AuthMiddleware(sm *scs.SessionManager, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Auth routes are always exempt
@@ -86,8 +92,13 @@ func AuthMiddleware(sm *scs.SessionManager, next http.Handler) http.Handler {
 		}
 		email := sm.GetString(r.Context(), "email")
 		if email == "" {
-			baseURL := os.Getenv("BASE_URL")
-			http.Redirect(w, r, baseURL+"/", http.StatusFound)
+			if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/ws" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				return
+			}
+			http.Redirect(w, r, baseURL()+"/auth/login", http.StatusFound)
 			return
 		}
 		ctx := context.WithValue(r.Context(), emailContextKey, email)
@@ -126,7 +137,7 @@ func HandleCallback(sm *scs.SessionManager, oauthCfg *oauth2.Config, allowed map
 		}
 
 		client := oauthCfg.Client(r.Context(), token)
-		resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+		resp, err := client.Get(userInfoURL)
 		if err != nil {
 			http.Error(w, "userinfo fetch failed", http.StatusInternalServerError)
 			return
@@ -156,8 +167,12 @@ func HandleCallback(sm *scs.SessionManager, oauthCfg *oauth2.Config, allowed map
 			return
 		}
 
+		if err := sm.RenewToken(r.Context()); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		sm.Put(r.Context(), "email", info.Email)
-		http.Redirect(w, r, "/", http.StatusFound)
+		http.Redirect(w, r, baseURL()+"/", http.StatusFound)
 	}
 }
 
@@ -185,7 +200,6 @@ func HandleLogout(sm *scs.SessionManager) http.HandlerFunc {
 			return
 		}
 		sm.Destroy(r.Context())
-		baseURL := os.Getenv("BASE_URL")
-		http.Redirect(w, r, baseURL+"/", http.StatusFound)
+		http.Redirect(w, r, baseURL()+"/auth/login", http.StatusFound)
 	}
 }
