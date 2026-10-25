@@ -1,5 +1,7 @@
 .env
 kitchen.db
+kitchen.db-wal
+kitchen.db-shm
 cert.pem
 key.pem
 .git
