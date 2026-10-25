@@ -69,7 +69,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml down && docker compo
 | `SESSION_SECRET` | — | 64-char hex string for cookie signing (`openssl rand -hex 32`) |
 | `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key for receipt scanning; receipt import errors when unset |
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Claude model used to parse receipts |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Claude model used to parse receipts |
 | `BASE_URL` | — | Public URL incl. any path prefix (e.g. `https://host/kitchen-manager`); used for OAuth and auth redirects |
 
 ## Auth

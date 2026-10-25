@@ -189,7 +189,7 @@ All settings go in your `.env` file:
 | `GOOGLE_CLIENT_SECRET` | — | From Google Cloud Console |
 | `SESSION_SECRET` | — | Random string for securing login cookies (`openssl rand -hex 32`) |
 | `ANTHROPIC_API_KEY` | — | Anthropic API key for receipt scanning; receipt import returns an error when unset |
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Claude model used to parse receipts |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | Claude model used to parse receipts |
 | `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
 | `BASE_URL` | — | Your app's public URL including any path prefix, e.g. `https://kitchen.example.com` or `https://host/kitchen-manager` |
 

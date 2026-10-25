@@ -25,7 +25,7 @@ import (
 const (
 	maxReceiptBytes       = 20 << 20 // 20 MB
 	anthropicAPI          = "https://api.anthropic.com/v1/messages"
-	defaultAnthropicModel = "claude-sonnet-4-6"
+	defaultAnthropicModel = "claude-sonnet-5-5"
 	anthropicModelEnv     = "ANTHROPIC_MODEL"
 	receiptMaxTokens      = 8192
 	receiptToolName       = "record_receipt_items"
