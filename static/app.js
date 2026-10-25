@@ -66,6 +66,8 @@ function app() {
     // Shopping
     shoppingItems: [],
     shoppingForm: { name: '', quantity_needed: 1, unit: '' },
+    putAwayForm: { id: null, name: '', quantity: 1, unit: '', location: '', expiration_date: '' },
+    putAwayBatch: [],
 
     // Receipt import
     receiptFile: null,
@@ -774,7 +776,7 @@ function app() {
 
     async deleteItem(id) {
       if (!confirm('Delete this item?')) return;
-      const res = await this.apiFetch('/api/inventory/' + id, { method: 'DELETE' }, { errorPrefix: 'Delete failed' });
+      const res = await this.apiFetch('/api/inventory/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Delete failed' });
       if (!res) return;
       await this.fetchInventory();
       this.showToast('Item deleted');
@@ -804,6 +806,49 @@ function app() {
       this.showToast('Added to list');
     },
 
+    openBought(item) {
+      this.putAwayForm = { id: item.id, name: item.name, quantity: item.quantity_needed, unit: item.unit || '', location: '', expiration_date: '' };
+      this.modal = 'bought';
+    },
+
+    async saveBought() {
+      const f = this.putAwayForm;
+      const res = await this.apiFetch('/api/shopping/' + f.id + '/bought', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quantity: f.quantity, unit: f.unit, location: f.location, expiration_date: f.expiration_date }),
+      }, { errorPrefix: 'Could not add to pantry' });
+      if (!res) return;
+      this.modal = null;
+      await Promise.all([this.fetchShoppingList(), this.fetchInventory()]);
+      this.showToast('Added to pantry');
+    },
+
+    openPutAwayChecked() {
+      const checked = this.shoppingItems.filter(i => i.checked);
+      if (checked.length === 0) {
+        this.showToast('No checked items');
+        return;
+      }
+      this.putAwayBatch = checked.map(i => ({ id: i.id, name: i.name, quantity: i.quantity_needed, unit: i.unit || '', location: '', expiration_date: '' }));
+      this.modal = 'putAway';
+    },
+
+    async savePutAway() {
+      const res = await this.apiFetch('/api/shopping/put-away', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: this.putAwayBatch.map(r => ({ id: r.id, quantity: r.quantity, unit: r.unit, location: r.location, expiration_date: r.expiration_date })) }),
+      }, { errorPrefix: 'Could not put away items' });
+      if (!res) return;
+      const data = await res.json();
+      this.modal = null;
+      await Promise.all([this.fetchShoppingList(), this.fetchInventory()]);
+      let msg = `Put away ${data.put_away.length} item(s)`;
+      if (data.skipped.length) msg += '; skipped: ' + data.skipped.map(s => s.name + ' (' + s.reason + ')').join(', ');
+      this.showToast(msg);
+    },
+
     async toggleShoppingItem(item) {
       const res = await this.apiFetch('/api/shopping/' + item.id, {
         method: 'PATCH',
@@ -816,20 +861,20 @@ function app() {
     },
 
     async deleteShoppingItem(id) {
-      const res = await this.apiFetch('/api/shopping/' + id, { method: 'DELETE' }, { errorPrefix: 'Delete failed' });
+      const res = await this.apiFetch('/api/shopping/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Delete failed' });
       if (!res) return;
       await this.fetchShoppingList();
     },
 
     async clearCheckedItems() {
-      const res = await this.apiFetch('/api/shopping/checked', { method: 'DELETE' }, { errorPrefix: 'Clear failed' });
+      const res = await this.apiFetch('/api/shopping/checked', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Clear failed' });
       if (!res) return;
       await this.fetchShoppingList();
       this.showToast('Cleared checked items');
     },
 
     async generateFromThresholds() {
-      const res = await this.apiFetch('/api/shopping/generate-from-thresholds', { method: 'POST' });
+      const res = await this.apiFetch('/api/shopping/generate-from-thresholds', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       if (!res) return;
       const data = await res.json();
       await this.fetchShoppingList();
@@ -847,7 +892,7 @@ function app() {
     },
 
     async logout() {
-      const res = await this.apiFetch('/auth/logout', { method: 'POST' }, { errorPrefix: 'Sign out failed' });
+      const res = await this.apiFetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Sign out failed' });
       if (!res) return;
       window.location.href = this.baseUrl + '/auth/login';
     },
@@ -1106,7 +1151,7 @@ function app() {
 
     async addRecipeToShoppingList(recipe, servings) {
       const s = servings || this.recipeScaleServings(recipe);
-      const res = await this.apiFetch('/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST' });
+      const res = await this.apiFetch('/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       if (!res) return;
       const data = await res.json();
       this.modal = null;
@@ -1146,7 +1191,7 @@ function app() {
         }
       } catch (e) { /* fall through to plain confirm */ }
       if (!confirm(msg)) return;
-      const delRes = await this.apiFetch('/api/recipes/' + id, { method: 'DELETE' }, { errorPrefix: 'Failed to delete' });
+      const delRes = await this.apiFetch('/api/recipes/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Failed to delete' });
       if (!delRes) return;
       await this.fetchRecipes();
       this.showToast('Recipe deleted');
@@ -1232,7 +1277,7 @@ function app() {
     },
 
     async deleteCalendarEntry(id) {
-      const res = await this.apiFetch('/api/calendar/' + id, { method: 'DELETE' }, { errorPrefix: 'Remove failed' });
+      const res = await this.apiFetch('/api/calendar/' + id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Remove failed' });
       if (!res) return;
       await this.fetchCalendar();
       this.showToast('Meal removed');
@@ -1240,7 +1285,7 @@ function app() {
 
     async generateWeeklyShopping() {
       const start = this.calendarWeekStart.toISOString().split('T')[0];
-      const res = await this.apiFetch('/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST' });
+      const res = await this.apiFetch('/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       if (!res) return;
       const data = await res.json();
       this.showToast(`Added ${data.items.length} item(s) to shopping list`);
@@ -1432,7 +1477,7 @@ function app() {
     },
 
     async deleteSkuAlias(itemId, skuId) {
-      const res = await this.apiFetch('/api/skus/' + skuId, { method: 'DELETE' }, { errorPrefix: 'Failed to remove alias' });
+      const res = await this.apiFetch('/api/skus/' + skuId, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Failed to remove alias' });
       if (!res) return;
       this.skusByItem[itemId] = (this.skusByItem[itemId] || []).filter(s => s.id !== skuId);
       this.showToast('Alias removed');

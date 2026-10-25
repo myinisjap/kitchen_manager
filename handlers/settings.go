@@ -10,6 +10,10 @@ import (
 	"strconv"
 )
 
+var allowedSettingKeys = map[string]bool{"default_servings": true}
+
+const maxSettingValueLen = 256
+
 func RegisterSettings(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/backup", func(w http.ResponseWriter, r *http.Request) {
 		dir, err := os.MkdirTemp("", "kitchen-backup-*")
@@ -74,6 +78,16 @@ func RegisterSettings(mux *http.ServeMux, db *sql.DB) {
 		if err := ReadJSON(r, &patch); err != nil || len(patch) == 0 {
 			WriteError(w, http.StatusBadRequest, "invalid body")
 			return
+		}
+		for k, v := range patch {
+			if !allowedSettingKeys[k] {
+				WriteError(w, http.StatusBadRequest, "unknown setting: "+k)
+				return
+			}
+			if len(v) > maxSettingValueLen {
+				WriteError(w, http.StatusBadRequest, "setting value too long")
+				return
+			}
 		}
 		if v, ok := patch["default_servings"]; ok {
 			n, err := strconv.Atoi(v)

@@ -18,6 +18,7 @@ import (
 // Android can reach the server by IP without a hostname.
 func EnsureCert(certFile, keyFile string) error {
 	if fileExists(certFile) && fileExists(keyFile) {
+		_ = os.Chmod(keyFile, 0o600)
 		return nil
 	}
 
@@ -68,7 +69,7 @@ func EnsureCert(certFile, keyFile string) error {
 		return err
 	}
 
-	kf, err := os.Create(keyFile)
+	kf, err := os.OpenFile(keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -77,7 +78,10 @@ func EnsureCert(certFile, keyFile string) error {
 	if err != nil {
 		return err
 	}
-	return pem.Encode(kf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	if err := pem.Encode(kf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}); err != nil {
+		return err
+	}
+	return os.Chmod(keyFile, 0o600)
 }
 
 func fileExists(path string) bool {
