@@ -11,8 +11,12 @@ go build -o kitchen_manager
 # Run (plain HTTP on :8080 by default; see Running Modes below for TLS/Docker)
 ./kitchen_manager
 
-# Run all tests
-go test ./...
+# Run all tests (CI uses -race)
+go test -race ./...
+
+# Vulnerability scan (CI runs this too)
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...
 
 # Run tests for a specific package
 go test ./units/
@@ -21,6 +25,8 @@ go test ./handlers/
 # Run a single test
 go test -v -run TestGetInventoryItemByBarcode ./handlers/
 ```
+
+Tests must build their database with `testutil.NewDB(t)` (`internal/testutil`, real schema via `database.OpenDB(":memory:")`), never a hand-written schema.
 
 No Makefile or external build tools. Frontend has no build step (CDN-loaded dependencies).
 

@@ -5,23 +5,18 @@ import (
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"testing"
 
 	"kitchen_manager/handlers"
-	"kitchen_manager/internal/database"
+	"kitchen_manager/internal/testutil"
 )
 
 // newSchemaMux builds handlers on a database created by the real schema code,
 // so foreign keys and migrations match production.
 func newSchemaMux(t *testing.T) (*http.ServeMux, *sql.DB) {
 	t.Helper()
-	db, err := database.OpenDB(filepath.Join(t.TempDir(), "kitchen.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
+	db := testutil.NewDB(t)
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db)
 	handlers.RegisterShopping(mux, db)
