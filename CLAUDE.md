@@ -98,7 +98,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Stock additions:** `POST /api/inventory/` (merge-or-insert, incl. SKU-alias merge), `POST /api/skus/item/{id}` and `merge-into` each run in a single transaction and add via `addStock` (`handlers/stock.go`, `quantity = quantity + ?`), never a quantity computed in Go. Because `OpenDB` uses `SetMaxOpenConns(1)`, a handler must not touch `db` while its `tx` is open (it deadlocks) — pass `tx` to `LogHistory` and read back via `tx`. Receipt import posts lines sequentially.
 
-**Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips items already on the unchecked list to avoid duplicates.
+**Shopping list sources:** Items have a `source` field: `manual`, `threshold`, `recipe`, or `calendar`. `generate-from-thresholds` skips products that already have an unchecked list row (any lot of the same name) to avoid duplicates.
 
 **Weekly shopping simulation:** `services/calendar.go` simulates inventory depletion day-by-day across the week, aggregating shortfalls. It handles unit conversion to each item's `preferred_unit`.
 
@@ -112,7 +112,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 ## Database Schema Notes
 
-- `inventory.low_threshold` — when `quantity` drops below this, `generate-from-thresholds` adds the shortfall to the shopping list
+- `inventory.low_threshold` — par level per product (name): kept identical across all lots; `generate-from-thresholds` sums all lots of a name converted to the product unit (preferred_unit, else first lot's unit) and, when total < par, adds `par − total`. 0 = unset (no rule).
 - `inventory.preferred_unit` — added via migration on startup if the column doesn't exist
 - `shopping_list.inventory_id` is nullable (manual items may not link to an inventory item)
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
