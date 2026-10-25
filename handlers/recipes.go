@@ -153,6 +153,25 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		WriteJSON(w, http.StatusOK, result)
 	})
 
+	mux.HandleFunc("GET /api/recipes/use-it-up", func(w http.ResponseWriter, r *http.Request) {
+		days, cutoff := expiryDaysAndCutoff(r, db)
+		limit := 5
+		if s := r.URL.Query().Get("limit"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		if limit > 50 {
+			limit = 50
+		}
+		recipes, err := services.RankUseItUp(db, cutoff, limit)
+		if err != nil {
+			WriteServerError(w, r, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]any{"days": days, "cutoff": cutoff, "recipes": recipes})
+	})
+
 	mux.HandleFunc("GET /api/recipes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathIDFromPattern(r, "id")
 		if !ok {

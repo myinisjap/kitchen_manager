@@ -241,14 +241,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	})
 
 	mux.HandleFunc("GET /api/inventory/expiring", func(w http.ResponseWriter, r *http.Request) {
-		daysStr := r.URL.Query().Get("days")
-		days := 7
-		if daysStr != "" {
-			if d, err := strconv.Atoi(daysStr); err == nil {
-				days = d
-			}
-		}
-		cutoff := time.Now().AddDate(0, 0, days).Format("2006-01-02")
+		_, cutoff := expiryDaysAndCutoff(r, db)
 		rows, err := db.Query(`SELECT `+lotCols+lotFrom+` WHERE l.expiration_date != '' AND l.expiration_date <= ?`, cutoff)
 		if err != nil {
 			WriteServerError(w, r, err)

@@ -21,6 +21,7 @@ function app() {
     inventoryItems: [],
     expiringItems: [],
     expiryOpen: false,
+    useItUpRecipes: [],
     inventorySearch: '',
     inventoryLocation: '',
     locations: [],
@@ -201,7 +202,7 @@ function app() {
             const msg = JSON.parse(e.data);
             if (msg.type === 'inventory_updated') { this.fetchInventory(); this.fetchExpiring(); }
             if (msg.type === 'shopping_updated') this.fetchShoppingList();
-            if (msg.type === 'recipes_updated') this.fetchRecipes();
+            if (msg.type === 'recipes_updated') { this.fetchRecipes(); this.fetchExpiring(); }
             if (msg.type === 'calendar_updated') this.fetchCalendar();
           } catch {}
         };
@@ -733,8 +734,41 @@ function app() {
     },
 
     async fetchExpiring() {
-      const res = await fetch(this.baseUrl + '/api/inventory/expiring?days=7');
+      const res = await fetch(this.baseUrl + '/api/inventory/expiring');
       this.expiringItems = await res.json();
+      try {
+        const r2 = await fetch(this.baseUrl + '/api/recipes/use-it-up');
+        if (r2.ok) this.useItUpRecipes = (await r2.json()).recipes || [];
+      } catch (e) { /* non-fatal */ }
+    },
+
+    expiryWindowDays() {
+      const n = parseInt(this.settings.expiry_window_days);
+      return n >= 1 ? n : 7;
+    },
+
+    async saveExpiryWindow(n) {
+      n = parseInt(n);
+      if (!(n >= 1 && n <= 365)) { this.showToast('Expiry window must be 1-365 days', 'error'); return; }
+      const res = await this.apiFetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expiry_window_days: String(n) }),
+      }, { errorPrefix: 'Could not save expiry window' });
+      if (!res) return;
+      this.settings = await res.json();
+      await this.fetchExpiring();
+    },
+
+    async openUseItUpRecipe(id) {
+      let recipe = (this.recipes || []).find(r => r.id === id);
+      if (!recipe) {
+        const res = await fetch(this.baseUrl + '/api/recipes/' + id);
+        if (!res.ok) return;
+        recipe = await res.json();
+        if (!recipe.incompatible_ingredients) recipe.incompatible_ingredients = [];
+      }
+      this.viewRecipe(recipe);
     },
 
     openAddItem() {
