@@ -56,7 +56,12 @@ func main() {
 	mux.HandleFunc("GET /ws", handlers.ServeWs(hub))
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
-	var handler http.Handler = mux
+	var inner http.Handler = mux
+	if auth.TrustForwardedUser() {
+		inner = auth.ForwardedUserMiddleware(mux)
+		log.Println("Trusting X-Forwarded-User header for user identity (TRUST_FORWARDED_USER=true)")
+	}
+	var handler http.Handler = inner
 
 	if os.Getenv("OAUTH_ENABLED") == "true" {
 		if os.Getenv("GOOGLE_CLIENT_ID") == "" || os.Getenv("GOOGLE_CLIENT_SECRET") == "" {
@@ -77,7 +82,7 @@ func main() {
 		mux.HandleFunc("/auth/logout", auth.HandleLogout(sm))
 		mux.HandleFunc("GET /api/me", auth.HandleMe(sm))
 
-		handler = sm.LoadAndSave(auth.AuthMiddleware(sm, mux))
+		handler = sm.LoadAndSave(auth.AuthMiddleware(sm, inner))
 	} else {
 		mux.HandleFunc("GET /api/me", auth.HandleMe(nil))
 	}
