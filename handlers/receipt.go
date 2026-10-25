@@ -13,6 +13,7 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -22,10 +23,14 @@ import (
 )
 
 const (
-	maxReceiptBytes  = 20 << 20 // 20 MB
-	anthropicAPI     = "https://api.anthropic.com/v1/messages"
-	anthropicModel   = "claude-sonnet-4-6"
-	anthropicVersion = "2023-06-01"
+	maxReceiptBytes       = 20 << 20 // 20 MB
+	anthropicAPI          = "https://api.anthropic.com/v1/messages"
+	defaultAnthropicModel = "claude-sonnet-4-6"
+	anthropicModelEnv     = "ANTHROPIC_MODEL"
+	receiptMaxTokens      = 8192
+	receiptToolName       = "record_receipt_items"
+	receiptAPITimeout     = 90 * time.Second
+	anthropicVersion      = "2023-06-01"
 )
 
 // ReceiptItem is a single line item parsed from a receipt image.
@@ -91,19 +96,7 @@ func handleReceiptParse(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 
-	// For any item with a PLU/barcode, look up the existing inventory name and quantity_per_scan.
-	for i, item := range items {
-		if item.PLU == "" {
-			continue
-		}
-		var existingName string
-		var qtyPerScan float64
-		err := db.QueryRow(`SELECT name, quantity_per_scan FROM inventory WHERE barcode=? LIMIT 1`, item.PLU).Scan(&existingName, &qtyPerScan)
-		if err == nil {
-			items[i].Name = existingName
-			items[i].QuantityPerScan = qtyPerScan
-		}
-	}
+	enrichReceiptItems(db, items)
 
 	WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -159,21 +152,7 @@ func prepareForAPI(imgBytes []byte) ([]byte, string, error) {
 	}
 }
 
-func parseReceiptWithClaude(imgBytes []byte, mediaType string) ([]ReceiptItem, error) {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
-	}
-
-	var err error
-	imgBytes, mediaType, err = prepareForAPI(imgBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	b64 := base64.StdEncoding.EncodeToString(imgBytes)
-
-	prompt := `You are an expert grocery receipt parser. Extract every PURCHASED ITEM from this receipt image.
+const receiptPrompt = `You are an expert grocery receipt parser. Extract every PURCHASED ITEM from this receipt image.
 
 Read top to bottom. Identify these line types:
 - Purchased item: has a product name, optional barcode/PLU, and a positive dollar amount
@@ -195,12 +174,51 @@ Critical rules:
 - Include every purchased item, even ones you are unsure about — make your best guess on the name
 - Do not include tax, totals, subtotals, or payment method lines
 
-Return ONLY a valid JSON array, no markdown, no explanation.
-Example: [{"name":"fairlife 2% milk","plu":"4902100277","quantity":1,"unit":"piece","unit_cost_cents":532},{"name":"chicken breast boneless skinless","plu":"3077600000","quantity":2.431,"unit":"lb","unit_cost_cents":499}]`
+Call the record_receipt_items tool exactly once with every purchased item in the "items" array.
+Example items: [{"name":"fairlife 2% milk","plu":"4902100277","quantity":1,"unit":"piece","unit_cost_cents":532},{"name":"chicken breast boneless skinless","plu":"3077600000","quantity":2.431,"unit":"lb","unit_cost_cents":499}]`
 
-	reqBody := map[string]any{
-		"model":      anthropicModel,
-		"max_tokens": 4096,
+var errReceiptTruncated = errors.New("receipt too long: the model's output was cut off before all items were returned; try photographing the receipt in smaller sections")
+
+func receiptModel() string {
+	if m := strings.TrimSpace(os.Getenv(anthropicModelEnv)); m != "" {
+		return m
+	}
+	return defaultAnthropicModel
+}
+
+func receiptToolSchema() map[string]any {
+	return map[string]any{
+		"name":        receiptToolName,
+		"description": "Record every purchased line item parsed from the receipt.",
+		"input_schema": map[string]any{
+			"type":     "object",
+			"required": []string{"items"},
+			"properties": map[string]any{
+				"items": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type":     "object",
+						"required": []string{"name", "plu", "quantity", "unit", "unit_cost_cents"},
+						"properties": map[string]any{
+							"name":            map[string]any{"type": "string"},
+							"plu":             map[string]any{"type": "string", "description": "PLU/UPC/barcode if visible, else empty string"},
+							"quantity":        map[string]any{"type": "number"},
+							"unit":            map[string]any{"type": "string", "description": "lb, oz, kg, g only when a weight is printed; otherwise piece"},
+							"unit_cost_cents": map[string]any{"type": "integer"},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func buildReceiptRequest(model, mediaType, b64 string) map[string]any {
+	return map[string]any{
+		"model":       model,
+		"max_tokens":  receiptMaxTokens,
+		"tools":       []any{receiptToolSchema()},
+		"tool_choice": map[string]any{"type": "tool", "name": receiptToolName},
 		"messages": []map[string]any{
 			{
 				"role": "user",
@@ -213,21 +231,120 @@ Example: [{"name":"fairlife 2% milk","plu":"4902100277","quantity":1,"unit":"pie
 							"data":       b64,
 						},
 					},
-					{
-						"type": "text",
-						"text": prompt,
-					},
+					{"type": "text", "text": receiptPrompt},
 				},
 			},
 		},
 	}
+}
 
-	bodyBytes, err := json.Marshal(reqBody)
+func parseReceiptResponse(respBytes []byte) ([]ReceiptItem, error) {
+	var env struct {
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+			Text  string          `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(respBytes, &env); err != nil {
+		return nil, fmt.Errorf("could not parse API response: %w", err)
+	}
+	if env.StopReason == "max_tokens" {
+		return nil, errReceiptTruncated
+	}
+	var input json.RawMessage
+	text := ""
+	for _, c := range env.Content {
+		if c.Type == "tool_use" && c.Name == receiptToolName {
+			input = c.Input
+			break
+		}
+		if c.Type == "text" && text == "" {
+			text = c.Text
+		}
+	}
+	if input == nil {
+		return nil, fmt.Errorf("model did not return structured items (stop_reason=%q): %s", env.StopReason, text[:min(200, len(text))])
+	}
+	var out struct {
+		Items []ReceiptItem `json:"items"`
+	}
+	if err := json.Unmarshal(input, &out); err != nil {
+		return nil, fmt.Errorf("could not parse items: %w", err)
+	}
+	if out.Items == nil {
+		return []ReceiptItem{}, nil
+	}
+	for i := range out.Items {
+		it := &out.Items[i]
+		it.Name = strings.TrimSpace(it.Name)
+		it.PLU = strings.TrimSpace(it.PLU)
+		it.Unit = strings.TrimSpace(it.Unit)
+		it.QuantityPerScan = 0
+	}
+	return out.Items, nil
+}
+
+// lookupReceiptPLU checks inventory.barcode, then inventory_skus aliases.
+func lookupReceiptPLU(db *sql.DB, plu string) (string, float64, bool, error) {
+	var name string
+	var qps float64
+	err := db.QueryRow(`SELECT name, quantity_per_scan FROM inventory WHERE barcode=? LIMIT 1`, plu).Scan(&name, &qps)
+	if err == nil {
+		return name, qps, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, err
+	}
+	err = db.QueryRow(`SELECT i.name, s.quantity_per_scan FROM inventory_skus s JOIN inventory i ON i.id = s.inventory_id WHERE s.barcode=? LIMIT 1`, plu).Scan(&name, &qps)
+	if err == nil {
+		return name, qps, true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	return "", 0, false, err
+}
+
+func enrichReceiptItems(db *sql.DB, items []ReceiptItem) {
+	for i := range items {
+		plu := strings.TrimSpace(items[i].PLU)
+		if plu == "" {
+			continue
+		}
+		name, qps, ok, err := lookupReceiptPLU(db, plu)
+		if err != nil {
+			log.Printf("receipt PLU lookup %q: %v", plu, err)
+			continue
+		}
+		if ok {
+			items[i].Name = name
+			items[i].QuantityPerScan = qps
+		}
+	}
+}
+
+func parseReceiptWithClaude(imgBytes []byte, mediaType string) ([]ReceiptItem, error) {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
+	}
+
+	var err error
+	imgBytes, mediaType, err = prepareForAPI(imgBytes)
+	if err != nil {
+		return nil, err
+	}
+	b64 := base64.StdEncoding.EncodeToString(imgBytes)
+
+	bodyBytes, err := json.Marshal(buildReceiptRequest(receiptModel(), mediaType, b64))
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), receiptAPITimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, anthropicAPI, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -250,35 +367,5 @@ Example: [{"name":"fairlife 2% milk","plu":"4902100277","quantity":1,"unit":"pie
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(respBytes))
 	}
-
-	// Parse Anthropic response envelope
-	var apiResp struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(respBytes, &apiResp); err != nil {
-		return nil, fmt.Errorf("could not parse API response: %w", err)
-	}
-	if len(apiResp.Content) == 0 {
-		return nil, fmt.Errorf("empty response from API")
-	}
-
-	text := strings.TrimSpace(apiResp.Content[0].Text)
-
-	// Strip markdown code fences if present
-	if strings.HasPrefix(text, "```") {
-		if idx := strings.Index(text, "\n"); idx >= 0 {
-			text = text[idx+1:]
-		}
-		text = strings.TrimSuffix(strings.TrimSpace(text), "```")
-	}
-
-	var items []ReceiptItem
-	if err := json.Unmarshal([]byte(text), &items); err != nil {
-		return nil, fmt.Errorf("could not parse items JSON: %w — raw: %s", err, text[:min(200, len(text))])
-	}
-
-	return items, nil
+	return parseReceiptResponse(respBytes)
 }
