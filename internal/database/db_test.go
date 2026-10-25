@@ -480,11 +480,11 @@ func TestShoppingListSourcesMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a DB at the previous latest version without the table.
+	// Simulate a DB three versions back (shopping_list_sources is followed by later migrations).
 	if _, err := db.Exec(`DROP TABLE shopping_list_sources`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LatestVersion()-2)); err != nil {
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LatestVersion()-3)); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -548,7 +548,7 @@ func TestNormalizeMealSlots(t *testing.T) {
 		}
 	}
 	// Roll back to before the slot migration so it runs again on reopen.
-	if _, err := db.Exec(`PRAGMA user_version = ` + fmt.Sprint(LatestVersion()-1)); err != nil {
+	if _, err := db.Exec(`PRAGMA user_version = ` + fmt.Sprint(LatestVersion()-2)); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
