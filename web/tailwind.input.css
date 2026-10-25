@@ -1,0 +1,6 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+[x-cloak] { display: none !important; }
+.tab-bar { padding-bottom: env(safe-area-inset-bottom); }

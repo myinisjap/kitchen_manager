@@ -26,9 +26,9 @@ go test ./handlers/
 go test -v -run TestGetInventoryItemByBarcode ./handlers/
 ```
 
-Tests must build their database with `testutil.NewDB(t)` (`internal/testutil`, real schema via `database.OpenDB(":memory:")`), never a hand-written schema.
+No Makefile. Frontend has no runtime build step: Alpine and ZXing are vendored in `static/vendor/` (see its README) and Tailwind CSS is pre-built and committed as `static/tailwind.css`. After changing classes in `static/index.html` or `static/app.js`, rebuild: `npx tailwindcss@3.4.19 -c tailwind.config.js -i web/tailwind.input.css -o static/tailwind.css --minify`.
 
-No Makefile or external build tools. Frontend has no build step (CDN-loaded dependencies).
+Tests must build their database with `testutil.NewDB(t)` (`internal/testutil`, real schema via `database.OpenDB(":memory:")`), never a hand-written schema.
 
 ## Running Modes
 
@@ -86,7 +86,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `internal/tlscert/` — self-signed TLS certificate generation
 - `deploy/` — Dockerfile, docker-compose.yml (Traefik reverse proxy, not Caddy)
   Do not add a headless-browser renderer (e.g. Splash) to the compose network; it was removed for security (it could reach app:8080 bypassing forward-auth). Recipe URL import is a direct SSRF-safe fetch (`handlers/safefetch.go`).
-- `static/index.html` — entire frontend as a single file (~40KB)
+- `static/index.html` — frontend markup; logic in `static/app.js`, dark-mode bootstrap in `static/theme-init.js`, styles in generated `static/tailwind.css`, third-party JS in `static/vendor/`. No inline scripts/styles (CSP)
 
 **Request flow:** Frontend → Handler → Service (if needed) → Raw SQL → SQLite (`kitchen.db`)
 
@@ -117,3 +117,5 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `shopping_list.inventory_id` is nullable (manual items may not link to an inventory item)
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
 - Recipe deletion is transactional (deletes ingredients first, then recipe)
+
+**Security headers / CSP:** `securityHeaders` middleware in `main.go` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on all responses. CSP allows `'unsafe-eval'` because the standard Alpine build needs it (the CSP build can't run the inline expressions in index.html). Any new external origin must be added to `contentSecurityPolicy`; don't add inline scripts/styles or CDN tags.
