@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"kitchen_manager/handlers"
 	"kitchen_manager/internal/auth"
@@ -72,6 +75,7 @@ func main() {
 		mux.HandleFunc("GET /api/me", auth.HandleMe(nil))
 	}
 
+	handler = withHealthz(db, handler)
 	handler = securityHeaders(handler)
 
 	if os.Getenv("SELF_SIGNED_TLS") == "true" {
@@ -80,13 +84,13 @@ func main() {
 		}
 		go func() {
 			log.Println("HTTP redirect listening on", httpAddr)
-			log.Fatal(http.ListenAndServe(httpAddr, securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Fatal(http.ListenAndServe(httpAddr, securityHeaders(withHealthz(db, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				host, _, err := parseHost(r.Host)
 				if err != nil {
 					host = r.Host
 				}
 				http.Redirect(w, r, "https://"+host+httpsAddr+r.RequestURI, http.StatusMovedPermanently)
-			}))))
+			})))))
 		}()
 		log.Println("HTTPS listening on", httpsAddr)
 		log.Fatal(http.ListenAndServeTLS(httpsAddr, certFile, keyFile, handler))
@@ -123,6 +127,34 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// healthz reports 200 when the database is reachable, 503 otherwise.
+func healthz(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		if err := db.PingContext(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("db unavailable"))
+			return
+		}
+		w.Write([]byte("ok"))
+	}
+}
+
+// withHealthz serves /healthz outside auth and session middleware.
+func withHealthz(db *sql.DB, next http.Handler) http.Handler {
+	h := healthz(db)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			h(w, r)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
