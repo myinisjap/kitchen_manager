@@ -1421,7 +1421,7 @@ function app() {
 
     async fetchMealStats() {
       const tzOffset = -new Date().getTimezoneOffset();
-      const res = await fetch(this.baseUrl + '/api/meals/stats?tz_offset=' + tzOffset);
+      const res = await fetch(this.baseUrl + '/api/meals/stats?tz_offset=' + tzOffset + '&tz=' + encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || ''));
       if (res.ok) this.mealsStats = await res.json();
     },
   };

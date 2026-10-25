@@ -209,7 +209,7 @@ func TestCookDefaultsAndNotes(t *testing.T) {
 	if servings != 4 {
 		t.Errorf("servings_made %d, want recipe default 4", servings)
 	}
-	if !strings.HasPrefix(cookedAt, "2024-03-05T12:00:00") {
+	if cookedAt != "2024-03-05T12:00:00Z" {
 		t.Errorf("cooked_at %q", cookedAt)
 	}
 	if len(gotNotes) != 500 {
@@ -297,5 +297,68 @@ func TestMealStats(t *testing.T) {
 	mc := m["most_cooked"].([]any)
 	if len(mc) != 2 || mc[0].(map[string]any)["recipe_name"] != "a" {
 		t.Errorf("most_cooked: %v", mc)
+	}
+}
+
+func TestMealStatsBounds(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load tz: %v", err)
+	}
+	cases := []struct {
+		name      string
+		now       string
+		loc       *time.Location
+		wantWeek  string
+		wantMonth string
+	}{
+		{"west", "2024-03-04T03:00:00Z", time.FixedZone("", -5*3600), "2024-02-26T05:00:00Z", "2024-03-01T05:00:00Z"},
+		{"east", "2024-03-31T23:30:00Z", time.FixedZone("", 2*3600), "2024-03-31T22:00:00Z", "2024-03-31T22:00:00Z"},
+		{"leap", "2024-02-29T20:00:00Z", time.FixedZone("", 9*3600), "2024-02-25T15:00:00Z", "2024-02-29T15:00:00Z"},
+		{"dst", "2024-03-15T12:00:00Z", ny, "2024-03-11T04:00:00Z", "2024-03-01T05:00:00Z"},
+	}
+	for _, c := range cases {
+		now, _ := time.Parse(time.RFC3339, c.now)
+		w, m := handlers.MealStatsBounds(now, c.loc)
+		if got := w.Format(time.RFC3339); got != c.wantWeek {
+			t.Errorf("%s week %s want %s", c.name, got, c.wantWeek)
+		}
+		if got := m.Format(time.RFC3339); got != c.wantMonth {
+			t.Errorf("%s month %s want %s", c.name, got, c.wantMonth)
+		}
+	}
+}
+
+func TestMealStatsTZBoundary(t *testing.T) {
+	mux, db := newMealsMux(t)
+	fixed, _ := time.Parse(time.RFC3339, "2024-07-01T06:00:00Z")
+	defer handlers.SetMealsNow(func() time.Time { return fixed })()
+	rid := newRecipe(t, db, "a", 1)
+	for _, at := range []string{"2024-07-01T04:30:00Z", "2024-07-01T05:30:00Z"} {
+		if _, err := db.Exec(`INSERT INTO meal_history (recipe_id, recipe_name, cooked_at, servings_made) VALUES (?,?,?,1)`, rid, "a", at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// offset-bearing POST is normalized to UTC and counted
+	body := fmt.Sprintf(`{"recipe_id":%d,"cooked_at":"2024-07-01T00:40:00-05:00"}`, rid)
+	if w := call(t, mux, "POST", "/api/meals", body); w.Code != http.StatusCreated {
+		t.Fatalf("code %d: %s", w.Code, w.Body.String())
+	}
+	var stored string
+	if err := db.QueryRow(`SELECT cooked_at FROM meal_history ORDER BY id DESC LIMIT 1`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "2024-07-01T05:40:00Z" {
+		t.Errorf("stored %q", stored)
+	}
+	for _, q := range []string{"tz_offset=-300", "tz=America/Chicago"} {
+		w := call(t, mux, "GET", "/api/meals/stats?"+q, "")
+		var m map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["total_meals_this_week"].(float64) != 2 || m["total_meals_this_month"].(float64) != 2 {
+			t.Errorf("%s: %v", q, m)
+		}
 	}
 }
