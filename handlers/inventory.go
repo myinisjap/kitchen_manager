@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -392,8 +393,8 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		WriteJSON(w, http.StatusOK, candidates)
 	})
 
-	// One group per product. Products with no lots are left out for now: the
-	// pantry UI shows a group through its first lot.
+	// One group per product. Products with no lots appear as out_of_stock
+	// groups with empty locations (unless a location filter is set).
 	mux.HandleFunc("GET /api/inventory/grouped", func(w http.ResponseWriter, r *http.Request) {
 		locFilter := r.URL.Query().Get("location")
 		nameFilter := r.URL.Query().Get("name")
@@ -441,6 +442,8 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			BelowPar              bool            `json:"below_par"`
 			Locations             []locationEntry `json:"locations"`
 			RecommendedLocationID int64           `json:"recommended_location_id"`
+			OutOfStock            bool            `json:"out_of_stock"`
+			Barcode               string          `json:"barcode"`
 		}
 
 		results := []groupedItem{}
@@ -448,12 +451,13 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		for rows.Next() {
 			var e locationEntry
 			var pid int64
-			var name, pUnit, pref string
+			var name, pUnit, pref, pbar string
 			var par float64
-			if err := rows.Scan(&e.ID, &pid, &e.Location, &e.Quantity, &e.Unit, &e.ExpirationDate, &name, &pUnit, &pref, &par, &e.Barcode); err != nil {
+			if err := rows.Scan(&e.ID, &pid, &e.Location, &e.Quantity, &e.Unit, &e.ExpirationDate, &name, &pUnit, &pref, &par, &pbar); err != nil {
 				WriteServerError(w, r, err)
 				return
 			}
+			e.Barcode = pbar
 			idx, ok := byProduct[pid]
 			if !ok {
 				eff := pref
@@ -462,7 +466,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				}
 				results = append(results, groupedItem{
 					ProductID: pid, Name: name, Unit: eff, PreferredUnit: pref, LowThreshold: par,
-					Locations: []locationEntry{}, RecommendedLocationID: e.ID,
+					Locations: []locationEntry{}, RecommendedLocationID: e.ID, Barcode: pbar,
 				})
 				idx = len(results) - 1
 				byProduct[pid] = idx
@@ -480,6 +484,51 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		rows.Close()
+		if locFilter == "" {
+			oq := `SELECT id, name, unit, preferred_unit, par_level, barcode FROM products p
+				WHERE NOT EXISTS (SELECT 1 FROM stock_lots l WHERE l.product_id = p.id)`
+			oargs := []any{}
+			if nameFilter != "" {
+				oq += ` AND p.name LIKE ?`
+				oargs = append(oargs, "%"+nameFilter+"%")
+			}
+			orows, err := db.Query(oq, oargs...)
+			if err != nil {
+				WriteServerError(w, r, err)
+				return
+			}
+			for orows.Next() {
+				var pid int64
+				var name, pUnit, pref, bar string
+				var par float64
+				if err := orows.Scan(&pid, &name, &pUnit, &pref, &par, &bar); err != nil {
+					orows.Close()
+					WriteServerError(w, r, err)
+					return
+				}
+				eff := pref
+				if eff == "" {
+					eff = pUnit
+				}
+				results = append(results, groupedItem{
+					ProductID: pid, Name: name, Unit: eff, PreferredUnit: pref, LowThreshold: par,
+					Barcode: bar, Locations: []locationEntry{}, OutOfStock: true,
+				})
+			}
+			err = orows.Err()
+			orows.Close()
+			if err != nil {
+				WriteServerError(w, r, err)
+				return
+			}
+			sort.SliceStable(results, func(i, j int) bool {
+				a, b := strings.ToLower(results[i].Name), strings.ToLower(results[j].Name)
+				if a != b {
+					return a < b
+				}
+				return results[i].ProductID < results[j].ProductID
+			})
+		}
 		levels, err := services.ProductLevels(db)
 		if err != nil {
 			WriteServerError(w, r, err)
@@ -808,7 +857,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			if rec, err = recommendedLotID(db, prod.ID); err == nil && rec != 0 {
 				item, err = getLot(db, rec)
 			} else if err == nil {
-				WriteJSON(w, http.StatusOK, map[string]any{"id": id, "product_id": prod.ID, "quantity": 0})
+				stub, serr := productStub(db, prod.ID)
+				if serr != nil {
+					stub = map[string]any{"id": 0, "product_id": prod.ID, "quantity": 0}
+				}
+				stub["lot_id"] = id
+				WriteJSON(w, http.StatusOK, stub)
 				broadcastInventory()
 				return
 			}
@@ -873,6 +927,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		out := map[string]any{"id": id, "product_id": dres.ProductID, "quantity": 0}
+		if dres.ResultItemID == 0 {
+			if stub, serr := productStub(db, dres.ProductID); serr == nil {
+				out = stub
+				out["lot_id"] = id
+			}
+		}
 		if dres.ResultItemID != 0 {
 			item, err := getLot(db, dres.ResultItemID)
 			if err == nil {

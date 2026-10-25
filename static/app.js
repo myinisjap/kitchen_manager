@@ -794,6 +794,7 @@ function app() {
     },
 
     openDeductModal(group) {
+      if (!group.locations.length) return;
       this.deductModal = {
         group,
         selectedLocationId: group.recommended_location_id,
@@ -812,7 +813,15 @@ function app() {
         body: JSON.stringify({ quantity: qty, single_lot: true }),
       }, { errorPrefix: 'Deduct failed' });
       if (!res) return;
-      this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
+      let out = {};
+      try { out = await res.json(); } catch { /* keep default */ }
+      if (out.deducted === 0) {
+        this.showToast(`${group.name}: nothing deducted – lot unit can't convert to ${group.unit}`, 'error');
+      } else if (out.id === 0) {
+        this.showToast(`${group.name}: deducted ${qty} ${group.unit} – now out of stock`);
+      } else {
+        this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
+      }
       this.modal = null;
       this.deductModal = null;
       await this.fetchInventory();
@@ -845,6 +854,22 @@ function app() {
       this.modal = null;
       await this.fetchInventory();
       await this.fetchExpiring();
+    },
+
+    addStockToProduct(group) {
+      this.openAddItem();
+      Object.assign(this.itemForm, {
+        name: group.name, unit: group.unit, preferred_unit: group.preferred_unit || '',
+        low_threshold: group.par_level || 0, quantity_per_scan: 1,
+      });
+    },
+
+    async deleteProduct(group) {
+      if (!confirm(`Remove ${group.name} from the pantry?`)) return;
+      const res = await this.apiFetch('/api/products/' + group.product_id, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Delete failed' });
+      if (!res) return;
+      await this.fetchInventory();
+      this.showToast('Product removed');
     },
 
     async deleteItem(id) {
