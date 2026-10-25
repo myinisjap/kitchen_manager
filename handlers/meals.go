@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	_ "time/tzdata"
 
 	"kitchen_manager/internal/auth"
 )

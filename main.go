@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	_ "time/tzdata"
 
 	"kitchen_manager/handlers"
 	"kitchen_manager/internal/auth"

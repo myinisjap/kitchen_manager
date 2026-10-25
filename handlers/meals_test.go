@@ -303,7 +303,7 @@ func TestMealStats(t *testing.T) {
 func TestMealStatsBounds(t *testing.T) {
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
-		t.Skip("no tzdata")
+		t.Fatalf("load tz: %v", err)
 	}
 	cases := []struct {
 		name      string
