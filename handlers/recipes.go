@@ -128,14 +128,19 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			available, err := recipeIsAvailable(db, recipe)
+			avail, err := recipeIsAvailable(db, recipe)
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if availableOnly && !available {
+			if availableOnly && !avail.Available {
 				continue
 			}
+			incompatible := avail.Incompatible
+			if incompatible == nil {
+				incompatible = []string{}
+			}
+			recipe["incompatible_ingredients"] = incompatible
 			result = append(result, recipe)
 		}
 		if result == nil {
@@ -362,15 +367,14 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					if prefUnit != "" {
 						targetUnit = units.Unit(prefUnit)
 					}
-					displayUnit = targetUnit
 					converted, convErr := units.Convert(needed, ingUnit, targetUnit)
 					if convErr == nil {
 						needed = converted
 						have = invQty
-					} else {
-						// Units in different dimensions: compare as-is
-						have = invQty
+						displayUnit = targetUnit
 					}
+					// else: units can't be compared; add the full need in the
+					// recipe's unit and don't subtract mismatched stock.
 				}
 			}
 
@@ -448,39 +452,48 @@ func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
 	}, nil
 }
 
-func recipeIsAvailable(db *sql.DB, recipe map[string]any) (bool, error) {
+type recipeAvailability struct {
+	Available    bool
+	Incompatible []string // ingredients whose unit can't be compared to stock
+}
+
+func recipeIsAvailable(db *sql.DB, recipe map[string]any) (recipeAvailability, error) {
+	res := recipeAvailability{}
 	ings := recipe["ingredients"].([]map[string]any)
 	if len(ings) == 0 {
-		return false, nil
+		return res, nil
 	}
+	available := true
 	for _, ing := range ings {
 		invID, hasInvID := ing["inventory_id"]
 		if !hasInvID || invID == nil {
-			// Unlinked ingredient — treat as not in inventory
-			return false, nil
+			available = false
+			continue
 		}
 		var invQty float64
 		var invUnit string
 		err := db.QueryRow(`SELECT quantity, unit FROM inventory WHERE id=?`, invID).Scan(&invQty, &invUnit)
 		if err == sql.ErrNoRows {
-			return false, nil
+			available = false
+			continue
 		}
 		if err != nil {
-			return false, err
+			return res, err
 		}
 		ingQty := ing["quantity"].(float64)
 		ingUnit := units.Unit(ing["unit"].(string))
-		invUnitTyped := units.Unit(invUnit)
 
-		// Convert ingredient quantity to inventory unit for comparison
-		converted, err := units.Convert(ingQty, ingUnit, invUnitTyped)
+		converted, err := units.Convert(ingQty, ingUnit, units.Unit(invUnit))
 		if err != nil {
-			// Different dimensions: compare as-is
-			converted = ingQty
+			name, _ := ing["name"].(string)
+			res.Incompatible = append(res.Incompatible, name)
+			available = false
+			continue
 		}
 		if invQty < converted {
-			return false, nil
+			available = false
 		}
 	}
-	return true, nil
+	res.Available = available
+	return res, nil
 }
