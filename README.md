@@ -41,6 +41,7 @@ A self-hosted app for tracking your pantry, planning meals, managing recipes, an
 - **Barcode scanning** — use your phone camera to look up or add items
 - **Shopping list** — manual items, auto-generated from per-item par levels (restock to par), or pulled from recipes
 - **Recipe import** — paste a URL from any major recipe site; ingredients auto-link to your pantry
+- **Recipe archiving** — archive a recipe to hide it without losing its cooking history; deleting a recipe also keeps past cooking history
 - **Meal calendar** — plan breakfast/lunch/dinner for the week; cooking a meal deducts ingredients
 - **Meal history & cost tracking** — log meals cooked and see weekly/monthly spend
 - **Dark mode** — toggle in the header

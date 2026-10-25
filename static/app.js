@@ -76,6 +76,7 @@ function app() {
     // Recipes
     recipes: [],
     recipeTagFilter: '',
+    recipeShowArchived: false,
     recipeAvailableOnly: false,
     selectedRecipe: null,
     recipeViewServings: 2,
@@ -895,6 +896,7 @@ function app() {
       const params = new URLSearchParams();
       if (this.recipeTagFilter) params.set('tag', this.recipeTagFilter);
       if (this.recipeAvailableOnly) params.set('available_only', 'true');
+      params.set('include_archived', 'true'); // calendar needs archived names; list filters client-side
       const res = await fetch(this.baseUrl + '/api/recipes/?' + params);
       this.recipes = await res.json();
     },
@@ -1071,13 +1073,25 @@ function app() {
       }
     },
 
+    async setRecipeArchived(id, archive) {
+      const res = await fetch(this.baseUrl + '/api/recipes/' + id + (archive ? '/archive' : '/unarchive'), { method: 'POST' });
+      if (!res.ok) {
+        this.showToast(`Failed to ${archive ? 'archive' : 'restore'}: ${await res.text()}`, 'error');
+        return;
+      }
+      await this.fetchRecipes();
+      this.showToast(archive ? 'Recipe archived' : 'Recipe restored');
+    },
+    archiveRecipe(id) { return this.setRecipeArchived(id, true); },
+    unarchiveRecipe(id) { return this.setRecipeArchived(id, false); },
+
     async deleteRecipe(id) {
-      let msg = 'Delete this recipe?';
+      let msg = 'Permanently delete this recipe? Cooking history will be kept. (Tip: Archive hides it without deleting.)';
       try {
         const res = await fetch(this.baseUrl + '/api/recipes/' + id + '/future-calendar');
         if (res.ok) {
           const { count } = await res.json();
-          if (count > 0) msg = `This recipe is scheduled ${count} time${count !== 1 ? 's' : ''} on the calendar. Delete anyway?`;
+          if (count > 0) msg = `This recipe is scheduled ${count} time${count !== 1 ? 's' : ''} on the calendar; those entries will be removed. Permanently delete anyway? Cooking history will be kept.`;
         }
       } catch (e) { /* fall through to plain confirm */ }
       if (!confirm(msg)) return;
@@ -1100,6 +1114,12 @@ function app() {
       return monday;
     },
 
+    get visibleRecipes() {
+      return this.recipes.filter(r => this.recipeShowArchived || !r.archived);
+    },
+    get activeRecipes() {
+      return this.recipes.filter(r => !r.archived);
+    },
     get calendarWeekLabel() {
       if (!this.calendarWeekStart) return '';
       const end = new Date(this.calendarWeekStart);

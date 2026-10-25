@@ -121,7 +121,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `inventory.preferred_unit` — added via migration on startup if the column doesn't exist
 - `shopping_list.inventory_id` is nullable (manual items may not link to an inventory item)
 - `recipe_ingredients.inventory_id` is nullable (ingredients may not be linked to inventory)
-- Recipe deletion is transactional (deletes ingredients first, then recipe)
+- Recipes have an `archived` flag (startup migration); archived recipes are hidden from `GET /api/recipes/` unless `?include_archived=true`. `POST /api/recipes/{id}/archive|unarchive` toggle it and touch nothing else.
+- Recipe hard delete is transactional: nulls `meal_history.recipe_id` and `inventory_history.recipe_id` (history and `recipe_name` kept), deletes calendar entries, ingredients, then the recipe. `meal_history.recipe_id` is nullable (rebuild migration for old DBs).
 
 **Security headers / CSP:** `securityHeaders` middleware in `main.go` sets CSP, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` on all responses. CSP allows `'unsafe-eval'` because the standard Alpine build needs it (the CSP build can't run the inline expressions in index.html). Any new external origin must be added to `contentSecurityPolicy`; don't add inline scripts/styles or CDN tags.
 

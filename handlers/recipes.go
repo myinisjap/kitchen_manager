@@ -80,7 +80,11 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		tag := r.URL.Query().Get("tag")
 		availableOnly := r.URL.Query().Get("available_only") == "true"
 
-		rows, err := db.Query(`SELECT id,name,description,instructions,tags,servings FROM recipes`)
+		q := `SELECT id,name,description,instructions,tags,servings FROM recipes`
+		if r.URL.Query().Get("include_archived") != "true" {
+			q += ` WHERE archived=0`
+		}
+		rows, err := db.Query(q)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -177,6 +181,34 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		WriteJSON(w, http.StatusOK, map[string]any{"count": count})
 	})
 
+	setArchived := func(val int) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			id, ok := pathIDFromPattern(r, "id")
+			if !ok {
+				WriteError(w, http.StatusBadRequest, "invalid id")
+				return
+			}
+			res, err := db.Exec(`UPDATE recipes SET archived=? WHERE id=?`, val, id)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				WriteError(w, http.StatusNotFound, "not found")
+				return
+			}
+			recipe, err := getRecipeWithIngredients(db, id)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			WriteJSON(w, http.StatusOK, recipe)
+			broadcastRecipes()
+		}
+	}
+	mux.HandleFunc("POST /api/recipes/{id}/archive", setArchived(1))
+	mux.HandleFunc("POST /api/recipes/{id}/unarchive", setArchived(0))
+
 	mux.HandleFunc("DELETE /api/recipes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathIDFromPattern(r, "id")
 		if !ok {
@@ -197,13 +229,13 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// Delete meal_history_ingredients for all meals of this recipe
-		if _, err := tx.Exec(`DELETE FROM meal_history_ingredients WHERE meal_history_id IN (SELECT id FROM meal_history WHERE recipe_id=?)`, id); err != nil {
+		// Keep cooking history (meal_history stores recipe_name): just unlink the recipe.
+		if _, err := tx.Exec(`UPDATE meal_history SET recipe_id=NULL WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if _, err := tx.Exec(`DELETE FROM meal_history WHERE recipe_id=?`, id); err != nil {
+		if _, err := tx.Exec(`UPDATE inventory_history SET recipe_id=NULL WHERE recipe_id=?`, id); err != nil {
 			tx.Rollback()
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -402,11 +434,11 @@ func resolveInventoryID(db *sql.DB, name string) *int64 {
 }
 
 func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
-	row := db.QueryRow(`SELECT id,name,description,instructions,tags,servings FROM recipes WHERE id=?`, id)
+	row := db.QueryRow(`SELECT id,name,description,instructions,tags,servings,archived FROM recipes WHERE id=?`, id)
 	var rid int64
 	var name, desc, instructions, tags string
-	var servings int
-	if err := row.Scan(&rid, &name, &desc, &instructions, &tags, &servings); err != nil {
+	var servings, archived int
+	if err := row.Scan(&rid, &name, &desc, &instructions, &tags, &servings, &archived); err != nil {
 		return nil, err
 	}
 	rows, err := db.Query(`SELECT id,recipe_id,inventory_id,name,quantity,unit FROM recipe_ingredients WHERE recipe_id=?`, id)
@@ -441,7 +473,7 @@ func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
 	return map[string]any{
 		"id": rid, "name": name, "description": desc,
 		"instructions": instructions, "tags": tags, "servings": servings,
-		"ingredients": ings,
+		"ingredients": ings, "archived": archived != 0,
 	}, nil
 }
 

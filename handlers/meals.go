@@ -260,7 +260,8 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var meals []map[string]any
 		var mealIDs []int64
 		for rows.Next() {
-			var id, recipeID int64
+			var id int64
+			var recipeID sql.NullInt64
 			var recipeName, cookedAt, notes string
 			var servingsMade int
 			var totalCost sql.NullInt64
@@ -268,9 +269,13 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
+			var recipeIDVal any
+			if recipeID.Valid {
+				recipeIDVal = recipeID.Int64
+			}
 			m := map[string]any{
 				"id":            id,
-				"recipe_id":     recipeID,
+				"recipe_id":     recipeIDVal,
 				"recipe_name":   recipeName,
 				"cooked_at":     cookedAt,
 				"servings_made": servingsMade,
@@ -383,14 +388,18 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		defer mcRows.Close()
 		var mostCooked []map[string]any
 		for mcRows.Next() {
-			var rid int64
+			var rid sql.NullInt64
 			var rname string
 			var cnt int
 			if err := mcRows.Scan(&rid, &rname, &cnt); err != nil {
 				continue
 			}
+			var ridVal any
+			if rid.Valid {
+				ridVal = rid.Int64
+			}
 			mostCooked = append(mostCooked, map[string]any{
-				"recipe_id":   rid,
+				"recipe_id":   ridVal,
 				"recipe_name": rname,
 				"count":       cnt,
 			})
