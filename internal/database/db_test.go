@@ -480,11 +480,11 @@ func TestShoppingListSourcesMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a DB at the previous latest version without the table.
+	// Simulate a DB two versions back (shopping_list_sources is followed by seed_expiry_window_days).
 	if _, err := db.Exec(`DROP TABLE shopping_list_sources`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LatestVersion()-1)); err != nil {
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version=%d`, LatestVersion()-2)); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
