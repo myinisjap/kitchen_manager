@@ -88,6 +88,7 @@ func main() {
 		mux.HandleFunc("GET /api/me", auth.HandleMe(nil))
 	}
 
+	handler = handlers.APIGuard(handler)
 	handler = withHealthz(db, handler)
 	handler = securityHeaders(handler)
 

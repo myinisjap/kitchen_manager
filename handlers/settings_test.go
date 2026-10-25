@@ -65,3 +65,35 @@ func TestBackupIsConsistentSQLiteWithCurrentRows(t *testing.T) {
 		t.Fatalf("settings row: %v %q", err, v)
 	}
 }
+
+func TestSettingsPatchAllowlist(t *testing.T) {
+	db := testutil.NewDB(t)
+	mux := http.NewServeMux()
+	handlers.RegisterSettings(mux, db)
+
+	if w := call(t, mux, "PATCH", "/api/settings", `{"default_servings":"4"}`); w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if w := call(t, mux, "GET", "/api/settings", ""); !strings.Contains(w.Body.String(), `"default_servings":"4"`) {
+		t.Fatalf("got %s", w.Body.String())
+	}
+	for _, body := range []string{
+		`{"evil":"x"}`,
+		`{"default_servings":"5","evil":"x"}`,
+		`{"default_servings":"` + strings.Repeat("1", 300) + `"}`,
+	} {
+		if w := call(t, mux, "PATCH", "/api/settings", body); w.Code != 400 {
+			t.Errorf("%.40s: status %d", body, w.Code)
+		}
+	}
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM settings WHERE key='evil'`).Scan(&n)
+	if n != 0 {
+		t.Error("evil key stored")
+	}
+	var v string
+	db.QueryRow(`SELECT value FROM settings WHERE key='default_servings'`).Scan(&v)
+	if v != "4" {
+		t.Errorf("value changed to %q", v)
+	}
+}
