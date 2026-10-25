@@ -116,7 +116,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Testing:** Tests use in-memory SQLite (not mocks). `handlers/inventory_test.go` builds the schema in-process; `units/units_test.go` tests conversion logic directly.
 
-**Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units).
+**Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units). Every mutating request (POST/PUT/PATCH/DELETE) must use `apiFetch(path, opts, {errorPrefix, onError})` in `static/app.js`. It shows an error toast with the server's `error` message on non-2xx or network failure and returns null, so callers must bail out without updating state. `TestMutatingFetchesUseWrapper` enforces this.
 
 **In-app OAuth (`OAUTH_ENABLED`):** optional second layer behind Traefik forward-auth. Unauthenticated HTML requests redirect to `BASE_URL/auth/login`; `/api/*` and `/ws` get 401 JSON; session token is renewed on login.
 

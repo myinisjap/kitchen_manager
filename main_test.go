@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -97,5 +98,56 @@ func TestHealthzDBDown(t *testing.T) {
 	withHealthz(db, http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != 503 {
 		t.Fatalf("got %d", rec.Code)
+	}
+}
+
+// Any fetch with a second argument (method/body) must go through apiFetch,
+// whose own inner fetch is the only allowed exception.
+func TestMutatingFetchesUseWrapper(t *testing.T) {
+	b, err := os.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	var found []string
+	for i := 0; i < len(src); {
+		j := strings.Index(src[i:], "fetch(")
+		if j < 0 {
+			break
+		}
+		start := i + j
+		i = start + len("fetch(")
+		if start > 0 {
+			c := src[start-1]
+			if c == '.' || c == '_' || c == '$' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+				continue
+			}
+		}
+		depth, hasComma := 1, false
+		for k := i; k < len(src) && depth > 0; k++ {
+			switch ch := src[k]; ch {
+			case '\'', '"', '`':
+				for k++; k < len(src) && src[k] != ch; k++ {
+					if src[k] == '\\' {
+						k++
+					}
+				}
+			case '(', '[', '{':
+				depth++
+			case ')', ']', '}':
+				depth--
+			case ',':
+				if depth == 1 {
+					hasComma = true
+				}
+			}
+		}
+		if hasComma {
+			line := strings.Count(src[:start], "\n") + 1
+			found = append(found, src[start:start+len("fetch(this.baseUrl + path, opts)")]+" @line "+strconv.Itoa(line))
+		}
+	}
+	if len(found) != 1 || !strings.HasPrefix(found[0], "fetch(this.baseUrl + path, opts)") {
+		t.Fatalf("only apiFetch may call fetch with options; found: %v", found)
 	}
 }
