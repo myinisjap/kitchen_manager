@@ -77,7 +77,7 @@ docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/doc
 Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Layers:**
-- `main.go` — router setup, TLS bootstrapping, static file serving
+- `main.go` — router setup, TLS bootstrapping, static file serving, explicit `http.Server` timeouts, graceful shutdown (SIGINT/SIGTERM, closes DB)
 - `handlers/` — HTTP request handlers (one file per domain: inventory, shopping, recipes, calendar)
 - `services/` — business logic that spans multiple DB tables (threshold generation, weekly shopping simulation)
 - `units/` — unit enum definitions, dimension validation, and conversion math
@@ -91,6 +91,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Request flow:** Frontend → Handler → Service (if needed) → Raw SQL → SQLite (`kitchen.db`)
 
 ## Key Design Decisions
+
+**Request limits & timeouts:** `ReadJSON` caps JSON bodies at 1 MB. Receipt uploads (20 MB) and PDFs (10 MB) use `http.MaxBytesReader` (413 when exceeded). Receipt images go through `image.DecodeConfig` first and are rejected above 50 MP (413). PDF extraction is bounded by `pdfParseTimeout` plus a concurrency semaphore (`handlers/limits.go`). `main.go` sets Read/ReadHeader/Write/Idle timeouts; WriteTimeout must stay above the 60 s Claude call.
 
 **Units system:** 14 units across 3 dimensions (mass, volume, count). Units must be same-dimension to convert. Count units don't inter-convert. The `preferred_unit` on an inventory item is the canonical unit for display and aggregation.
 
