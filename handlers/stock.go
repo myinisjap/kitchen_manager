@@ -106,3 +106,17 @@ func retireEmptyLots(tx *sql.Tx, ids []int64, name, unit string) (kept int64, su
 	}
 	return kept, survivor, nil
 }
+
+// addStock atomically adds delta to inventory row id inside tx and returns the
+// quantity before and after. Returns errItemNotFound if the row is gone.
+// Never write a quantity computed in Go: always use quantity = quantity + ?.
+func addStock(tx *sql.Tx, id int64, delta float64) (before, after float64, err error) {
+	if err = tx.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id).Scan(&before); err != nil {
+		if err == sql.ErrNoRows {
+			err = errItemNotFound
+		}
+		return
+	}
+	err = tx.QueryRow(`UPDATE inventory SET quantity = quantity + ? WHERE id=? RETURNING quantity`, delta, id).Scan(&after)
+	return
+}

@@ -2025,7 +2025,7 @@
           const selected = this.receiptItems.filter(i => i._include);
           if (!selected.length) return;
           let added = 0, failed = 0;
-          await Promise.all(selected.map(async item => {
+          for (const item of selected) { // sequential: avoids racing duplicate lines
             const receiptQty = item.quantity || 1;
             const qtyPerScan = item.quantity_per_scan > 0 ? item.quantity_per_scan : null;
             const finalQty = qtyPerScan ? receiptQty * qtyPerScan : receiptQty;
@@ -2039,13 +2039,15 @@
               low_threshold: 0,
               quantity_per_scan: qtyPerScan || 0,
             };
-            const res = await fetch(this.baseUrl + '/api/inventory/', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            });
-            if (res.ok) { added++; } else { failed++; }
-          }));
+            try {
+              const res = await fetch(this.baseUrl + '/api/inventory/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+              });
+              if (res.ok) { added++; } else { failed++; }
+            } catch (e) { failed++; }
+          }
           this.modal = '';
           this.receiptItems = null;
           this.receiptFile = null;
