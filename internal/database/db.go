@@ -3,8 +3,10 @@ package database
 import (
 	"context"
 	"database/sql"
+	"log"
 	_ "modernc.org/sqlite"
 	"strings"
+	"time"
 )
 
 // OpenDB opens the SQLite database at path, sets connection limits, and
@@ -222,7 +224,62 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	if err := normalizeMealCookedAt(db); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// normalizeMealCookedAt rewrites legacy meal_history.cooked_at values into the
+// canonical form: RFC3339 UTC with Z suffix (2006-01-02T15:04:05Z).
+func normalizeMealCookedAt(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id, CAST(cooked_at AS TEXT) FROM meal_history
+		WHERE CAST(cooked_at AS TEXT) NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z'`)
+	if err != nil {
+		return err
+	}
+	type upd struct {
+		id int64
+		v  string
+	}
+	var ups []upd
+	layouts := []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05",
+		"2006-01-02 15:04:05Z07:00", "2006-01-02"}
+	for rows.Next() {
+		var id int64
+		var v string
+		if err := rows.Scan(&id, &v); err != nil {
+			rows.Close()
+			return err
+		}
+		for _, l := range layouts {
+			if t, err := time.Parse(l, v); err == nil {
+				ups = append(ups, upd{id, t.UTC().Format(time.RFC3339)})
+				break
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(ups) == 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, u := range ups {
+		if _, err := tx.Exec(`UPDATE meal_history SET cooked_at=? WHERE id=?`, u.v, u.id); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	log.Printf("normalized cooked_at on %d meal_history rows", len(ups))
+	return tx.Commit()
 }
 
 // migrateMealHistoryNullableRecipe rebuilds meal_history on legacy databases

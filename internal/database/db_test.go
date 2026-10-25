@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+
 	"path/filepath"
 	"testing"
 )
@@ -115,6 +116,40 @@ func TestMigrateMealHistoryNullableRecipe(t *testing.T) {
 		if i == 1 {
 			if _, err := db.Exec(`UPDATE meal_history SET recipe_id=NULL`); err != nil {
 				t.Fatal(err)
+			}
+
+func TestNormalizeMealCookedAt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "k.db")
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO recipes (name) VALUES ('r')`); err != nil {
+		t.Fatal(err)
+	}
+	in := []string{"2024-03-05T07:00:00-05:00", "2024-03-05 12:00:00", "2024-03-05T12:00:00.123Z", "2024-03-05T12:00:00Z", "garbage"}
+	for _, v := range in {
+		if _, err := db.Exec(`INSERT INTO meal_history (recipe_id, recipe_name, cooked_at, servings_made) VALUES (1,'r',?,1)`, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	for i := 0; i < 2; i++ {
+		db, err = OpenDB(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j := range in {
+			var got string
+			if err := db.QueryRow(`SELECT cooked_at FROM meal_history WHERE id=?`, j+1).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			want := "2024-03-05T12:00:00Z"
+			if j == 4 {
+				want = "garbage"
+			}
+			if got != want {
+				t.Errorf("pass %d row %d: %q want %q", i, j, got, want)
 			}
 		}
 		db.Close()

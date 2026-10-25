@@ -99,11 +99,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	totals := map[string]*totalNeed{}
 
 	for _, e := range entries {
-		recServings := e.recipeServings
-		if recServings == 0 {
-			recServings = 1
-		}
-		scale := float64(e.servings) / float64(recServings)
+		scale := units.ServingsScale(e.servings, e.recipeServings)
 
 		ingRows, err := db.Query(`SELECT inventory_id, name, quantity, unit FROM recipe_ingredients WHERE recipe_id=?`, e.recipeID)
 		if err != nil {

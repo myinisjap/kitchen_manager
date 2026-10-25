@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"kitchen_manager/units"
 	"math"
 	"net/http"
 	"strconv"
 	"time"
+	_ "time/tzdata"
 
 	"kitchen_manager/internal/auth"
 )
@@ -49,10 +51,10 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			input.ServingsMade = recipeServings
 		}
 
-		cookedAt := time.Now().UTC().Format(time.RFC3339)
+		cookedAt := mealsNow().UTC().Format(time.RFC3339)
 		if input.CookedAt != "" {
-			if _, err := time.Parse(time.RFC3339, input.CookedAt); err == nil {
-				cookedAt = input.CookedAt
+			if t, err := time.Parse(time.RFC3339, input.CookedAt); err == nil {
+				cookedAt = t.UTC().Format(time.RFC3339)
 			}
 		}
 		if len(input.Notes) > 500 {
@@ -105,7 +107,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		warnings := []string{}
 
 		for _, ing := range ingredients {
-			scale := float64(input.ServingsMade) / float64(recipeServings)
+			scale := units.ServingsScale(input.ServingsMade, recipeServings)
 			qtyUsed := ing.Quantity * scale
 
 			var costCents *int64
@@ -347,32 +349,32 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 	// GET /api/meals/stats — aggregated statistics
 	mux.HandleFunc("GET /api/meals/stats", func(w http.ResponseWriter, r *http.Request) {
-		tzOffsetStr := r.URL.Query().Get("tz_offset")
-		tzOffsetMins := 0
-		if tzOffsetStr != "" {
-			if v, err := strconv.Atoi(tzOffsetStr); err == nil {
-				tzOffsetMins = v
+		var loc *time.Location = time.UTC
+		if name := r.URL.Query().Get("tz"); name != "" {
+			if l, err := time.LoadLocation(name); err == nil {
+				loc = l
+			}
+		}
+		if loc == time.UTC {
+			if v, err := strconv.Atoi(r.URL.Query().Get("tz_offset")); err == nil && v >= -840 && v <= 840 {
+				loc = time.FixedZone("", v*60)
 			}
 		}
 
-		now := time.Now().UTC().Add(time.Duration(tzOffsetMins) * time.Minute)
-		// Week boundary: Monday 00:00 local
-		weekday := int(now.Weekday())
-		if weekday == 0 {
-			weekday = 7
-		}
-		weekStart := now.AddDate(0, 0, -(weekday - 1))
-		weekStart = time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 0, 0, 0, 0, weekStart.Location())
-		// Month boundary: 1st of current month
-		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-
-		weekStartStr := weekStart.UTC().Format("2006-01-02T15:04:05")
-		monthStartStr := monthStart.UTC().Format("2006-01-02T15:04:05")
+		weekStart, monthStart := mealStatsBounds(mealsNow(), loc)
+		weekStartStr := weekStart.Format(time.RFC3339)
+		monthStartStr := monthStart.Format(time.RFC3339)
 
 		var mealsThisWeek, mealsThisMonth int
 		var spendWeek, spendMonth sql.NullInt64
-		_ = db.QueryRow(`SELECT COUNT(*), SUM(total_cost_cents) FROM meal_history WHERE cooked_at >= ?`, weekStartStr).Scan(&mealsThisWeek, &spendWeek)
-		_ = db.QueryRow(`SELECT COUNT(*), SUM(total_cost_cents) FROM meal_history WHERE cooked_at >= ?`, monthStartStr).Scan(&mealsThisMonth, &spendMonth)
+		if err := db.QueryRow(`SELECT COUNT(*), SUM(total_cost_cents) FROM meal_history WHERE cooked_at >= ?`, weekStartStr).Scan(&mealsThisWeek, &spendWeek); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if err := db.QueryRow(`SELECT COUNT(*), SUM(total_cost_cents) FROM meal_history WHERE cooked_at >= ?`, monthStartStr).Scan(&mealsThisMonth, &spendMonth); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 
 		// Most cooked (top 5 all-time)
 		mcRows, err := db.Query(`
@@ -423,4 +425,20 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		WriteJSON(w, http.StatusOK, resp)
 	})
+}
+
+// mealsNow is the clock used by meal handlers (overridable in tests).
+var mealsNow = time.Now
+
+// mealStatsBounds returns the start of the current ISO week (Monday 00:00) and
+// current month (1st 00:00) in loc, converted to UTC.
+func mealStatsBounds(now time.Time, loc *time.Location) (weekStart, monthStart time.Time) {
+	local := now.In(loc)
+	wd := int(local.Weekday())
+	if wd == 0 {
+		wd = 7
+	}
+	ws := time.Date(local.Year(), local.Month(), local.Day()-(wd-1), 0, 0, 0, 0, loc)
+	ms := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, loc)
+	return ws.UTC(), ms.UTC()
 }
