@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"log"
 	_ "modernc.org/sqlite"
@@ -111,7 +112,7 @@ func createSchema(db *sql.DB) error {
 
 	CREATE TABLE IF NOT EXISTS meal_history (
 		id               INTEGER PRIMARY KEY AUTOINCREMENT,
-		recipe_id        INTEGER NOT NULL REFERENCES recipes(id),
+		recipe_id        INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
 		recipe_name      TEXT    NOT NULL DEFAULT '',
 		cooked_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		servings_made    INTEGER NOT NULL DEFAULT 1,
@@ -206,6 +207,17 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	// Migration: archived flag on recipes
+	if _, err := db.Exec(`ALTER TABLE recipes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+
+	if err := migrateMealHistoryNullableRecipe(db); err != nil {
+		return err
+	}
+
 	// Par level is per product (name); keep lots consistent until products/lots split.
 	if _, err := db.Exec(`UPDATE inventory SET low_threshold = (SELECT MAX(i2.low_threshold) FROM inventory i2 WHERE i2.name = inventory.name)
 		WHERE low_threshold <> (SELECT MAX(i2.low_threshold) FROM inventory i2 WHERE i2.name = inventory.name)`); err != nil {
@@ -267,5 +279,75 @@ func normalizeMealCookedAt(db *sql.DB) error {
 		}
 	}
 	log.Printf("normalized cooked_at on %d meal_history rows", len(ups))
+	return tx.Commit()
+}
+
+// migrateMealHistoryNullableRecipe rebuilds meal_history on legacy databases
+// where recipe_id was NOT NULL, so deleting a recipe can keep its history.
+func migrateMealHistoryNullableRecipe(db *sql.DB) error {
+	needs := false
+	rows, err := db.Query(`PRAGMA table_info(meal_history)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "recipe_id" && notnull == 1 {
+			needs = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if !needs {
+		return nil
+	}
+
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	stmts := []string{
+		`CREATE TABLE meal_history_new (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			recipe_id        INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+			recipe_name      TEXT    NOT NULL DEFAULT '',
+			cooked_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			servings_made    INTEGER NOT NULL DEFAULT 1,
+			total_cost_cents INTEGER,
+			notes            TEXT    NOT NULL DEFAULT ''
+		)`,
+		`INSERT INTO meal_history_new (id,recipe_id,recipe_name,cooked_at,servings_made,total_cost_cents,notes)
+			SELECT id,recipe_id,recipe_name,cooked_at,servings_made,total_cost_cents,notes FROM meal_history`,
+		`DROP TABLE meal_history`,
+		`ALTER TABLE meal_history_new RENAME TO meal_history`,
+		`CREATE INDEX IF NOT EXISTS meal_history_recipe_idx ON meal_history(recipe_id, cooked_at)`,
+		`CREATE INDEX IF NOT EXISTS meal_history_cooked_at_idx ON meal_history(cooked_at)`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
 	return tx.Commit()
 }
