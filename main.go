@@ -26,7 +26,7 @@ const (
 
 	readHeaderTimeout = 10 * time.Second
 	readTimeout       = 2 * time.Minute // 20 MB uploads on slow links
-	writeTimeout      = 3 * time.Minute // exceeds 60 s Claude call + processing
+	writeTimeout      = 3 * time.Minute // exceeds 90 s Claude call + processing
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 15 * time.Second
 )
