@@ -3,6 +3,7 @@ package services
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"kitchen_manager/units"
@@ -14,6 +15,7 @@ type ShoppingNeed struct {
 	Name           string
 	Unit           string
 	QuantityNeeded float64
+	Recipes        []string // distinct contributing recipe names, sorted
 }
 
 // GenerateWeeklyShopping simulates daily inventory depletion over a 7-day week
@@ -31,9 +33,10 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 		recipeID       int64
 		servings       int
 		recipeServings int
+		recipeName     string
 	}
 	rows, err := db.Query(`
-		SELECT mc.recipe_id, mc.servings, r.servings
+		SELECT mc.recipe_id, mc.servings, r.servings, r.name
 		FROM meal_calendar mc
 		JOIN recipes r ON r.id = mc.recipe_id
 		WHERE mc.date >= ? AND mc.date <= ?
@@ -44,7 +47,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	var entries []calEntry
 	for rows.Next() {
 		var e calEntry
-		if err := rows.Scan(&e.recipeID, &e.servings, &e.recipeServings); err != nil {
+		if err := rows.Scan(&e.recipeID, &e.servings, &e.recipeServings, &e.recipeName); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -91,10 +94,11 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	// Step 3: sum all ingredient quantities across all recipes, then subtract inventory once.
 	// key: "invID|preferredUnit" for linked ingredients, "name|unit" for unlinked
 	type totalNeed struct {
-		invID *int64
-		name  string
-		unit  string
-		total float64
+		invID   *int64
+		name    string
+		unit    string
+		total   float64
+		recipes map[string]bool
 	}
 	totals := map[string]*totalNeed{}
 
@@ -147,22 +151,26 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 				if totals[key] == nil {
 					v := ing.invID.Int64
 					totals[key] = &totalNeed{
-						invID: &v,
-						name:  ing.name,
-						unit:  string(targetUnit),
+						invID:   &v,
+						name:    ing.name,
+						unit:    string(targetUnit),
+						recipes: map[string]bool{},
 					}
 				}
 				totals[key].total += needed
+				markRecipe(totals[key].recipes, e.recipeName)
 			} else {
 				// Unlinked ingredient: no conversion, use as-is
 				key := ing.name + "|" + ing.unit
 				if totals[key] == nil {
 					totals[key] = &totalNeed{
-						name: ing.name,
-						unit: ing.unit,
+						name:    ing.name,
+						unit:    ing.unit,
+						recipes: map[string]bool{},
 					}
 				}
 				totals[key].total += rawNeeded
+				markRecipe(totals[key].recipes, e.recipeName)
 			}
 		}
 	}
@@ -183,6 +191,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 				Name:           t.name,
 				Unit:           t.unit,
 				QuantityNeeded: shortfall,
+				Recipes:        sortedKeys(t.recipes),
 			}
 		}
 	}
@@ -191,5 +200,26 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	for _, n := range needs {
 		result = append(result, *n)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name != result[j].Name {
+			return result[i].Name < result[j].Name
+		}
+		return result[i].Unit < result[j].Unit
+	})
 	return result, nil
+}
+
+func markRecipe(m map[string]bool, name string) {
+	if name != "" {
+		m[name] = true
+	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

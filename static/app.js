@@ -1135,7 +1135,7 @@ function app() {
       const res = await fetch(this.baseUrl + '/api/recipes/' + recipe.id + '/add-to-shopping-list?servings=' + s, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const data = await res.json();
       this.modal = null;
-      this.showToast(`Added ${data.added} missing ingredient(s) to shopping list`);
+      this.showToast(`Added ${data.added} new, updated ${data.merged || 0} item(s) on shopping list`);
       await this.fetchShoppingList();
     },
 
@@ -1274,7 +1274,7 @@ function app() {
       const start = this.calendarWeekStart.toISOString().split('T')[0];
       const res = await fetch(this.baseUrl + '/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       const data = await res.json();
-      this.showToast(`Added ${data.items.length} item(s) to shopping list`);
+      this.showToast(`Added ${data.added ?? data.items.length} new, updated ${data.merged ?? 0} item(s)`);
       await this.fetchShoppingList();
       this.activeTab = 'shopping';
     },

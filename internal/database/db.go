@@ -49,6 +49,17 @@ func createSchema(db *sql.DB) error {
 		source           TEXT    NOT NULL DEFAULT 'manual'
 	);
 
+	CREATE TABLE IF NOT EXISTS shopping_list_sources (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		shopping_id INTEGER NOT NULL REFERENCES shopping_list(id) ON DELETE CASCADE,
+		source      TEXT    NOT NULL,
+		ref         TEXT    NOT NULL DEFAULT '',
+		label       TEXT    NOT NULL DEFAULT '',
+		quantity    REAL    NOT NULL DEFAULT 0,
+		UNIQUE(shopping_id, source, ref)
+	);
+	CREATE INDEX IF NOT EXISTS shopping_list_sources_shopping_idx ON shopping_list_sources(shopping_id);
+
 	CREATE TABLE IF NOT EXISTS recipes (
 		id           INTEGER PRIMARY KEY AUTOINCREMENT,
 		name         TEXT    NOT NULL,
