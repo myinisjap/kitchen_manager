@@ -9,6 +9,6 @@ Served from our own origin so the CSP can use `script-src 'self'` (no SRI needed
 
 To update: download the new pinned version, rename with the version, update index.html, this table and the `SHELL` list in `static/sw.js`.
 
-Tailwind CSS (v3.4.19) is pre-built into `static/tailwind.css`. Rebuild after changing classes in index.html/app.js:
+Tailwind CSS (v3.4.19) is pre-built into `static/tailwind.css`. Rebuild after changing classes in index.html/app.js/js/*.js:
 
     npx tailwindcss@3.4.19 -c tailwind.config.js -i web/tailwind.input.css -o static/tailwind.css --minify
