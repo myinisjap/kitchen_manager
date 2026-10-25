@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"kitchen_manager/internal/auth"
+	"kitchen_manager/services"
 	"kitchen_manager/units"
 )
 
@@ -56,9 +57,6 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		if item.LowThreshold < 0 {
 			WriteError(w, http.StatusBadRequest, "low_threshold must be non-negative")
 			return
-		}
-		if item.LowThreshold == 0 {
-			item.LowThreshold = 1
 		}
 		if item.ExpirationDate != "" {
 			if _, err := time.Parse("2006-01-02", item.ExpirationDate); err != nil {
@@ -126,6 +124,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				Unit:           item.Unit,
 				Source:         "manual",
 			})
+			if item.LowThreshold > 0 {
+				if err := setProductPar(tx, item.Name, item.LowThreshold); err != nil {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
 			updated, err := scanInventoryRow(tx.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, existingID))
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
@@ -172,6 +176,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					Unit:           parentUnit,
 					Source:         "receipt_merge",
 				})
+				if item.LowThreshold > 0 {
+					if e := setProductPar(tx, parentName, item.LowThreshold); e != nil {
+						WriteError(w, http.StatusInternalServerError, e.Error())
+						return
+					}
+				}
 				updated, e := scanInventoryRow(tx.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, skuInvID))
 				if e != nil {
 					WriteError(w, http.StatusInternalServerError, e.Error())
@@ -190,6 +200,13 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 		}
 
+		if item.LowThreshold == 0 {
+			// Unset: inherit the product's existing par level (0 if none).
+			if err := tx.QueryRow(`SELECT COALESCE(MAX(low_threshold),0) FROM inventory WHERE name=?`, item.Name).Scan(&item.LowThreshold); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 		res, err := tx.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			item.Name, item.Quantity, item.Unit, item.Location, item.ExpirationDate, item.LowThreshold, item.Barcode, item.PreferredUnit, item.UnitCostCents, item.QuantityPerScan)
 		if err != nil {
@@ -197,6 +214,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		id, _ := res.LastInsertId()
+		if item.LowThreshold > 0 {
+			if err := setProductPar(tx, item.Name, item.LowThreshold); err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 		zeroQty := 0.0
 		newQty := item.Quantity
 		_ = LogHistory(db, tx, LogHistoryParams{
@@ -417,6 +440,10 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			PreferredUnit         string          `json:"preferred_unit"`
 			TotalQuantity         float64         `json:"total_quantity"`
 			LowThreshold          float64         `json:"low_threshold"`
+			ParLevel              float64         `json:"par_level"`
+			ParUnit               string          `json:"par_unit"`
+			ProductTotal          float64         `json:"product_total"`
+			BelowPar              bool            `json:"below_par"`
 			Locations             []locationEntry `json:"locations"`
 			RecommendedLocationID int64           `json:"recommended_location_id"`
 		}
@@ -466,8 +493,26 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		rows.Close()
 		if results == nil {
 			results = []groupedItem{}
+		}
+		levels, err := services.ProductLevels(db)
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		byName := make(map[string]services.ProductLevel, len(levels))
+		for _, l := range levels {
+			byName[l.Name] = l
+		}
+		for i := range results {
+			if l, ok := byName[results[i].Name]; ok {
+				results[i].ParLevel = l.Par
+				results[i].ParUnit = l.Unit
+				results[i].ProductTotal = l.Total
+				results[i].BelowPar = l.BelowPar()
+			}
 		}
 		WriteJSON(w, http.StatusOK, results)
 	})
@@ -637,6 +682,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				return
 			}
 			lastSibID := dres.LastLotID
+			if lt, ok := patch["low_threshold"].(float64); ok && lt >= 0 {
+				if err := setProductPar(db, nameBefore, lt); err != nil {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
 
 			if lastSibID != 0 {
 				row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, lastSibID)
@@ -661,6 +712,24 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				if _, err := db.Exec(`UPDATE inventory SET `+field+`=? WHERE id=?`, val, id); err != nil {
 					WriteError(w, http.StatusInternalServerError, err.Error())
 					return
+				}
+			}
+		}
+		var curName string
+		if err := db.QueryRow(`SELECT name FROM inventory WHERE id=?`, id).Scan(&curName); err == nil {
+			if lt, ok := patch["low_threshold"].(float64); ok && lt >= 0 {
+				if err := setProductPar(db, curName, lt); err != nil {
+					WriteError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			} else if _, renamed := patch["name"]; renamed {
+				// Lot moved to another product: adopt that product's par, if it has other lots.
+				var other sql.NullFloat64
+				if err := db.QueryRow(`SELECT MAX(low_threshold) FROM inventory WHERE name=? AND id<>?`, curName, id).Scan(&other); err == nil && other.Valid {
+					if _, err := db.Exec(`UPDATE inventory SET low_threshold=? WHERE id=?`, other.Float64, id); err != nil {
+						WriteError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
 				}
 			}
 		}
@@ -1141,4 +1210,12 @@ func pathIDFromPattern(r *http.Request, param string) (int64, bool) {
 	val := r.PathValue(param)
 	id, err := strconv.ParseInt(val, 10, 64)
 	return id, err == nil
+}
+
+// setProductPar sets the par level (low_threshold) on every lot of a product.
+func setProductPar(ex interface {
+	Exec(string, ...any) (sql.Result, error)
+}, name string, par float64) error {
+	_, err := ex.Exec(`UPDATE inventory SET low_threshold=? WHERE name=?`, par, name)
+	return err
 }
