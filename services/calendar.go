@@ -19,8 +19,9 @@ type ShoppingNeed struct {
 	Recipes        []string // distinct contributing recipe names, sorted
 }
 
-// GenerateWeeklyShopping simulates daily inventory depletion over a 7-day week
-// and returns the shopping items needed, accounting for prior days' usage.
+// GenerateWeeklyShopping sums ingredient needs for all uncooked calendar
+// entries in the 7-day week starting weekStart and subtracts each product's
+// current stock once, returning the shortfalls.
 // Quantities are expressed in each inventory item's preferred_unit (or stored unit if no preference).
 func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error) {
 	start, err := time.Parse("2006-01-02", weekStart)
