@@ -253,8 +253,8 @@ const baselineSQL = `
 		quantity_needed  REAL    NOT NULL DEFAULT 1,
 		unit             TEXT    NOT NULL DEFAULT '',
 		checked          INTEGER NOT NULL DEFAULT 0,
+		source           TEXT    NOT NULL DEFAULT 'manual'
 	);
-
 
 	CREATE TABLE IF NOT EXISTS recipes (
 		id           INTEGER PRIMARY KEY AUTOINCREMENT,
