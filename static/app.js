@@ -147,21 +147,37 @@ function app() {
       return candidates !== null && candidates !== undefined && candidates.length > 0;
     },
 
+    isOnline: navigator.onLine,
+    pendingChecks: {},
+    pendingCount() { return Object.keys(this.pendingChecks).length; },
+    pendingKey() { return 'km:' + this.basePath + ':pendingChecks'; },
+
     async init() {
       this.calendarWeekStart = this.getMonday(new Date());
       // Determine base path for API endpoints (empty if running directly, /kitchen-manager if behind Traefik)
       this.basePath = window.location.pathname.startsWith('/kitchen-manager') ? '/kitchen-manager' : '';
       this.baseUrl = this.basePath;
+      try { this.pendingChecks = JSON.parse(localStorage.getItem(this.pendingKey()) || '{}') || {}; } catch { this.pendingChecks = {}; }
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register(this.basePath + '/sw.js', { scope: this.basePath + '/' }).catch(() => {});
+      }
+      window.addEventListener('online', () => { this.isOnline = true; this.flushPendingChecks(); });
+      window.addEventListener('offline', () => { this.isOnline = false; });
       this.fetchMe();
-      await this.fetchInventory();
-      await this.fetchExpiring();
-      await this.fetchShoppingList();
-      await this.fetchSettings();
-      await this.fetchRecipes();
-      await this.fetchCalendar();
-      const uRes = await fetch(this.baseUrl + '/api/units');
-      this.unitGroups = await uRes.json();
+      // One failed loader (e.g. offline) must not abort the rest.
+      const safe = async (fn) => { try { await fn(); } catch {} };
+      await safe(() => this.fetchShoppingList());
+      await safe(() => this.fetchInventory());
+      await safe(() => this.fetchExpiring());
+      await safe(() => this.fetchSettings());
+      await safe(() => this.fetchRecipes());
+      await safe(() => this.fetchCalendar());
+      await safe(async () => {
+        const uRes = await fetch(this.baseUrl + '/api/units');
+        this.unitGroups = await uRes.json();
+      });
       this.initWebSocket();
+      this.flushPendingChecks();
     },
 
     async switchTab(tab) {
@@ -189,7 +205,7 @@ function app() {
             if (msg.type === 'calendar_updated') this.fetchCalendar();
           } catch {}
         };
-        ws.onopen = () => { delay = 1000; };
+        ws.onopen = () => { delay = 1000; this.flushPendingChecks(); };
         ws.onclose = () => { setTimeout(connect, delay); delay = Math.min(delay * 2, 30000); };
         ws.onerror = () => ws.close();
       };
@@ -661,12 +677,14 @@ function app() {
 
     // All mutating requests go through here. Returns the Response on 2xx, else null
     // (after reporting the error), so callers must not update local state on null.
-    async apiFetch(path, opts = {}, { errorPrefix = 'Save failed', onError = null } = {}) {
+    // If onNetworkError is given, it is called instead of reporting when fetch itself rejects.
+    async apiFetch(path, opts = {}, { errorPrefix = 'Save failed', onError = null, onNetworkError = null } = {}) {
       const report = (m) => onError ? onError(m) : this.showToast(errorPrefix + ': ' + m, 'error');
       let res;
       try {
         res = await fetch(this.baseUrl + path, opts);
       } catch (e) {
+        if (onNetworkError) { onNetworkError(); return null; }
         report('network error');
         return null;
       }
@@ -789,8 +807,58 @@ function app() {
 
     // --- Shopping ---
     async fetchShoppingList() {
-      const res = await fetch(this.baseUrl + '/api/shopping/?show_checked=true');
-      this.shoppingItems = await res.json();
+      try {
+        const res = await fetch(this.baseUrl + '/api/shopping/?show_checked=true');
+        if (!res.ok) return;
+        const items = await res.json();
+        if (!Array.isArray(items)) return;
+        for (const it of items) {
+          if (Object.prototype.hasOwnProperty.call(this.pendingChecks, it.id)) it.checked = this.pendingChecks[it.id];
+        }
+        this.shoppingItems = items;
+      } catch {}
+    },
+
+    savePending() {
+      try { localStorage.setItem(this.pendingKey(), JSON.stringify(this.pendingChecks)); } catch {}
+    },
+
+    queueCheck(id, checked) {
+      this.pendingChecks = { ...this.pendingChecks, [id]: checked };
+      this.savePending();
+    },
+
+    dropPending(id) {
+      if (!Object.prototype.hasOwnProperty.call(this.pendingChecks, id)) return;
+      const next = { ...this.pendingChecks };
+      delete next[id];
+      this.pendingChecks = next;
+      this.savePending();
+    },
+
+    async flushPendingChecks() {
+      if (this._flushing || this.pendingCount() === 0 || !navigator.onLine) return;
+      this._flushing = true;
+      let synced = 0;
+      const failures = [];
+      try {
+        for (const id of Object.keys(this.pendingChecks)) {
+          let offline = false;
+          const res = await this.apiFetch('/api/shopping/' + id, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ checked: this.pendingChecks[id] }),
+          }, { onNetworkError: () => { offline = true; }, onError: m => failures.push(m) });
+          if (offline) break;
+          if (res) synced++;
+          this.dropPending(id);
+        }
+      } finally {
+        this._flushing = false;
+      }
+      if (failures.length) this.showToast(failures.length + ' offline change(s) could not be synced', 'error');
+      else if (synced) this.showToast('Synced ' + synced + ' offline change(s)');
+      await this.fetchShoppingList();
     },
 
     openAddShoppingItem() {
@@ -855,14 +923,19 @@ function app() {
     },
 
     async toggleShoppingItem(item) {
+      const desired = !item.checked;
+      item.checked = desired;
+      if (!navigator.onLine) { this.queueCheck(item.id, desired); return; }
+      let offline = false;
       const res = await this.apiFetch('/api/shopping/' + item.id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checked: !item.checked }),
-      });
+        body: JSON.stringify({ checked: desired }),
+      }, { onNetworkError: () => { offline = true; } });
+      if (offline) { this.queueCheck(item.id, desired); return; }
+      if (res) this.dropPending(item.id);
       // On failure, refetch so the checkbox reverts to the server state.
       await this.fetchShoppingList();
-      if (!res) return;
     },
 
     async deleteShoppingItem(id) {
@@ -899,6 +972,15 @@ function app() {
     async logout() {
       const res = await this.apiFetch('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' } }, { errorPrefix: 'Sign out failed' });
       if (!res) return;
+      try { localStorage.removeItem(this.pendingKey()); } catch {}
+      this.pendingChecks = {};
+      try {
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.filter(k => k.startsWith('km-')).map(k => caches.delete(k)));
+        }
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage('clear');
+      } catch {}
       window.location.href = this.baseUrl + '/auth/login';
     },
 

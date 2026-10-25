@@ -120,6 +120,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units). Every mutating request (POST/PUT/PATCH/DELETE) must use `apiFetch(path, opts, {errorPrefix, onError})` in `static/app.js`. It shows an error toast with the server's `error` message on non-2xx or network failure and returns null, so callers must bail out without updating state. `TestMutatingFetchesUseWrapper` enforces this.
 
+**PWA / offline:** `static/sw.js`, `static/manifest.json` and `static/icons/` make the app installable. The SW caches only the app shell (`SHELL` list, network-first) and `GET api/shopping/`; all other API calls are network only. Bump `CACHE` in `sw.js` when the shell list or caching logic changes, and update `SHELL` when vendor filenames change (`TestServiceWorkerShell` enforces existence). All PWA URLs are relative or built from `basePath` (app runs at `/` or `/kitchen-manager`). Offline shopping check-offs are queued in localStorage (`km:<basePath>:pendingChecks`) and flushed on `online`, WS reconnect and init, via `apiFetch`'s `onNetworkError` option. Logout clears the SW caches and the queue.
+
 **In-app OAuth (`OAUTH_ENABLED`):** optional second layer behind Traefik forward-auth. Unauthenticated HTML requests redirect to `BASE_URL/auth/login`; `/api/*` and `/ws` get 401 JSON; session token is renewed on login.
 
 **Reverse proxy (Traefik):** The app runs at `/kitchen-manager` behind Traefik's `stripprefix` middleware. Auth redirects must use absolute URLs via `BASE_URL` (not relative paths like `/auth/login`) so the browser preserves the path prefix.
