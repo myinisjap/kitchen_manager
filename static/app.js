@@ -1169,7 +1169,7 @@ function app() {
     },
 
     async setRecipeArchived(id, archive) {
-      const res = await fetch(this.baseUrl + '/api/recipes/' + id + (archive ? '/archive' : '/unarchive'), { method: 'POST' });
+      const res = await fetch(this.baseUrl + '/api/recipes/' + id + (archive ? '/archive' : '/unarchive'), { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       if (!res.ok) {
         this.showToast(`Failed to ${archive ? 'archive' : 'restore'}: ${await res.text()}`, 'error');
         return;

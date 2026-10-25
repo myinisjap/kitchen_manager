@@ -10,7 +10,7 @@ import (
 	"kitchen_manager/handlers"
 )
 
-func countRows(t *testing.T, db *sql.DB, q string, args ...any) int {
+func archCountRows(t *testing.T, db *sql.DB, q string, args ...any) int {
 	t.Helper()
 	var n int
 	if err := db.QueryRow(q, args...).Scan(&n); err != nil {
@@ -46,7 +46,7 @@ func TestArchiveRecipeKeepsHistory(t *testing.T) {
 	if code := cook(t, mux, rid); code != http.StatusCreated {
 		t.Fatalf("cook %d", code)
 	}
-	ingBefore := countRows(t, db, `SELECT COUNT(*) FROM meal_history_ingredients`)
+	ingBefore := archCountRows(t, db, `SELECT COUNT(*) FROM meal_history_ingredients`)
 
 	w := call(t, mux, "POST", fmt.Sprintf("/api/recipes/%d/archive", rid), "")
 	if w.Code != 200 {
@@ -66,10 +66,10 @@ func TestArchiveRecipeKeepsHistory(t *testing.T) {
 	if w := call(t, mux, "GET", fmt.Sprintf("/api/recipes/%d", rid), ""); w.Code != 200 {
 		t.Fatalf("get %d", w.Code)
 	}
-	if n := countRows(t, db, `SELECT COUNT(*) FROM meal_history WHERE recipe_id=?`, rid); n != 1 {
+	if n := archCountRows(t, db, `SELECT COUNT(*) FROM meal_history WHERE recipe_id=?`, rid); n != 1 {
 		t.Fatalf("history %d", n)
 	}
-	if n := countRows(t, db, `SELECT COUNT(*) FROM meal_history_ingredients`); n != ingBefore {
+	if n := archCountRows(t, db, `SELECT COUNT(*) FROM meal_history_ingredients`); n != ingBefore {
 		t.Fatalf("ingredients %d vs %d", n, ingBefore)
 	}
 	if w := call(t, mux, "POST", fmt.Sprintf("/api/recipes/%d/unarchive", rid), ""); w.Code != 200 {
@@ -96,24 +96,24 @@ func TestDeleteRecipeKeepsMealHistory(t *testing.T) {
 	if code := cook(t, mux, rid); code != http.StatusCreated {
 		t.Fatalf("cook %d", code)
 	}
-	ingBefore := countRows(t, db, `SELECT COUNT(*) FROM meal_history_ingredients`)
+	ingBefore := archCountRows(t, db, `SELECT COUNT(*) FROM meal_history_ingredients`)
 	if ingBefore == 0 {
 		t.Fatal("expected history ingredients")
 	}
 	if w := call(t, mux, "DELETE", fmt.Sprintf("/api/recipes/%d", rid), ""); w.Code != 204 {
 		t.Fatalf("delete %d", w.Code)
 	}
-	if n := countRows(t, db, `SELECT COUNT(*) FROM recipes WHERE id=?`, rid); n != 0 {
+	if n := archCountRows(t, db, `SELECT COUNT(*) FROM recipes WHERE id=?`, rid); n != 0 {
 		t.Fatal("recipe still present")
 	}
 	var name string
 	if err := db.QueryRow(`SELECT recipe_name FROM meal_history WHERE recipe_id IS NULL`).Scan(&name); err != nil || name != "r" {
 		t.Fatalf("history row: %q %v", name, err)
 	}
-	if n := countRows(t, db, `SELECT COUNT(*) FROM meal_history_ingredients`); n != ingBefore {
+	if n := archCountRows(t, db, `SELECT COUNT(*) FROM meal_history_ingredients`); n != ingBefore {
 		t.Fatalf("ingredients %d vs %d", n, ingBefore)
 	}
-	if n := countRows(t, db, `SELECT COUNT(*) FROM inventory_history WHERE recipe_id IS NOT NULL`); n != 0 {
+	if n := archCountRows(t, db, `SELECT COUNT(*) FROM inventory_history WHERE recipe_id IS NOT NULL`); n != 0 {
 		t.Fatalf("inventory_history still linked: %d", n)
 	}
 
