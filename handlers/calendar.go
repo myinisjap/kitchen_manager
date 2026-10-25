@@ -33,22 +33,24 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		if input.MealSlot == "" {
 			input.MealSlot = "dinner"
 		}
-		if input.Servings == 0 {
-			input.Servings = 1
-		}
 		// Validate date format
 		if _, err := time.Parse("2006-01-02", input.Date); err != nil {
 			WriteError(w, http.StatusBadRequest, "invalid date format, use YYYY-MM-DD")
 			return
 		}
-		var exists int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM recipes WHERE id=?`, input.RecipeID).Scan(&exists); err != nil {
+		var recipeServings int
+		if err := db.QueryRow(`SELECT servings FROM recipes WHERE id=?`, input.RecipeID).Scan(&recipeServings); err == sql.ErrNoRows {
+			WriteError(w, http.StatusNotFound, "recipe not found")
+			return
+		} else if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if exists == 0 {
-			WriteError(w, http.StatusNotFound, "recipe not found")
-			return
+		if input.Servings <= 0 {
+			input.Servings = recipeServings
+			if input.Servings <= 0 {
+				input.Servings = 1
+			}
 		}
 		res, err := db.Exec(`INSERT INTO meal_calendar (date,meal_slot,recipe_id,servings) VALUES (?,?,?,?)`,
 			input.Date, input.MealSlot, input.RecipeID, input.Servings)

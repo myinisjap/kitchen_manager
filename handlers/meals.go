@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"kitchen_manager/units"
 	"math"
 	"net/http"
 	"strconv"
@@ -106,7 +107,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		warnings := []string{}
 
 		for _, ing := range ingredients {
-			scale := float64(input.ServingsMade) / float64(recipeServings)
+			scale := units.ServingsScale(input.ServingsMade, recipeServings)
 			qtyUsed := ing.Quantity * scale
 
 			var costCents *int64

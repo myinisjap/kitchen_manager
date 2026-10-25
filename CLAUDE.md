@@ -94,6 +94,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 ## Key Design Decisions
 
+- **Servings scaling:** every ingredient quantity is scaled by `units.ServingsScale(selected, recipe.servings)` (recipe.servings 0→1) when cooking, adding to the shopping list (default = recipe servings) and generating weekly shopping. Calendar entries default to the recipe's servings. The frontend mirrors the math in `scaledQty`; `settings.default_servings` seeds new recipes and is the stepper fallback.
+
 **Request limits & timeouts:** `ReadJSON` caps JSON bodies at 1 MB. Receipt uploads (20 MB) and PDFs (10 MB) use `http.MaxBytesReader` (413 when exceeded). Receipt images go through `image.DecodeConfig` first and are rejected above 50 MP (413). PDF extraction is bounded by `pdfParseTimeout` plus a concurrency semaphore (`handlers/limits.go`). `main.go` sets Read/ReadHeader/Write/Idle timeouts; WriteTimeout must stay above the 60 s Claude call.
 
 **Units system:** 14 units across 3 dimensions (mass, volume, count). Units must be same-dimension to convert. Count units don't inter-convert. The `preferred_unit` on an inventory item is the canonical unit for display and aggregation.
