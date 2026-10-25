@@ -1363,7 +1363,7 @@
           const q = this.itemForm.name;
           if (!q) { this.suggestions = []; this.showSuggestions = false; return; }
           try {
-            const res = await fetch('/kitchen-manager/api/inventory/suggestions?q=' + encodeURIComponent(q));
+            const res = await fetch(this.baseUrl + '/api/inventory/suggestions?q=' + encodeURIComponent(q));
             if (!res.ok) { this.suggestions = []; this.showSuggestions = false; return; }
             this.suggestions = await res.json();
             this.showSuggestions = this.suggestions.length > 0;
@@ -1452,7 +1452,7 @@
           }
           // mode === 'find': look up in our inventory first
           try {
-            const res = await fetch('/kitchen-manager/api/inventory/barcode/' + encodeURIComponent(code));
+            const res = await fetch(this.baseUrl + '/api/inventory/barcode/' + encodeURIComponent(code));
             if (res.ok) {
               const item = await res.json();
               this.editItem(item);
@@ -1668,7 +1668,7 @@
           let successCount = 0;
           for (const pending of this.groceryPendingItems) {
             try {
-              const cur = await fetch('/kitchen-manager/api/inventory/barcode/' + encodeURIComponent(pending.barcode));
+              const cur = await fetch(this.baseUrl + '/api/inventory/barcode/' + encodeURIComponent(pending.barcode));
               if (!cur.ok) continue;
               const item = await cur.json();
               const newQty = parseFloat((item.quantity + pending.qty).toFixed(4));
@@ -1693,7 +1693,7 @@
           setTimeout(() => { this._scanCooldown = false; }, 2500);
 
           try {
-            const res = await fetch('/kitchen-manager/api/inventory/barcode/' + encodeURIComponent(code));
+            const res = await fetch(this.baseUrl + '/api/inventory/barcode/' + encodeURIComponent(code));
             if (res.ok) {
               const item = await res.json();
               // Add to or update pending list
@@ -1759,7 +1759,7 @@
           // Location pre-fill from existing inventory
           if (prefill.name) {
             try {
-              const invRes = await fetch('/kitchen-manager/api/inventory/?name=' + encodeURIComponent(prefill.name));
+              const invRes = await fetch(this.baseUrl + '/api/inventory/?name=' + encodeURIComponent(prefill.name));
               if (invRes.ok) {
                 const invData = await invRes.json();
                 if (invData && invData.length > 0 && invData[0].location) prefill.location = invData[0].location;
@@ -1796,7 +1796,7 @@
 
         async confirmGroceryNewItem() {
           try {
-            const res = await fetch('/kitchen-manager/api/inventory/', {
+            const res = await fetch(this.baseUrl + '/api/inventory/', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(this.groceryItemForm),
@@ -1832,7 +1832,7 @@
           const params = new URLSearchParams();
           if (this.inventorySearch) params.set('name', this.inventorySearch);
           if (this.inventoryLocation) params.set('location', this.inventoryLocation);
-          const res = await fetch('/kitchen-manager/api/inventory/grouped?' + params);
+          const res = await fetch(this.baseUrl + '/api/inventory/grouped?' + params);
           const data = await res.json();
           this.inventoryItems = data;
           if (!this.inventoryLocation) {
@@ -1841,7 +1841,7 @@
         },
 
         async fetchExpiring() {
-          const res = await fetch('/kitchen-manager/api/inventory/expiring?days=7');
+          const res = await fetch(this.baseUrl + '/api/inventory/expiring?days=7');
           this.expiringItems = await res.json();
         },
 
@@ -1907,7 +1907,7 @@
             });
             this.showToast('Item updated');
           } else {
-            await fetch('/kitchen-manager/api/inventory/', {
+            await fetch(this.baseUrl + '/api/inventory/', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(this.itemForm),
@@ -1928,7 +1928,7 @@
 
         // --- Shopping ---
         async fetchShoppingList() {
-          const res = await fetch('/kitchen-manager/api/shopping/?show_checked=true');
+          const res = await fetch(this.baseUrl + '/api/shopping/?show_checked=true');
           this.shoppingItems = await res.json();
         },
 
@@ -1939,7 +1939,7 @@
 
         async saveShoppingItem() {
           if (!this.shoppingForm.name) return;
-          await fetch('/kitchen-manager/api/shopping/', {
+          await fetch(this.baseUrl + '/api/shopping/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.shoppingForm),
@@ -1964,13 +1964,13 @@
         },
 
         async clearCheckedItems() {
-          await fetch('/kitchen-manager/api/shopping/checked', { method: 'DELETE' });
+          await fetch(this.baseUrl + '/api/shopping/checked', { method: 'DELETE' });
           await this.fetchShoppingList();
           this.showToast('Cleared checked items');
         },
 
         async generateFromThresholds() {
-          const res = await fetch('/kitchen-manager/api/shopping/generate-from-thresholds', { method: 'POST' });
+          const res = await fetch(this.baseUrl + '/api/shopping/generate-from-thresholds', { method: 'POST' });
           const data = await res.json();
           await this.fetchShoppingList();
           this.showToast(`Added ${data.added} low-stock items`);
@@ -1978,7 +1978,7 @@
 
         async fetchMe() {
           try {
-            const res = await fetch('/kitchen-manager/api/me');
+            const res = await fetch(this.baseUrl + '/api/me');
             if (res.ok) {
               const data = await res.json();
               this.currentUser = data.email || null;
@@ -2006,7 +2006,7 @@
           try {
             const fd = new FormData();
             fd.append('file', this.receiptFile);
-            const res = await fetch('/kitchen-manager/api/receipt/parse', { method: 'POST', body: fd });
+            const res = await fetch(this.baseUrl + '/api/receipt/parse', { method: 'POST', body: fd });
             const data = await res.json();
             if (!res.ok) { this.receiptError = data.error || 'Parsing failed'; return; }
             this.receiptItems = data.items.map(item => ({
@@ -2040,7 +2040,7 @@
               quantity_per_scan: qtyPerScan || 0,
             };
             try {
-              const res = await fetch('/kitchen-manager/api/inventory/', {
+              const res = await fetch(this.baseUrl + '/api/inventory/', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -2064,7 +2064,7 @@
           const params = new URLSearchParams();
           if (this.recipeTagFilter) params.set('tag', this.recipeTagFilter);
           if (this.recipeAvailableOnly) params.set('available_only', 'true');
-          const res = await fetch('/kitchen-manager/api/recipes/?' + params);
+          const res = await fetch(this.baseUrl + '/api/recipes/?' + params);
           this.recipes = await res.json();
         },
 
@@ -2114,7 +2114,7 @@
             if (!this.recipeImportUrl) return;
             this.recipeImporting = true;
             try {
-              const res = await fetch('/kitchen-manager/api/recipes/import/url', {
+              const res = await fetch(this.baseUrl + '/api/recipes/import/url', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url: this.recipeImportUrl }),
@@ -2138,7 +2138,7 @@
             try {
               const fd = new FormData();
               fd.append('file', this.recipeImportFile);
-              const res = await fetch('/kitchen-manager/api/recipes/import/pdf', { method: 'POST', body: fd });
+              const res = await fetch(this.baseUrl + '/api/recipes/import/pdf', { method: 'POST', body: fd });
               const data = await res.json();
               if (!res.ok) { this.recipeImportError = data.error || 'Import failed'; return; }
               this._applyImportData(data);
@@ -2194,7 +2194,7 @@
 
         async addRecipeToCalendar(recipe, servings) {
           if (!this.recipeViewDate) return;
-          await fetch('/kitchen-manager/api/calendar/', {
+          await fetch(this.baseUrl + '/api/calendar/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ date: this.recipeViewDate, meal_slot: this.recipeViewSlot, recipe_id: recipe.id, servings }),
@@ -2221,7 +2221,7 @@
 
         async confirmCookIt() {
           const { recipe, servings } = this.cookItConfirm;
-          const res = await fetch('/kitchen-manager/api/meals', {
+          const res = await fetch(this.baseUrl + '/api/meals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ recipe_id: recipe.id, servings_made: servings }),
@@ -2327,7 +2327,7 @@
 
         async saveCalendarEntry() {
           if (!this.calendarEntryForm.recipe_id) return;
-          await fetch('/kitchen-manager/api/calendar/', {
+          await fetch(this.baseUrl + '/api/calendar/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(this.calendarEntryForm),
@@ -2412,7 +2412,7 @@
 
         async onRemoveStockScanned(code) {
           try {
-            const res = await fetch('/kitchen-manager/api/inventory/barcode/' + encodeURIComponent(code));
+            const res = await fetch(this.baseUrl + '/api/inventory/barcode/' + encodeURIComponent(code));
             if (!res.ok) { this.showToast('Item not found', 'error'); return; }
             const item = await res.json();
             const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
@@ -2560,7 +2560,7 @@
 
         // --- History ---
         async fetchHistory() {
-          const res = await fetch('/kitchen-manager/api/history?limit=50');
+          const res = await fetch(this.baseUrl + '/api/history?limit=50');
           if (res.ok) {
             const data = await res.json();
             this.historyItems = data.rows || [];
@@ -2570,7 +2570,7 @@
         // --- Meals ---
         async fetchMeals() {
           this.mealsOffset = 0;
-          const res = await fetch('/kitchen-manager/api/meals?limit=20&offset=0');
+          const res = await fetch(this.baseUrl + '/api/meals?limit=20&offset=0');
           if (res.ok) {
             const data = await res.json();
             this.meals = data.meals;
