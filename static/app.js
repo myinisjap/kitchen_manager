@@ -1194,7 +1194,7 @@ function app() {
       if (!res) return;
       const data = await res.json();
       this.modal = null;
-      this.showToast(`Added ${data.added} missing ingredient(s) to shopping list`);
+      this.showToast(`Added ${data.added} new, updated ${data.merged || 0} item(s) on shopping list`);
       await this.fetchShoppingList();
     },
 
@@ -1342,7 +1342,7 @@ function app() {
       const res = await this.apiFetch('/api/calendar/generate-weekly-shopping?start=' + start, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       if (!res) return;
       const data = await res.json();
-      this.showToast(`Added ${data.items.length} item(s) to shopping list`);
+      this.showToast(`Added ${data.added ?? data.items.length} new, updated ${data.merged ?? 0} item(s)`);
       await this.fetchShoppingList();
       this.activeTab = 'shopping';
     },
