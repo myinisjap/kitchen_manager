@@ -3,9 +3,9 @@ package database
 import (
 	"database/sql"
 	"log"
-	"time"
-	"strings"
 	_ "modernc.org/sqlite"
+	"strings"
+	"time"
 )
 
 // OpenDB opens the SQLite database at path, sets connection limits, and
