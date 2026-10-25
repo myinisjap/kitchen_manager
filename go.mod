@@ -1,12 +1,13 @@
 module kitchen_manager
 
-go 1.26.1
+go 1.26.10
 
 require (
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/pdfcpu/pdfcpu v0.11.1
-	golang.org/x/net v0.52.0
+	golang.org/x/image v0.45.0
+	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.47.0
 )
@@ -24,10 +25,9 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	golang.org/x/crypto v0.49.0 // indirect
-	golang.org/x/image v0.32.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

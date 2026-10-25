@@ -11,8 +11,12 @@ go build -o kitchen_manager
 # Run (plain HTTP on :8080 by default; see Running Modes below for TLS/Docker)
 ./kitchen_manager
 
-# Run all tests
-go test ./...
+# Run all tests (CI uses -race)
+go test -race ./...
+
+# Vulnerability scan (CI runs this too)
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...
 
 # Run tests for a specific package
 go test ./units/
@@ -23,6 +27,8 @@ go test -v -run TestGetInventoryItemByBarcode ./handlers/
 ```
 
 No Makefile. Frontend has no runtime build step: Alpine and ZXing are vendored in `static/vendor/` (see its README) and Tailwind CSS is pre-built and committed as `static/tailwind.css`. After changing classes in `static/index.html` or `static/app.js`, rebuild: `npx tailwindcss@3.4.19 -c tailwind.config.js -i web/tailwind.input.css -o static/tailwind.css --minify`.
+
+Tests must build their database with `testutil.NewDB(t)` (`internal/testutil`, real schema via `database.OpenDB(":memory:")`), never a hand-written schema.
 
 ## Running Modes
 
