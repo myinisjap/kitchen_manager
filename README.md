@@ -40,6 +40,7 @@ A self-hosted app for tracking your pantry, planning meals, managing recipes, an
 - **Pantry tracking** — quantities, units, locations, expiry dates, low-stock alerts
 - **Barcode scanning** — use your phone camera to look up or add items
 - **Shopping list** — manual items, auto-generated from low-stock thresholds, or pulled from recipes
+- **Servings scaling** — scale any recipe up or down with a servings stepper; cooking, shopping lists and the meal calendar scale ingredient quantities to match
 - **Recipe import** — paste a URL from any major recipe site; ingredients auto-link to your pantry
 - **Meal calendar** — plan breakfast/lunch/dinner for the week; cooking a meal deducts ingredients
 - **Meal history & cost tracking** — log meals cooked and see weekly/monthly spend
