@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -398,7 +399,11 @@ func parseInstructions(raw json.RawMessage) string {
 // normalizeIngredientString replaces unicode vulgar fractions and superscript digits
 // with ASCII equivalents so the quantity parser can handle them.
 // It also collapses ranges like "2-3" to the lower bound "2".
+var mixedFractionRe = regexp.MustCompile(`([0-9])([\x{00bc}-\x{00be}\x{2150}-\x{215e}])`)
+
 func normalizeIngredientString(s string) string {
+	// Separate a mixed number like "1½" into "1 ½" so it doesn't become "11/2".
+	s = mixedFractionRe.ReplaceAllString(s, "$1 $2")
 	replacer := strings.NewReplacer(
 		"½", "1/2", "⅓", "1/3", "⅔", "2/3", "¼", "1/4", "¾", "3/4",
 		"⅕", "1/5", "⅖", "2/5", "⅗", "3/5", "⅘", "4/5",
@@ -544,6 +549,15 @@ func parseQuantity(parts []string) (float64, []string) {
 		return 0, parts
 	}
 	token := parts[0]
+
+	// Bare fraction like "1/2" (must precede the float scan, which would read just "1")
+	if idx := strings.Index(token, "/"); idx > 0 {
+		num, err1 := strconv.ParseFloat(token[:idx], 64)
+		den, err2 := strconv.ParseFloat(token[idx+1:], 64)
+		if err1 == nil && err2 == nil && den != 0 {
+			return num / den, parts[1:]
+		}
+	}
 
 	// Simple float
 	var q float64

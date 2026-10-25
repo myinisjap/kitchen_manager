@@ -36,6 +36,9 @@ func TestParseIngredientStringCases(t *testing.T) {
 	}{
 		{"2 cups flour", 2, "cup", "flour"},
 		{"1 1/2 cups milk", 1.5, "cup", "milk"},
+		{"1/2 cup sugar", 0.5, "cup", "sugar"},
+		{"½ tsp salt", 0.5, "tsp", "salt"},
+		{"1½ cups rice", 1.5, "cup", "rice"},
 		{"30g butter", 30, "g", "butter"},
 		{"1.5kg potatoes", 1.5, "kg", "potatoes"},
 		{"2-3 cloves garlic", 2, "clove", "garlic"},
@@ -57,13 +60,11 @@ func TestParseIngredientStringCases(t *testing.T) {
 	}
 }
 
-// Known bug: a bare fraction ("1/2", "½") parses as 1 because fmt.Sscanf("%f")
-// accepts the leading "1" in parseQuantity. Expected 0.5.
-func TestParseIngredientBareFractionKnownBug(t *testing.T) {
+func TestParseIngredientBareFraction(t *testing.T) {
 	for _, in := range []string{"1/2 cup sugar", "½ tsp salt"} {
 		got := parseIngredientString(in)
 		if got.Quantity != 0.5 {
-			t.Skipf("known bug: %q parsed as quantity %v, want 0.5", in, got.Quantity)
+			t.Errorf("%q: quantity %v, want 0.5", in, got.Quantity)
 		}
 	}
 }
