@@ -53,6 +53,7 @@ var migrations = []migration{
 	{name: "inventory_fk_on_delete_set_null", disableFK: true, up: migrateInventoryFKSetNull},
 	{name: "recipes_archived", up: migrateRecipesArchived},
 	{name: "meal_history_nullable_recipe", disableFK: true, up: migrateMealHistoryNullableRecipe},
+	{name: "shopping_list_sources", up: migrateShoppingListSources},
 }
 
 // LatestVersion is the schema version produced by all known migrations.
@@ -253,18 +254,7 @@ const baselineSQL = `
 		unit             TEXT    NOT NULL DEFAULT '',
 		checked          INTEGER NOT NULL DEFAULT 0,
 		source           TEXT    NOT NULL DEFAULT 'manual'
-	);
 
-	CREATE TABLE IF NOT EXISTS shopping_list_sources (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		shopping_id INTEGER NOT NULL REFERENCES shopping_list(id) ON DELETE CASCADE,
-		source      TEXT    NOT NULL,
-		ref         TEXT    NOT NULL DEFAULT '',
-		label       TEXT    NOT NULL DEFAULT '',
-		quantity    REAL    NOT NULL DEFAULT 0,
-		UNIQUE(shopping_id, source, ref)
-	);
-	CREATE INDEX IF NOT EXISTS shopping_list_sources_shopping_idx ON shopping_list_sources(shopping_id);
 
 	CREATE TABLE IF NOT EXISTS recipes (
 		id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -437,4 +427,20 @@ func migrateMealHistoryNullableRecipe(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// migrateShoppingListSources adds per-row provenance for shopping list items.
+func migrateShoppingListSources(tx *sql.Tx) error {
+	_, err := tx.Exec(`
+	CREATE TABLE IF NOT EXISTS shopping_list_sources (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		shopping_id INTEGER NOT NULL REFERENCES shopping_list(id) ON DELETE CASCADE,
+		source      TEXT    NOT NULL,
+		ref         TEXT    NOT NULL DEFAULT '',
+		label       TEXT    NOT NULL DEFAULT '',
+		quantity    REAL    NOT NULL DEFAULT 0,
+		UNIQUE(shopping_id, source, ref)
+	);
+	CREATE INDEX IF NOT EXISTS shopping_list_sources_shopping_idx ON shopping_list_sources(shopping_id);`)
+	return err
 }
