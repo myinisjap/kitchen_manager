@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"kitchen_manager/handlers"
@@ -20,6 +23,12 @@ const (
 	httpsAddr = ":8443"
 	certFile  = "./cert.pem"
 	keyFile   = "./key.pem"
+
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 2 * time.Minute // 20 MB uploads on slow links
+	writeTimeout      = 3 * time.Minute // exceeds 60 s Claude call + processing
+	idleTimeout       = 120 * time.Second
+	shutdownTimeout   = 15 * time.Second
 )
 
 func main() {
@@ -31,7 +40,6 @@ func main() {
 	if err != nil {
 		log.Fatal("db open:", err)
 	}
-	defer db.Close()
 
 	hub := handlers.NewHub()
 	go hub.Run()
@@ -78,25 +86,77 @@ func main() {
 	handler = withHealthz(db, handler)
 	handler = securityHeaders(handler)
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var servers []*http.Server
+	errCh := make(chan error, 2)
+	serve := func(srv *http.Server, useTLS bool) {
+		servers = append(servers, srv)
+		go func() {
+			var err error
+			if useTLS {
+				log.Println("HTTPS listening on", srv.Addr)
+				err = srv.ListenAndServeTLS(certFile, keyFile)
+			} else {
+				log.Println("HTTP listening on", srv.Addr)
+				err = srv.ListenAndServe()
+			}
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+		}()
+	}
+
 	if os.Getenv("SELF_SIGNED_TLS") == "true" {
 		if err := tlscert.EnsureCert(certFile, keyFile); err != nil {
 			log.Fatal("tls cert:", err)
 		}
-		go func() {
-			log.Println("HTTP redirect listening on", httpAddr)
-			log.Fatal(http.ListenAndServe(httpAddr, securityHeaders(withHealthz(db, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				host, _, err := parseHost(r.Host)
-				if err != nil {
-					host = r.Host
-				}
-				http.Redirect(w, r, "https://"+host+httpsAddr+r.RequestURI, http.StatusMovedPermanently)
-			})))))
-		}()
-		log.Println("HTTPS listening on", httpsAddr)
-		log.Fatal(http.ListenAndServeTLS(httpsAddr, certFile, keyFile, handler))
+		serve(newServer(httpAddr, securityHeaders(withHealthz(db, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host, _, err := parseHost(r.Host)
+			if err != nil {
+				host = r.Host
+			}
+			http.Redirect(w, r, "https://"+host+httpsAddr+r.RequestURI, http.StatusMovedPermanently)
+		})))), false)
+		serve(newServer(httpsAddr, handler), true)
 	} else {
-		log.Println("HTTP listening on", httpAddr)
-		log.Fatal(http.ListenAndServe(httpAddr, handler))
+		serve(newServer(httpAddr, handler), false)
+	}
+
+	exitCode := 0
+	select {
+	case <-ctx.Done():
+		log.Println("shutting down")
+	case err := <-errCh:
+		log.Println("server error:", err)
+		exitCode = 1
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	for _, srv := range servers {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Println("shutdown:", err)
+		}
+	}
+	cancel()
+	if err := db.Close(); err != nil {
+		log.Println("db close:", err)
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+func newServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    1 << 20,
 	}
 }
 

@@ -67,7 +67,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml down && docker compo
 | `GOOGLE_CLIENT_SECRET` | — | Google Cloud OAuth client secret |
 | `SESSION_SECRET` | — | 64-char hex string for cookie signing (`openssl rand -hex 32`) |
 | `APP_HOST` | — | Public hostname for the Traefik router in `deploy/docker-compose.yml` |
-| `BASE_URL` | — | Public URL, used for OAuth redirect URI |
+| `BASE_URL` | — | Public URL incl. any path prefix (e.g. `https://host/kitchen-manager`); used for OAuth and auth redirects |
 
 ## Auth
 
@@ -78,7 +78,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml down && docker compo
 Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Layers:**
-- `main.go` — router setup, TLS bootstrapping, static file serving
+- `main.go` — router setup, TLS bootstrapping, static file serving, explicit `http.Server` timeouts, graceful shutdown (SIGINT/SIGTERM, closes DB)
 - `handlers/` — HTTP request handlers (one file per domain: inventory, shopping, recipes, calendar)
 - `services/` — business logic that spans multiple DB tables (threshold generation, weekly shopping simulation)
 - `units/` — unit enum definitions, dimension validation, and conversion math
@@ -92,6 +92,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Request flow:** Frontend → Handler → Service (if needed) → Raw SQL → SQLite (`kitchen.db`)
 
 ## Key Design Decisions
+
+**Request limits & timeouts:** `ReadJSON` caps JSON bodies at 1 MB. Receipt uploads (20 MB) and PDFs (10 MB) use `http.MaxBytesReader` (413 when exceeded). Receipt images go through `image.DecodeConfig` first and are rejected above 50 MP (413). PDF extraction is bounded by `pdfParseTimeout` plus a concurrency semaphore (`handlers/limits.go`). `main.go` sets Read/ReadHeader/Write/Idle timeouts; WriteTimeout must stay above the 60 s Claude call.
 
 **Units system:** 14 units across 3 dimensions (mass, volume, count). Units must be same-dimension to convert. Count units don't inter-convert. The `preferred_unit` on an inventory item is the canonical unit for display and aggregation.
 
@@ -108,6 +110,8 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Testing:** Tests use in-memory SQLite (not mocks). `handlers/inventory_test.go` builds the schema in-process; `units/units_test.go` tests conversion logic directly.
 
 **Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units).
+
+**In-app OAuth (`OAUTH_ENABLED`):** optional second layer behind Traefik forward-auth. Unauthenticated HTML requests redirect to `BASE_URL/auth/login`; `/api/*` and `/ws` get 401 JSON; session token is renewed on login.
 
 **Reverse proxy (Traefik):** The app runs at `/kitchen-manager` behind Traefik's `stripprefix` middleware. Auth redirects must use absolute URLs via `BASE_URL` (not relative paths like `/auth/login`) so the browser preserves the path prefix.
 
