@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"kitchen_manager/services"
 	"kitchen_manager/units"
 )
 
@@ -383,7 +385,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		scale := units.ServingsScale(requestedServings, recipeServings)
 		ings := recipe["ingredients"].([]map[string]any)
-		added := 0
+		var additions []services.ListAddition
 		for _, ing := range ings {
 			needed := ing["quantity"].(float64) * scale
 			ingUnit := units.Unit(ing["unit"].(string))
@@ -412,16 +414,44 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 			shortfall := needed - have
 			if shortfall > 0 {
-				if _, err := db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'recipe')`,
-					ing["inventory_id"], ing["name"], shortfall, string(displayUnit)); err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
-					return
+				var invPtr *int64
+				if v, ok := ing["inventory_id"].(int64); ok {
+					invPtr = &v
 				}
-				added++
+				additions = append(additions, services.ListAddition{
+					InventoryID: invPtr, Name: ing["name"].(string), Unit: string(displayUnit),
+					Quantity: shortfall, Source: "recipe", Ref: strconv.FormatInt(id, 10),
+					Label: recipe["name"].(string), Mode: services.MergeAdd,
+				})
 			}
 		}
-		WriteJSON(w, http.StatusOK, map[string]any{"added": added})
-		if added > 0 {
+		// A second "add recipe" is additive (the user asked again); weekly
+		// generation is the idempotent one. Merges into one row either way.
+		tx, err := db.Begin()
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		defer tx.Rollback() //nolint:errcheck
+		added, merged := 0, 0
+		for _, a := range additions {
+			mr, err := services.MergeIntoShoppingList(tx, a)
+			if err != nil {
+				WriteError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if mr.Created {
+				added++
+			} else {
+				merged++
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]any{"added": added, "merged": merged})
+		if added+merged > 0 {
 			if wsHub != nil {
 				wsHub.Broadcast("shopping_updated")
 			}

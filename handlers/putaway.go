@@ -209,6 +209,9 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 	}); err != nil {
 		return res, err
 	}
+	if _, err := tx.Exec(`DELETE FROM shopping_list_sources WHERE shopping_id=?`, shoppingID); err != nil {
+		return res, err
+	}
 	del, err := tx.Exec(`DELETE FROM shopping_list WHERE id=?`, shoppingID)
 	if err != nil {
 		return res, err
