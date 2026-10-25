@@ -49,7 +49,7 @@ func TestConcurrentInventoryPostMergesAtomically(t *testing.T) {
 	checkCodes(t, codes)
 	var n int
 	var qty float64
-	if err := db.QueryRow(`SELECT COUNT(*), SUM(quantity) FROM inventory WHERE barcode='123'`).Scan(&n, &qty); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*), SUM(quantity) FROM stock_lots l JOIN products p ON p.id=l.product_id WHERE p.barcode='123'`).Scan(&n, &qty); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 || qty != nConc+1 {
@@ -68,7 +68,7 @@ func TestConcurrentInventoryPostFromEmpty(t *testing.T) {
 	checkCodes(t, fire(mux, nConc, "POST", func(int) string { return "/api/inventory/" }, func(int) string { return body }))
 	var n int
 	var qty float64
-	if err := db.QueryRow(`SELECT COUNT(*), SUM(quantity) FROM inventory WHERE barcode='555'`).Scan(&n, &qty); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*), SUM(quantity) FROM stock_lots l JOIN products p ON p.id=l.product_id WHERE p.barcode='555'`).Scan(&n, &qty); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 || qty != nConc {
@@ -85,7 +85,7 @@ func TestConcurrentSkuAliasPostMergesAtomically(t *testing.T) {
 	body := `{"name":"other name","quantity":1,"unit":"piece","barcode":"999"}`
 	checkCodes(t, fire(mux, nConc, "POST", func(int) string { return "/api/inventory/" }, func(int) string { return body }))
 	var qty float64
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id).Scan(&qty)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id).Scan(&qty)
 	if qty != 5+nConc {
 		t.Fatalf("qty=%v want %d", qty, 5+nConc)
 	}
@@ -103,9 +103,9 @@ func TestConcurrentMergeInto(t *testing.T) {
 		func(i int) string { return fmt.Sprintf("/api/inventory/%d/merge-into/%d", srcs[i], target) },
 		func(int) string { return `{}` }))
 	var qty float64
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, target).Scan(&qty)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, target).Scan(&qty)
 	var rows int
-	db.QueryRow(`SELECT COUNT(*) FROM inventory`).Scan(&rows)
+	db.QueryRow(`SELECT COUNT(*) FROM stock_lots`).Scan(&rows)
 	if qty != 10+n || rows != 1 {
 		t.Fatalf("qty=%v rows=%d, want %d and 1", qty, rows, 10+n)
 	}

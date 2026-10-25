@@ -12,7 +12,7 @@ import (
 
 // ShoppingNeed represents an ingredient that needs to be purchased.
 type ShoppingNeed struct {
-	InventoryID    *int64
+	ProductID      *int64
 	Name           string
 	Unit           string
 	QuantityNeeded float64
@@ -61,37 +61,21 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	}
 	rows.Close()
 
-	// Step 2: load current inventory into simulated map (in preferred unit)
-	type invInfo struct {
-		qty           float64
-		unit          string
-		preferredUnit string // canonical display/storage unit; falls back to unit if empty
-	}
-	invRows, err := db.Query(`SELECT id, quantity, unit, preferred_unit FROM inventory`)
+	// Step 2: current stock per product, summed over all its lots and
+	// expressed in the product's unit.
+	levels, err := ProductLevels(db)
 	if err != nil {
 		return nil, err
 	}
+	type invInfo struct {
+		unit string
+	}
 	inventory := map[int64]invInfo{}
 	simulated := map[int64]float64{}
-	for invRows.Next() {
-		var id int64
-		var qty float64
-		var u, pu string
-		if err := invRows.Scan(&id, &qty, &u, &pu); err != nil {
-			invRows.Close()
-			return nil, err
-		}
-		if pu == "" {
-			pu = u
-		}
-		inventory[id] = invInfo{qty: qty, unit: u, preferredUnit: pu}
-		simulated[id] = qty
+	for _, l := range levels {
+		inventory[l.ID] = invInfo{unit: l.Unit}
+		simulated[l.ID] = l.Total
 	}
-	if err := invRows.Err(); err != nil {
-		invRows.Close()
-		return nil, err
-	}
-	invRows.Close()
 
 	// Step 3: sum all ingredient quantities across all recipes, then subtract inventory once.
 	// key: "invID|preferredUnit" for linked ingredients, "name|unit" for unlinked
@@ -110,7 +94,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 	for _, e := range entries {
 		scale := units.ServingsScale(e.servings, e.recipeServings)
 
-		ingRows, err := db.Query(`SELECT inventory_id, name, quantity, unit FROM recipe_ingredients WHERE recipe_id=?`, e.recipeID)
+		ingRows, err := db.Query(`SELECT product_id, name, quantity, unit FROM recipe_ingredients WHERE recipe_id=?`, e.recipeID)
 		if err != nil {
 			return nil, err
 		}
@@ -144,9 +128,9 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 				if !ok {
 					continue
 				}
-				targetUnit := units.Unit(inv.preferredUnit)
+				targetUnit := units.Unit(inv.unit)
 
-				// Convert ingredient quantity to the inventory item's preferred unit
+				// Convert ingredient quantity to the product unit
 				// If units can't be converted, file the need in the recipe's own
 				// unit under a separate key and don't subtract stock.
 				needed := rawNeeded
@@ -200,7 +184,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 		}
 		if shortfall > 0 {
 			needs[key] = &ShoppingNeed{
-				InventoryID:    t.invID,
+				ProductID:      t.invID,
 				Name:           t.name,
 				Unit:           t.unit,
 				QuantityNeeded: shortfall,

@@ -29,7 +29,7 @@ func recipeWith(t *testing.T, db *sql.DB, invID int64, name string, qty float64,
 	if err := db.QueryRow(`INSERT INTO recipes (name, servings) VALUES ('r', 1) RETURNING id`).Scan(&rid); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`, rid, invID, name, qty, unit); err != nil {
+	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),?,?,?)`, rid, invID, name, qty, unit); err != nil {
 		t.Fatal(err)
 	}
 	return rid
@@ -43,7 +43,7 @@ func cook(t *testing.T, mux *http.ServeMux, rid int64) int {
 func qtyOf(t *testing.T, db *sql.DB, id int64) float64 {
 	t.Helper()
 	var q float64
-	if err := db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id).Scan(&q); err != nil {
+	if err := db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id).Scan(&q); err != nil {
 		t.Fatal(err)
 	}
 	return q
@@ -100,8 +100,8 @@ func TestCookIncompatibleUnitsWarns(t *testing.T) {
 	}
 	var invID sql.NullInt64
 	var cost sql.NullInt64
-	db.QueryRow(`SELECT inventory_id, cost_cents FROM meal_history_ingredients`).Scan(&invID, &cost)
-	if invID.Int64 != id || cost.Valid {
+	db.QueryRow(`SELECT product_id, cost_cents FROM meal_history_ingredients`).Scan(&invID, &cost)
+	if invID.Int64 != productOf(t, db, id) || cost.Valid {
 		t.Fatalf("ingredient row %v %v", invID, cost)
 	}
 	want := "Couldn't deduct 2 cup of flour: stock is tracked in g"
@@ -126,27 +126,27 @@ func TestCookCascadesAcrossLots(t *testing.T) {
 		t.Fatalf("c %v", q)
 	}
 	var n int
-	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE id=?`, a).Scan(&n)
+	db.QueryRow(`SELECT COUNT(*) FROM stock_lots WHERE id=?`, a).Scan(&n)
 	if n != 0 {
 		t.Fatalf("emptied lot should be folded away")
 	}
 	var invID sql.NullInt64
-	if err := db.QueryRow(`SELECT inventory_id FROM meal_history_ingredients`).Scan(&invID); err != nil {
+	if err := db.QueryRow(`SELECT product_id FROM meal_history_ingredients`).Scan(&invID); err != nil {
 		t.Fatal(err)
 	}
 	if !invID.Valid {
-		t.Fatal("expected linked inventory id")
+		t.Fatal("expected linked product id")
 	}
-	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE id=?`, invID.Int64).Scan(&n)
+	db.QueryRow(`SELECT COUNT(*) FROM products WHERE id=?`, invID.Int64).Scan(&n)
 	if n != 1 {
-		t.Fatalf("meal ingredient points at missing row %d", invID.Int64)
+		t.Fatalf("meal ingredient points at missing product %d", invID.Int64)
 	}
 }
 
 func TestCookCostUsesConvertedQty(t *testing.T) {
 	mux, db := newMealsMux(t)
 	id := insertLot(t, db, "rice", 5000, "g", "", "")
-	if _, err := db.Exec(`UPDATE inventory SET unit_cost_cents=2 WHERE id=?`, id); err != nil {
+	if _, err := db.Exec(`UPDATE stock_lots SET unit_cost_cents=2 WHERE id=?`, id); err != nil {
 		t.Fatal(err)
 	}
 	rid := recipeWith(t, db, id, "rice", 1, "kg")

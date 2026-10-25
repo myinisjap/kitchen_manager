@@ -16,7 +16,7 @@ func mergeSetup(t *testing.T, db *sql.DB, days ...string) (invID, recipeID int64
 	if err := db.QueryRow(`INSERT INTO recipes (name,servings) VALUES ('Pasta Bake',1) RETURNING id`).Scan(&recipeID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
+	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),?,?,?)`,
 		recipeID, invID, "pasta", 300, "g"); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestMergeScenarios(t *testing.T) {
 
 	// 4. recipe merges into same row; sources has both
 	// 3. recipe twice: shortfall 300-500 <0 → nothing. Lower stock first.
-	db.Exec(`UPDATE inventory SET quantity=100`)
+	db.Exec(`UPDATE stock_lots SET quantity=100`)
 	rpath := fmt.Sprintf("/api/recipes/%d/add-to-shopping-list", rid)
 	var r1, r2 map[string]any
 	json.Unmarshal(do("POST", rpath, ""), &r1)

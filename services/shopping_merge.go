@@ -20,14 +20,14 @@ const (
 
 // ListAddition describes a need to put on the shopping list.
 type ListAddition struct {
-	InventoryID *int64
-	Name        string
-	Unit        string
-	Quantity    float64
-	Source      string // "calendar" | "recipe"
-	Ref         string // week_start or recipe id
-	Label       string
-	Mode        MergeMode
+	ProductID *int64
+	Name      string
+	Unit      string
+	Quantity  float64
+	Source    string // "calendar" | "recipe"
+	Ref       string // week_start or recipe id
+	Label     string
+	Mode      MergeMode
 }
 
 // MergeResult reports what MergeIntoShoppingList did.
@@ -47,9 +47,9 @@ func normName(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 // through tx (single DB connection).
 func MergeIntoShoppingList(tx *sql.Tx, a ListAddition) (MergeResult, error) {
 	keys := map[string]bool{normName(a.Name): true}
-	if a.InventoryID != nil {
+	if a.ProductID != nil {
 		var n string
-		err := tx.QueryRow(`SELECT name FROM inventory WHERE id=?`, *a.InventoryID).Scan(&n)
+		err := tx.QueryRow(`SELECT name FROM products WHERE id=?`, *a.ProductID).Scan(&n)
 		if err == nil {
 			keys[normName(n)] = true
 		} else if err != sql.ErrNoRows {
@@ -65,8 +65,8 @@ func MergeIntoShoppingList(tx *sql.Tx, a ListAddition) (MergeResult, error) {
 		qty   float64
 		iname string
 	}
-	rows, err := tx.Query(`SELECT s.id, s.inventory_id, s.name, s.unit, s.quantity_needed, COALESCE(i.name,'')
-		FROM shopping_list s LEFT JOIN inventory i ON i.id=s.inventory_id
+	rows, err := tx.Query(`SELECT s.id, s.product_id, s.name, s.unit, s.quantity_needed, COALESCE(i.name,'')
+		FROM shopping_list s LEFT JOIN products i ON i.id=s.product_id
 		WHERE s.checked=0 ORDER BY s.id`)
 	if err != nil {
 		return MergeResult{}, err
@@ -88,7 +88,7 @@ func MergeIntoShoppingList(tx *sql.Tx, a ListAddition) (MergeResult, error) {
 
 	for _, c := range cands {
 		match := keys[normName(c.name)] || (c.iname != "" && keys[normName(c.iname)]) ||
-			(a.InventoryID != nil && c.inv.Valid && c.inv.Int64 == *a.InventoryID)
+			(a.ProductID != nil && c.inv.Valid && c.inv.Int64 == *a.ProductID)
 		if !match {
 			continue
 		}
@@ -123,8 +123,8 @@ func MergeIntoShoppingList(tx *sql.Tx, a ListAddition) (MergeResult, error) {
 			c.id, a.Source, a.Ref, a.Label, round4(newSrc)); err != nil {
 			return MergeResult{}, err
 		}
-		if !c.inv.Valid && a.InventoryID != nil {
-			if _, err := tx.Exec(`UPDATE shopping_list SET inventory_id=? WHERE id=?`, *a.InventoryID, c.id); err != nil {
+		if !c.inv.Valid && a.ProductID != nil {
+			if _, err := tx.Exec(`UPDATE shopping_list SET product_id=? WHERE id=?`, *a.ProductID, c.id); err != nil {
 				return MergeResult{}, err
 			}
 		}
@@ -132,8 +132,8 @@ func MergeIntoShoppingList(tx *sql.Tx, a ListAddition) (MergeResult, error) {
 	}
 
 	q := round4(a.Quantity)
-	res, err := tx.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,?)`,
-		a.InventoryID, a.Name, q, a.Unit, a.Source)
+	res, err := tx.Exec(`INSERT INTO shopping_list (product_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,?)`,
+		a.ProductID, a.Name, q, a.Unit, a.Source)
 	if err != nil {
 		return MergeResult{}, err
 	}

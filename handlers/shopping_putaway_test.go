@@ -15,7 +15,7 @@ func insertShopping(t *testing.T, db *sql.DB, inv *int64, name string, qty float
 	if checked {
 		c = 1
 	}
-	if err := db.QueryRow(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,?,'manual') RETURNING id`,
+	if err := db.QueryRow(`INSERT INTO shopping_list (product_id,name,quantity_needed,unit,checked,source) VALUES ((SELECT product_id FROM stock_lots WHERE id=?),?,?,?,?,'manual') RETURNING id`,
 		inv, name, qty, unit, c).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestBoughtNewProduct(t *testing.T) {
 	}
 	var name, unit, loc, exp string
 	var q float64
-	if err := db.QueryRow(`SELECT name,quantity,unit,location,expiration_date FROM inventory`).Scan(&name, &q, &unit, &loc, &exp); err != nil {
+	if err := db.QueryRow(`SELECT p.name,l.quantity,l.unit,l.location,l.expiration_date FROM stock_lots l JOIN products p ON p.id=l.product_id`).Scan(&name, &q, &unit, &loc, &exp); err != nil {
 		t.Fatal(err)
 	}
 	if name != "Bananas" || q != 6 || unit != "piece" || loc != "counter" || exp != "2030-01-05" {
@@ -82,15 +82,15 @@ func TestBoughtNameMatch(t *testing.T) {
 	if code, _ := bought(t, mux, sid, `{}`); code != 200 {
 		t.Fatal(code)
 	}
-	if qtyOf(t, db, lot) != 8 || countRows(t, db, `SELECT COUNT(*) FROM inventory`) != 1 {
+	if qtyOf(t, db, lot) != 8 || countRows(t, db, `SELECT COUNT(*) FROM stock_lots`) != 1 {
 		t.Fatal("not merged")
 	}
 }
 
 func TestBoughtConversion(t *testing.T) {
 	mux, db := newSchemaMux(t)
-	lot := insertLot(t, db, "flour", 1, "g", "", "")
-	db.Exec(`UPDATE inventory SET preferred_unit='kg' WHERE id=?`, lot)
+	lot := insertLot(t, db, "flour", 1, "kg", "", "")
+	db.Exec(`UPDATE products SET preferred_unit='kg' WHERE id=(SELECT product_id FROM stock_lots WHERE id=?)`, lot)
 	sid := insertShopping(t, db, &lot, "flour", 500, "g", false)
 	if code, _ := bought(t, mux, sid, ``); code != 200 {
 		t.Fatal(code)
@@ -123,7 +123,7 @@ func TestBoughtIncompatible(t *testing.T) {
 func TestBoughtDifferentExpiryNewLot(t *testing.T) {
 	mux, db := newSchemaMux(t)
 	lot := insertLot(t, db, "yogurt", 1, "piece", "2030-01-01", "")
-	db.Exec(`UPDATE inventory SET preferred_unit='piece', low_threshold=4 WHERE id=?`, lot)
+	db.Exec(`UPDATE products SET preferred_unit='piece', par_level=4 WHERE id=(SELECT product_id FROM stock_lots WHERE id=?)`, lot)
 	sid := insertShopping(t, db, &lot, "yogurt", 3, "piece", false)
 	code, m := bought(t, mux, sid, `{"expiration_date":"2030-02-02"}`)
 	if code != 200 || m["created"] != true {
@@ -134,22 +134,28 @@ func TestBoughtDifferentExpiryNewLot(t *testing.T) {
 	}
 	var th float64
 	var pref string
-	if err := db.QueryRow(`SELECT low_threshold,preferred_unit FROM inventory WHERE id<>?`, lot).Scan(&th, &pref); err != nil || th != 4 || pref != "piece" {
+	if err := db.QueryRow(`SELECT p.par_level,p.preferred_unit FROM stock_lots l JOIN products p ON p.id=l.product_id WHERE l.id<>?`, lot).Scan(&th, &pref); err != nil || th != 4 || pref != "piece" {
 		t.Fatal(err, th, pref)
 	}
 }
 
-func TestBoughtZeroLotReused(t *testing.T) {
+func TestBoughtAddsToMatchingEmptyLot(t *testing.T) {
 	mux, db := newSchemaMux(t)
 	lot := insertLot(t, db, "tea", 0, "piece", "", "")
 	sid := insertShopping(t, db, &lot, "tea", 5, "piece", false)
-	if code, _ := bought(t, mux, sid, `{"expiration_date":"2031-03-03"}`); code != 200 {
+	if code, _ := bought(t, mux, sid, `{}`); code != 200 {
 		t.Fatal(code)
 	}
-	var exp string
-	db.QueryRow(`SELECT expiration_date FROM inventory WHERE id=?`, lot).Scan(&exp)
-	if qtyOf(t, db, lot) != 5 || exp != "2031-03-03" || countRows(t, db, `SELECT COUNT(*) FROM inventory`) != 1 {
+	if qtyOf(t, db, lot) != 5 || countRows(t, db, `SELECT COUNT(*) FROM stock_lots`) != 1 {
 		t.Fatal("not reused")
+	}
+	// A different expiry is a different lot; the empty one is not rewritten.
+	sid2 := insertShopping(t, db, &lot, "tea", 2, "piece", false)
+	if code, _ := bought(t, mux, sid2, `{"expiration_date":"2031-03-03"}`); code != 200 {
+		t.Fatal(code)
+	}
+	if qtyOf(t, db, lot) != 5 || countRows(t, db, `SELECT COUNT(*) FROM stock_lots WHERE expiration_date='2031-03-03' AND quantity=2`) != 1 {
+		t.Fatal("expected a second lot")
 	}
 }
 
@@ -192,7 +198,7 @@ func TestPutAwayBatch(t *testing.T) {
 	if qtyOf(t, db, lot) != 5 {
 		t.Fatal("override ignored")
 	}
-	if countRows(t, db, `SELECT COUNT(*) FROM inventory WHERE name='Apples' AND location='shelf' AND quantity=3`) != 1 {
+	if countRows(t, db, `SELECT COUNT(*) FROM stock_lots l JOIN products p ON p.id=l.product_id WHERE p.name='Apples' AND l.location='shelf' AND l.quantity=3`) != 1 {
 		t.Fatal("apples")
 	}
 	for _, id := range []int64{u, bad} {
@@ -216,13 +222,13 @@ func TestShoppingCreateStillWorks(t *testing.T) {
 func TestBoughtBlankLocationUsesLotLocation(t *testing.T) {
 	mux, db := newSchemaMux(t)
 	lot := insertLot(t, db, "milk", 1, "L", "", "")
-	db.Exec(`UPDATE inventory SET location='fridge' WHERE id=?`, lot)
+	db.Exec(`UPDATE stock_lots SET location='fridge' WHERE id=?`, lot)
 	sid := insertShopping(t, db, &lot, "milk", 2, "L", false)
 	code, m := bought(t, mux, sid, `{"location":"","expiration_date":""}`)
 	if code != 200 || m["created"] != false {
 		t.Fatal(code, m)
 	}
-	if qtyOf(t, db, lot) != 3 || countRows(t, db, `SELECT COUNT(*) FROM inventory`) != 1 {
+	if qtyOf(t, db, lot) != 3 || countRows(t, db, `SELECT COUNT(*) FROM stock_lots`) != 1 {
 		t.Fatal("blank location created a new lot")
 	}
 }

@@ -51,7 +51,8 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 	mux.HandleFunc("POST /api/shopping/", func(w http.ResponseWriter, r *http.Request) {
 		var item struct {
-			InventoryID    *int64  `json:"inventory_id"`
+			ProductID      *int64  `json:"product_id"`
+			InventoryID    *int64  `json:"inventory_id"` // legacy: a stock lot id
 			Name           string  `json:"name"`
 			QuantityNeeded float64 `json:"quantity_needed"`
 			Unit           string  `json:"unit"`
@@ -71,15 +72,23 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusBadRequest, "invalid unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
 			return
 		}
-		res, err := db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,?)`,
-			item.InventoryID, item.Name, item.QuantityNeeded, item.Unit, item.Source)
+		prodID := item.ProductID
+		if prodID != nil {
+			if _, err := getProduct(db, *prodID); err != nil {
+				prodID = nil
+			}
+		} else {
+			prodID = optProductID(db, item.InventoryID)
+		}
+		res, err := db.Exec(`INSERT INTO shopping_list (product_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,?)`,
+			prodID, item.Name, item.QuantityNeeded, item.Unit, item.Source)
 		if err != nil {
 			WriteServerError(w, r, err)
 			return
 		}
 		id, _ := res.LastInsertId()
 		WriteJSON(w, http.StatusCreated, map[string]any{
-			"id": id, "inventory_id": item.InventoryID, "name": item.Name,
+			"id": id, "product_id": prodID, "name": item.Name,
 			"quantity_needed": item.QuantityNeeded, "unit": item.Unit,
 			"checked": false, "source": item.Source,
 			"sources": []map[string]any{},
@@ -89,7 +98,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 	mux.HandleFunc("GET /api/shopping/", func(w http.ResponseWriter, r *http.Request) {
 		showChecked := r.URL.Query().Get("show_checked") == "true"
-		q := `SELECT id,inventory_id,name,quantity_needed,unit,checked,source FROM shopping_list`
+		q := `SELECT id,product_id,name,quantity_needed,unit,checked,source FROM shopping_list`
 		if !showChecked {
 			q += ` WHERE checked=0`
 		}
@@ -138,7 +147,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				return
 			}
 		}
-		row := db.QueryRow(`SELECT id,inventory_id,name,quantity_needed,unit,checked,source FROM shopping_list WHERE id=?`, id)
+		row := db.QueryRow(`SELECT id,product_id,name,quantity_needed,unit,checked,source FROM shopping_list WHERE id=?`, id)
 		item, err := scanShoppingRow(row)
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "not found")
@@ -196,7 +205,7 @@ func scanShoppingRow(row *sql.Row) (map[string]any, error) {
 		invIDVal = invID.Int64
 	}
 	return map[string]any{
-		"id": id, "inventory_id": invIDVal, "name": name,
+		"id": id, "product_id": invIDVal, "name": name,
 		"quantity_needed": qty, "unit": unit, "checked": checked == 1, "source": source,
 	}, nil
 }
@@ -217,7 +226,7 @@ func scanShoppingRows(rows *sql.Rows) ([]map[string]any, error) {
 			invIDVal = invID.Int64
 		}
 		items = append(items, map[string]any{
-			"id": id, "inventory_id": invIDVal, "name": name,
+			"id": id, "product_id": invIDVal, "name": name,
 			"quantity_needed": qty, "unit": unit, "checked": checked == 1, "source": source,
 		})
 	}

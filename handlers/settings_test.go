@@ -20,7 +20,7 @@ func TestBackupIsConsistentSQLiteWithCurrentRows(t *testing.T) {
 	mux := http.NewServeMux()
 	handlers.RegisterSettings(mux, db)
 
-	if _, err := db.Exec(`INSERT INTO inventory (name, quantity, unit) VALUES ('Flour', 2, 'kg')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO products (name, unit) VALUES ('Flour', 'kg'); INSERT INTO stock_lots (product_id, quantity, unit) SELECT id, 2, 'kg' FROM products WHERE name='Flour'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('k', 'v')`); err != nil {
@@ -57,7 +57,7 @@ func TestBackupIsConsistentSQLiteWithCurrentRows(t *testing.T) {
 	}
 	var name string
 	var qty float64
-	if err := bdb.QueryRow(`SELECT name, quantity FROM inventory WHERE name='Flour'`).Scan(&name, &qty); err != nil || qty != 2 {
+	if err := bdb.QueryRow(`SELECT p.name, l.quantity FROM stock_lots l JOIN products p ON p.id=l.product_id WHERE p.name='Flour'`).Scan(&name, &qty); err != nil || qty != 2 {
 		t.Fatalf("inventory row: %v %v", err, qty)
 	}
 	var v string

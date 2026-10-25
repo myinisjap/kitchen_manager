@@ -14,9 +14,9 @@ import (
 	"kitchen_manager/internal/testutil"
 )
 
-func TestPreferredUnitColumnExists(t *testing.T) {
+func TestProductsPreferredUnitColumnExists(t *testing.T) {
 	db := testutil.NewDB(t)
-	rows, err := db.Query(`PRAGMA table_info(inventory)`)
+	rows, err := db.Query(`PRAGMA table_info(products)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestPreferredUnitColumnExists(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("inventory table missing preferred_unit column")
+		t.Error("products table missing preferred_unit column")
 	}
 }
 
@@ -648,11 +648,7 @@ func TestRecipeAvailabilityWithUnitConversion(t *testing.T) {
 	mux, db := newMux(t)
 
 	// Add 1kg of flour (stored in kg)
-	res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,location,low_threshold,preferred_unit) VALUES ('Flour',1,'kg','Pantry',0.1,'kg')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	flourID, _ := res.LastInsertId()
+	_, flourID := testutil.AddLot(t, db, "Flour", 1, "kg", testutil.WithLocation("Pantry"), testutil.WithPar(0.1), testutil.WithPreferredUnit("kg"))
 
 	// Create recipe calling for 800g of flour (stored in g, but pantry has 1kg = 1000g)
 	body := `{"name":"Bread","servings":1,"ingredients":[{"name":"Flour","quantity":800,"unit":"g","inventory_id":` + strconv.FormatInt(flourID, 10) + `}]}`
@@ -689,11 +685,7 @@ func TestWeeklyShoppingUnitConversion(t *testing.T) {
 	mux, db := newMux(t)
 
 	// Add 1kg of pasta, preferred_unit = kg
-	res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,low_threshold,preferred_unit) VALUES ('Pasta',1,'kg',0.1,'kg')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pastaID, _ := res.LastInsertId()
+	_, pastaID := testutil.AddLot(t, db, "Pasta", 1, "kg", testutil.WithPar(0.1), testutil.WithPreferredUnit("kg"))
 
 	// Recipe uses 600g pasta per 1 serving
 	res2, err := db.Exec(`INSERT INTO recipes (name,servings) VALUES ('Pasta Dish',1)`)
@@ -701,7 +693,7 @@ func TestWeeklyShoppingUnitConversion(t *testing.T) {
 		t.Fatal(err)
 	}
 	recipeID, _ := res2.LastInsertId()
-	_, err = db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,'Pasta',600,'g')`, recipeID, pastaID)
+	_, err = db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),'Pasta',600,'g')`, recipeID, pastaID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -757,14 +749,8 @@ func TestInventorySuggestions(t *testing.T) {
 	mux, db := newMux(t)
 
 	// Insert two items
-	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Pasta',500,'g','kg','Pantry',100,'','')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Pasta Sauce',3,'jar','','Fridge',2,'','')`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.AddLot(t, db, "Pasta", 500, "g", testutil.WithPreferredUnit("kg"), testutil.WithLocation("Pantry"), testutil.WithPar(100))
+	testutil.AddLot(t, db, "Pasta Sauce", 3, "jar", testutil.WithLocation("Fridge"), testutil.WithPar(2))
 
 	// prefix "past" should return both
 	req := httptest.NewRequest(http.MethodGet, "/api/inventory/suggestions?q=past", nil)
@@ -850,10 +836,7 @@ func TestGetInventoryItemByBarcode(t *testing.T) {
 	mux, db := newMux(t)
 
 	// Insert item with a known barcode
-	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Olive Oil',1,'L','','Pantry',1,'','5000157024671')`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.AddLot(t, db, "Olive Oil", 1, "L", testutil.WithLocation("Pantry"), testutil.WithPar(1), testutil.WithBarcode("5000157024671"))
 
 	// Found: exact barcode match → 200 + correct item
 	req := httptest.NewRequest(http.MethodGet, "/api/inventory/barcode/5000157024671", nil)
@@ -882,10 +865,7 @@ func TestGetInventoryItemByBarcode(t *testing.T) {
 	}
 
 	// Second item with different barcode should not be returned
-	_, err = db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Butter',250,'g','','Fridge',50,'','1234567890123')`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.AddLot(t, db, "Butter", 250, "g", testutil.WithLocation("Fridge"), testutil.WithPar(50), testutil.WithBarcode("1234567890123"))
 	req3 := httptest.NewRequest(http.MethodGet, "/api/inventory/barcode/1234567890123", nil)
 	w3 := httptest.NewRecorder()
 	mux.ServeHTTP(w3, req3)
@@ -939,7 +919,7 @@ func TestDuplicateMergeOnPost(t *testing.T) {
 
 	// Verify only one row exists.
 	var count int
-	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE name='whole milk'`).Scan(&count)
+	db.QueryRow(`SELECT COUNT(*) FROM stock_lots WHERE product_id=(SELECT id FROM products WHERE name='whole milk')`).Scan(&count)
 	if count != 1 {
 		t.Errorf("expected 1 inventory row after merge, got %d", count)
 	}
@@ -949,7 +929,7 @@ func TestDuplicateMergeOnPost(t *testing.T) {
 	if w3.Code != http.StatusCreated {
 		t.Fatalf("expected 201 for no-barcode post, got %d: %s", w3.Code, w3.Body.String())
 	}
-	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE name='whole milk'`).Scan(&count)
+	db.QueryRow(`SELECT COUNT(*) FROM stock_lots WHERE product_id=(SELECT id FROM products WHERE name='whole milk')`).Scan(&count)
 	if count != 2 {
 		t.Errorf("expected 2 rows after no-barcode insert, got %d", count)
 	}
@@ -959,7 +939,7 @@ func TestDuplicateMergeOnPost(t *testing.T) {
 	if w4.Code != http.StatusCreated {
 		t.Fatalf("expected 201 for different expiry, got %d: %s", w4.Code, w4.Body.String())
 	}
-	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE name='whole milk'`).Scan(&count)
+	db.QueryRow(`SELECT COUNT(*) FROM stock_lots WHERE product_id=(SELECT id FROM products WHERE name='whole milk')`).Scan(&count)
 	if count != 3 {
 		t.Errorf("expected 3 rows after different-expiry insert, got %d", count)
 	}
@@ -971,17 +951,13 @@ func TestExpiryFirstDeductionCascade(t *testing.T) {
 	handlers.RegisterInventory(mux, db)
 
 	// Insert three sibling items with different expiration dates.
-	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,barcode,expiration_date,low_threshold) VALUES ('chicken breast',5,'lb','','2026-05-01',1)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var id2, id3 int64
-	db.QueryRow(`INSERT INTO inventory (name,quantity,unit,barcode,expiration_date,low_threshold) VALUES ('chicken breast',3,'lb','','2026-06-01',1) RETURNING id`).Scan(&id2)
-	db.QueryRow(`INSERT INTO inventory (name,quantity,unit,barcode,expiration_date,low_threshold) VALUES ('chicken breast',4,'lb','','',1) RETURNING id`).Scan(&id3)
+	testutil.AddLot(t, db, "chicken breast", 5, "lb", testutil.WithExpiry("2026-05-01"), testutil.WithPar(1))
+	_, id2 := testutil.AddLot(t, db, "chicken breast", 3, "lb", testutil.WithExpiry("2026-06-01"))
+	_, id3 := testutil.AddLot(t, db, "chicken breast", 4, "lb")
 
 	// Get the id of the earliest-expiring item.
 	var id1 int64
-	db.QueryRow(`SELECT id FROM inventory WHERE expiration_date='2026-05-01'`).Scan(&id1)
+	db.QueryRow(`SELECT id FROM stock_lots WHERE expiration_date='2026-05-01'`).Scan(&id1)
 
 	// Patch id2 qty to 0 — cascade deducts from earliest expiry first (id1), then id2.
 	patchURL := "/api/inventory/" + strconv.FormatInt(id2, 10)
@@ -998,9 +974,9 @@ func TestExpiryFirstDeductionCascade(t *testing.T) {
 	}
 
 	var qty1, qty2, qty3 float64
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id1).Scan(&qty1)
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id2).Scan(&qty2)
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id3).Scan(&qty3)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id1).Scan(&qty1)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id2).Scan(&qty2)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id3).Scan(&qty3)
 
 	if qty1 != 2 {
 		t.Errorf("expected id1 qty=2 after cascade, got %v", qty1)
@@ -1025,17 +1001,17 @@ func TestExpiryFirstDeductionCascade(t *testing.T) {
 
 	// id1 should be deleted.
 	var exists int
-	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE id=?`, id1).Scan(&exists)
+	db.QueryRow(`SELECT COUNT(*) FROM stock_lots WHERE id=?`, id1).Scan(&exists)
 	if exists != 0 {
 		t.Errorf("expected id1 deleted after full deduction, got count=%d", exists)
 	}
 	// deduct=2, id1(2) fully consumed → deduct hits 0, id2 untouched.
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id2).Scan(&qty2)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id2).Scan(&qty2)
 	if qty2 != 3 {
 		t.Errorf("expected id2 qty=3 (untouched), got %v", qty2)
 	}
 	// id3 (no expiry) untouched.
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id3).Scan(&qty3)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id3).Scan(&qty3)
 	if qty3 != 4 {
 		t.Errorf("expected id3 qty=4, got %v", qty3)
 	}
@@ -1056,7 +1032,7 @@ func TestBarcodeLookupFallsBackToSkuAlias(t *testing.T) {
 	id := int64(created["id"].(float64))
 
 	// Insert a SKU alias manually
-	_, err := db.Exec(`INSERT INTO inventory_skus (inventory_id, barcode, quantity_per_scan) VALUES (?,?,?)`, id, "ALIAS001", 250.0)
+	_, err := db.Exec(`INSERT INTO product_skus (product_id, barcode, quantity_per_scan) VALUES ((SELECT product_id FROM stock_lots WHERE id=?),?,?)`, id, "ALIAS001", 250.0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1136,13 +1112,13 @@ func TestCreateSkuAliasAndMergeQuantity(t *testing.T) {
 	}
 
 	var qty float64
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id).Scan(&qty)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id).Scan(&qty)
 	if qty != 750 {
 		t.Errorf("want quantity 750, got %v", qty)
 	}
 
 	var skuCount int
-	db.QueryRow(`SELECT COUNT(*) FROM inventory_skus WHERE inventory_id=? AND barcode='FLOUR002'`, id).Scan(&skuCount)
+	db.QueryRow(`SELECT COUNT(*) FROM product_skus WHERE product_id=(SELECT product_id FROM stock_lots WHERE id=?) AND barcode='FLOUR002'`, id).Scan(&skuCount)
 	if skuCount != 1 {
 		t.Error("want 1 SKU alias row")
 	}
@@ -1168,7 +1144,7 @@ func TestCreateSkuAliasWithUnitConversion(t *testing.T) {
 	}
 
 	var qty float64
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, id).Scan(&qty)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, id).Scan(&qty)
 	if qty < 1.499 || qty > 1.501 {
 		t.Errorf("want quantity ~1.5kg, got %v", qty)
 	}
@@ -1274,7 +1250,7 @@ func TestDeleteInventoryItemCascadesSkus(t *testing.T) {
 
 	// SKU should be gone
 	var count int
-	db.QueryRow(`SELECT COUNT(*) FROM inventory_skus WHERE inventory_id=?`, id).Scan(&count)
+	db.QueryRow(`SELECT COUNT(*) FROM product_skus WHERE product_id=(SELECT product_id FROM stock_lots WHERE id=?)`, id).Scan(&count)
 	if count != 0 {
 		t.Errorf("expected cascade delete of SKU, got %d rows", count)
 	}
@@ -1285,15 +1261,8 @@ func TestGetGroupedInventory(t *testing.T) {
 
 	// Insert two rows: same name+unit, different locations and expiration dates.
 	// id1: Pantry, expires sooner; id2: Fridge, expires later.
-	var id1, id2 int64
-	err := db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',0.5,'L','Pantry','2026-06-01',1,'','') RETURNING id`).Scan(&id1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',1.0,'L','Fridge','2026-09-01',1,'','') RETURNING id`).Scan(&id2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, id1 := testutil.AddLot(t, db, "olive oil", 0.5, "L", testutil.WithLocation("Pantry"), testutil.WithExpiry("2026-06-01"), testutil.WithPar(1))
+	testutil.AddLot(t, db, "olive oil", 1.0, "L", testutil.WithLocation("Fridge"), testutil.WithExpiry("2026-09-01"))
 
 	getGrouped := func(query string) []map[string]any {
 		t.Helper()
@@ -1347,11 +1316,7 @@ func TestGetGroupedInventory(t *testing.T) {
 	}
 
 	// Insert a row with no expiration date to verify it sorts last.
-	var id3 int64
-	err = db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',0.25,'L','Cellar','',1,'','') RETURNING id`).Scan(&id3)
-	if err != nil {
-		t.Fatal(err)
-	}
+	testutil.AddLot(t, db, "olive oil", 0.25, "L", testutil.WithLocation("Cellar"))
 	groups2 := getGrouped("")
 	if len(groups2) != 1 {
 		t.Fatalf("sort with no-expiry: want 1 group, got %d", len(groups2))

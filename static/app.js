@@ -308,6 +308,15 @@ function app() {
         const res = await fetch(this.baseUrl + '/api/inventory/barcode/' + encodeURIComponent(code));
         if (res.ok) {
           const item = await res.json();
+          if (item.id === 0) {
+            // Known product with no stock left: add a new lot instead of editing one.
+            this.openAddItem();
+            Object.assign(this.itemForm, {
+              name: item.name, unit: item.unit, preferred_unit: item.preferred_unit || '',
+              low_threshold: item.low_threshold, barcode: code, quantity_per_scan: item.quantity_per_scan,
+            });
+            return;
+          }
           this.editItem(item);
           return;
         }
@@ -525,11 +534,18 @@ function app() {
           if (!cur.ok) { failed++; continue; }
           const item = await cur.json();
           const newQty = parseFloat((item.quantity + pending.qty).toFixed(4));
-          const patch = await this.apiFetch('/api/inventory/' + pending.id, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quantity: newQty }),
-          }, { onError: () => {} });
+          // A product with no lots left (id 0) gets a new lot; otherwise top up the lot.
+          const patch = item.id === 0
+            ? await this.apiFetch('/api/inventory/', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: item.name, quantity: pending.qty, unit: item.unit, preferred_unit: item.preferred_unit || '', barcode: pending.barcode }),
+              }, { onError: () => {} })
+            : await this.apiFetch('/api/inventory/' + item.id, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: newQty }),
+              }, { onError: () => {} });
           if (patch) successCount++; else failed++;
         } catch { failed++; }
       }
@@ -1076,7 +1092,7 @@ function app() {
         tags: recipe.tags || '',
         servings: recipe.servings || this.defaultServings(),
         ingredients: (recipe.ingredients || []).map(i => ({
-          inventory_id: i.inventory_id || null,
+          product_id: i.product_id || null,
           name: i.name,
           quantity: i.quantity,
           unit: i.unit || '',
@@ -1144,7 +1160,7 @@ function app() {
     _applyImportData(data) {
       if (data.recipe) {
         const rec = data.recipe;
-        const ingredients = (rec.ingredients || []).map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit, inventory_id: null }));
+        const ingredients = (rec.ingredients || []).map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit, product_id: null }));
         this.recipeForm = {
           id: null,
           name: rec.name || '',
@@ -1486,6 +1502,7 @@ function app() {
         const res = await fetch(this.baseUrl + '/api/inventory/barcode/' + encodeURIComponent(code));
         if (!res.ok) { this.showToast('Item not found', 'error'); return; }
         const item = await res.json();
+        if (item.id === 0) { this.showToast(`${item.name}: nothing in stock`, 'error'); return; }
         const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
         const patch = await this.apiFetch('/api/inventory/' + item.id + '/deduct?source=barcode_remove', {
           method: 'POST',

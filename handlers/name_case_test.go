@@ -11,7 +11,7 @@ func TestCreateKeepsNameCase(t *testing.T) {
 	mux, db := newMux(t)
 	id := createLot(t, mux, `{"name":" Milk ","quantity":1,"unit":"L","location":"fridge"}`)
 	var name string
-	if err := db.QueryRow(`SELECT name FROM inventory WHERE id=?`, int64(id)).Scan(&name); err != nil {
+	if err := db.QueryRow(`SELECT p.name FROM stock_lots l JOIN products p ON p.id=l.product_id WHERE l.id=?`, int64(id)).Scan(&name); err != nil {
 		t.Fatal(err)
 	}
 	if name != "Milk" {
@@ -30,7 +30,7 @@ func TestMergeIsCaseInsensitive(t *testing.T) {
 	var n int
 	var name string
 	var q float64
-	db.QueryRow(`SELECT COUNT(*), MIN(name), SUM(quantity) FROM inventory`).Scan(&n, &name, &q)
+	db.QueryRow(`SELECT COUNT(*), MIN(p.name), SUM(l.quantity) FROM stock_lots l JOIN products p ON p.id=l.product_id`).Scan(&n, &name, &q)
 	if n != 1 || name != "Milk" || q != 2 {
 		t.Fatal(n, name, q)
 	}

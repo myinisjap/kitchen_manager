@@ -46,7 +46,7 @@ func TestLogHistoryFailureFailsRequest(t *testing.T) {
 		t.Fatalf("got %d %s", w.Code, w.Body.String())
 	}
 	var n int
-	db.QueryRow("SELECT COUNT(*) FROM inventory").Scan(&n)
+	db.QueryRow("SELECT COUNT(*) FROM stock_lots").Scan(&n)
 	if n != 0 {
 		t.Errorf("inventory rows = %d, want 0", n)
 	}
