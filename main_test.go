@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -149,5 +151,120 @@ func TestMutatingFetchesUseWrapper(t *testing.T) {
 	}
 	if len(found) != 1 || !strings.HasPrefix(found[0], "fetch(this.baseUrl + path, opts)") {
 		t.Fatalf("only apiFetch may call fetch with options; found: %v", found)
+	}
+}
+
+func TestPWAManifest(t *testing.T) {
+	b, err := os.ReadFile("static/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Name      string `json:"name"`
+		ShortName string `json:"short_name"`
+		Display   string `json:"display"`
+		StartURL  string `json:"start_url"`
+		Scope     string `json:"scope"`
+		Icons     []struct {
+			Src   string `json:"src"`
+			Sizes string `json:"sizes"`
+		} `json:"icons"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Name == "" || m.ShortName == "" {
+		t.Error("name/short_name required")
+	}
+	if m.Display != "standalone" || m.StartURL != "./" || m.Scope != "./" {
+		t.Errorf("bad display/start_url/scope: %q %q %q", m.Display, m.StartURL, m.Scope)
+	}
+	have := map[string]bool{}
+	for _, ic := range m.Icons {
+		if strings.HasPrefix(ic.Src, "/") || strings.HasPrefix(ic.Src, "http") {
+			t.Errorf("icon src must be relative: %s", ic.Src)
+		}
+		f, err := os.Open(filepath.Join("static", ic.Src))
+		if err != nil {
+			t.Errorf("icon missing: %v", err)
+			continue
+		}
+		cfg, err := png.DecodeConfig(f)
+		f.Close()
+		if err != nil {
+			t.Errorf("%s: %v", ic.Src, err)
+			continue
+		}
+		if got := strconv.Itoa(cfg.Width) + "x" + strconv.Itoa(cfg.Height); got != ic.Sizes {
+			t.Errorf("%s: size %s, declared %s", ic.Src, got, ic.Sizes)
+		}
+		have[ic.Sizes] = true
+	}
+	if !have["192x192"] || !have["512x512"] {
+		t.Errorf("need 192 and 512 icons, have %v", have)
+	}
+}
+
+func TestIndexLinksPWA(t *testing.T) {
+	idx, _ := os.ReadFile("static/index.html")
+	for _, want := range []string{`rel="manifest" href="manifest.json"`, `name="theme-color"`, `rel="apple-touch-icon"`} {
+		if !strings.Contains(string(idx), want) {
+			t.Errorf("index.html missing %s", want)
+		}
+	}
+	js, _ := os.ReadFile("static/app.js")
+	if !regexp.MustCompile(`serviceWorker\.register\(this\.basePath \+ '/sw\.js'`).Match(js) {
+		t.Error("app.js must register the service worker via basePath")
+	}
+}
+
+func TestServiceWorkerShell(t *testing.T) {
+	b, err := os.ReadFile("static/sw.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	m := regexp.MustCompile(`SHELL = \[([^\]]*)\]`).FindStringSubmatch(s)
+	if m == nil {
+		t.Fatal("SHELL not found")
+	}
+	entries := regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(m[1], -1)
+	if len(entries) == 0 {
+		t.Fatal("empty SHELL")
+	}
+	for _, e := range entries {
+		p := e[1]
+		if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "http") {
+			t.Errorf("SHELL entry must be relative: %s", p)
+		}
+		if p == "./" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join("static", p)); err != nil {
+			t.Errorf("SHELL entry missing: %s", p)
+		}
+	}
+	for _, bad := range []string{"'/api/", "/kitchen-manager"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("sw.js must not contain %q", bad)
+		}
+	}
+}
+
+func TestStaticPWAServed(t *testing.T) {
+	h := securityHeaders(http.FileServer(http.Dir("./static")))
+	for path, ct := range map[string]string{
+		"/sw.js":              "javascript",
+		"/manifest.json":      "json",
+		"/icons/icon-192.png": "image/png",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != 200 || !strings.Contains(rec.Header().Get("Content-Type"), ct) {
+			t.Errorf("%s: %d %q", path, rec.Code, rec.Header().Get("Content-Type"))
+		}
+		if rec.Header().Get("Content-Security-Policy") == "" {
+			t.Errorf("%s: no CSP", path)
+		}
 	}
 }

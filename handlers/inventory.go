@@ -87,7 +87,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Only merge when barcode is non-empty to avoid incorrectly merging unrelated items with no barcode.
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback() // no-op after Commit
@@ -103,7 +103,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			err = sql.ErrNoRows
 		}
 		if err != nil && err != sql.ErrNoRows {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -111,10 +111,10 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			// Duplicate found — atomically add quantity to the existing item.
 			before, after, err := addStock(tx, existingID, item.Quantity)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
-			_ = LogHistory(db, tx, LogHistoryParams{
+			if err := LogHistory(db, tx, LogHistoryParams{
 				InventoryID:    existingID,
 				ItemName:       item.Name,
 				ChangeType:     "add",
@@ -123,20 +123,23 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				ChangedBy:      changedBy,
 				Unit:           item.Unit,
 				Source:         "manual",
-			})
+			}); err != nil {
+				WriteServerError(w, r, err)
+				return
+			}
 			if item.LowThreshold > 0 {
 				if err := setProductPar(tx, item.Name, item.LowThreshold); err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
+					WriteServerError(w, r, err)
 					return
 				}
 			}
 			updated, err := scanInventoryRow(tx.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, existingID))
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			if err := tx.Commit(); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			WriteJSON(w, http.StatusOK, updated)
@@ -151,7 +154,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			if skuErr == nil {
 				var parentUnit, parentName string
 				if e := tx.QueryRow(`SELECT unit, name FROM inventory WHERE id=?`, skuInvID).Scan(&parentUnit, &parentName); e != nil {
-					WriteError(w, http.StatusInternalServerError, e.Error())
+					WriteServerError(w, r, e)
 					return
 				}
 				// Convert incoming quantity to parent's unit if possible.
@@ -163,10 +166,10 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				}
 				before, after, e := addStock(tx, skuInvID, addQty)
 				if e != nil {
-					WriteError(w, http.StatusInternalServerError, e.Error())
+					WriteServerError(w, r, e)
 					return
 				}
-				_ = LogHistory(db, tx, LogHistoryParams{
+				if err := LogHistory(db, tx, LogHistoryParams{
 					InventoryID:    skuInvID,
 					ItemName:       parentName,
 					ChangeType:     "add",
@@ -175,27 +178,30 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					ChangedBy:      changedBy,
 					Unit:           parentUnit,
 					Source:         "receipt_merge",
-				})
+				}); err != nil {
+					WriteServerError(w, r, err)
+					return
+				}
 				if item.LowThreshold > 0 {
 					if e := setProductPar(tx, parentName, item.LowThreshold); e != nil {
-						WriteError(w, http.StatusInternalServerError, e.Error())
+						WriteServerError(w, r, e)
 						return
 					}
 				}
 				updated, e := scanInventoryRow(tx.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, skuInvID))
 				if e != nil {
-					WriteError(w, http.StatusInternalServerError, e.Error())
+					WriteServerError(w, r, e)
 					return
 				}
 				if e := tx.Commit(); e != nil {
-					WriteError(w, http.StatusInternalServerError, e.Error())
+					WriteServerError(w, r, e)
 					return
 				}
 				WriteJSON(w, http.StatusOK, updated)
 				broadcastInventory()
 				return
 			} else if skuErr != sql.ErrNoRows {
-				WriteError(w, http.StatusInternalServerError, skuErr.Error())
+				WriteServerError(w, r, skuErr)
 				return
 			}
 		}
@@ -203,26 +209,26 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		if item.LowThreshold == 0 {
 			// Unset: inherit the product's existing par level (0 if none).
 			if err := tx.QueryRow(`SELECT COALESCE(MAX(low_threshold),0) FROM inventory WHERE name=? COLLATE NOCASE`, item.Name).Scan(&item.LowThreshold); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		res, err := tx.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 			item.Name, item.Quantity, item.Unit, item.Location, item.ExpirationDate, item.LowThreshold, item.Barcode, item.PreferredUnit, item.UnitCostCents, item.QuantityPerScan)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		id, _ := res.LastInsertId()
 		if item.LowThreshold > 0 {
 			if err := setProductPar(tx, item.Name, item.LowThreshold); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		zeroQty := 0.0
 		newQty := item.Quantity
-		_ = LogHistory(db, tx, LogHistoryParams{
+		if err := LogHistory(db, tx, LogHistoryParams{
 			InventoryID:    id,
 			ItemName:       item.Name,
 			ChangeType:     "add",
@@ -231,9 +237,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			Unit:           item.Unit,
 			Source:         "manual",
 			ChangedBy:      changedBy,
-		})
+		}); err != nil {
+			WriteServerError(w, r, err)
+			return
+		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusCreated, map[string]any{
@@ -250,13 +259,13 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		_, cutoff := expiryDaysAndCutoff(r, db)
 		rows, err := db.Query(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE expiration_date != '' AND expiration_date <= ?`, cutoff)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
 		items, err := scanInventoryRows(rows)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, items)
@@ -272,7 +281,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			rows, err = db.Query(`SELECT MIN(i.name) AS name, MAX(i.unit) AS unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold, COALESCE((SELECT inv.location FROM inventory inv JOIN inventory_history h ON h.inventory_id = inv.id WHERE inv.name = i.name COLLATE NOCASE ORDER BY h.changed_at DESC LIMIT 1), MAX(i.location)) AS location FROM inventory i WHERE i.name LIKE ? GROUP BY i.name COLLATE NOCASE ORDER BY name COLLATE NOCASE LIMIT 10`, q+"%")
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -282,7 +291,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var lowThreshold float64
 			var location sql.NullString
 			if err := rows.Scan(&name, &unit, &preferredUnit, &lowThreshold, &location); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			loc := ""
@@ -298,7 +307,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			})
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if suggestions == nil {
@@ -325,13 +334,13 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				return
 			}
 			if skuErr != nil {
-				WriteError(w, http.StatusInternalServerError, skuErr.Error())
+				WriteServerError(w, r, skuErr)
 				return
 			}
 			row2 := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, skuInventoryID)
 			item2, err2 := scanInventoryRow(row2)
 			if err2 != nil {
-				WriteError(w, http.StatusInternalServerError, err2.Error())
+				WriteServerError(w, r, err2)
 				return
 			}
 			item2["quantity_per_scan"] = skuQtyPerScan
@@ -341,7 +350,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, item)
@@ -368,7 +377,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		q := `SELECT id, name, quantity, unit, preferred_unit, location FROM inventory WHERE ` + strings.Join(conds, " AND ") + ` LIMIT 3`
 		rows, err := db.Query(q, args...)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -378,7 +387,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var n, unit, preferredUnit, location string
 			var qty float64
 			if err := rows.Scan(&id, &n, &qty, &unit, &preferredUnit, &location); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			candidates = append(candidates, map[string]any{
@@ -387,7 +396,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			})
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if candidates == nil {
@@ -414,7 +423,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 		rows, err := db.Query(q, args...)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -446,12 +455,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var name, unit, preferredUnit, locationsJSON string
 			var totalQuantity, lowThreshold float64
 			if err := rows.Scan(&name, &unit, &preferredUnit, &lowThreshold, &totalQuantity, &locationsJSON); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			var locs []locationEntry
 			if err := json.Unmarshal([]byte(locationsJSON), &locs); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			// Sort by expiration ascending; empty/null expiration goes last
@@ -483,7 +492,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			})
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		rows.Close()
@@ -492,7 +501,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		levels, err := services.ProductLevels(db)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		byName := make(map[string]services.ProductLevel, len(levels))
@@ -523,7 +532,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, item)
@@ -542,13 +551,13 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		rows, err := db.Query(q, args...)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
 		items, err := scanInventoryRows(rows)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, items)
@@ -600,7 +609,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback()
@@ -614,7 +623,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		finalName, finalUnit, finalPref := nameBefore, unitBefore, prefBefore
@@ -673,13 +682,13 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		if len(sets) > 0 {
 			args = append(args, id)
 			if _, err := tx.Exec(`UPDATE inventory SET `+strings.Join(sets, ", ")+` WHERE id=?`, args...); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		if p.LowThreshold != nil {
 			if err := setProductPar(tx, finalName, *p.LowThreshold); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		} else if p.Name != nil {
@@ -687,7 +696,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var other sql.NullFloat64
 			if err := tx.QueryRow(`SELECT MAX(low_threshold) FROM inventory WHERE name=? COLLATE NOCASE AND id<>?`, finalName, id).Scan(&other); err == nil && other.Valid {
 				if _, err := tx.Exec(`UPDATE inventory SET low_threshold=? WHERE id=?`, other.Float64, id); err != nil {
-					WriteError(w, http.StatusInternalServerError, err.Error())
+					WriteServerError(w, r, err)
 					return
 				}
 			}
@@ -704,7 +713,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			} else if qtyAfter < qtyBefore {
 				changeType = "deduct"
 			}
-			_ = LogHistory(db, tx, LogHistoryParams{
+			if err := LogHistory(db, tx, LogHistoryParams{
 				InventoryID:    id,
 				ItemName:       nameBefore,
 				ChangeType:     changeType,
@@ -713,18 +722,21 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				Unit:           unitBefore,
 				Source:         source,
 				ChangedBy:      auth.EmailFromContext(r.Context()),
-			})
+			}); err != nil {
+				WriteServerError(w, r, err)
+				return
+			}
 		}
 		var survivor int64
 		if p.Quantity != nil && *p.Quantity == 0 && qtyBefore > 0 {
 			_, survivor, err = retireEmptyLots(tx, []int64{id}, finalName, finalUnit)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -738,7 +750,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, item)
@@ -774,7 +786,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback()
@@ -788,12 +800,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			} else if errors.Is(err, errIncompatibleUnits) {
 				WriteError(w, http.StatusUnprocessableEntity, err.Error())
 			} else {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 			}
 			return
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		out := map[string]any{"id": id, "quantity": 0}
@@ -802,7 +814,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			if err == nil {
 				out = item
 			} else if err != sql.ErrNoRows {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
@@ -819,7 +831,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		rows, err := db.Query(`SELECT id, inventory_id, barcode, quantity_per_scan FROM inventory_skus WHERE inventory_id=? ORDER BY id`, id)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -829,13 +841,13 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var barcode string
 			var qps float64
 			if err := rows.Scan(&skuID, &invID, &barcode, &qps); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			skus = append(skus, map[string]any{"id": skuID, "inventory_id": invID, "barcode": barcode, "quantity_per_scan": qps})
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if skus == nil {
@@ -865,7 +877,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var itemName, itemUnit, itemPreferredUnit string
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback() // no-op after Commit
@@ -875,18 +887,24 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
 		// Check barcode not already used in inventory.barcode or inventory_skus.barcode
 		var collision int
-		_ = tx.QueryRow(`SELECT COUNT(*) FROM inventory WHERE barcode=?`, body.Barcode).Scan(&collision)
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM inventory WHERE barcode=?`, body.Barcode).Scan(&collision); err != nil {
+			WriteServerError(w, r, err)
+			return
+		}
 		if collision > 0 {
 			WriteError(w, http.StatusConflict, "barcode already assigned to an inventory item")
 			return
 		}
-		_ = tx.QueryRow(`SELECT COUNT(*) FROM inventory_skus WHERE barcode=?`, body.Barcode).Scan(&collision)
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM inventory_skus WHERE barcode=?`, body.Barcode).Scan(&collision); err != nil {
+			WriteServerError(w, r, err)
+			return
+		}
 		if collision > 0 {
 			WriteError(w, http.StatusConflict, "barcode already exists as a SKU alias")
 			return
@@ -917,7 +935,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Insert SKU alias
 		res, err := tx.Exec(`INSERT INTO inventory_skus (inventory_id, barcode, quantity_per_scan) VALUES (?,?,?)`, id, body.Barcode, body.QuantityPerScan)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		skuID, _ := res.LastInsertId()
@@ -925,11 +943,11 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Atomically add quantity to parent item
 		before, after, err := addStock(tx, id, addQty)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if addQty != 0 {
-			_ = LogHistory(db, tx, LogHistoryParams{
+			if err := LogHistory(db, tx, LogHistoryParams{
 				InventoryID:    id,
 				ItemName:       itemName,
 				ChangeType:     "add",
@@ -938,16 +956,19 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				Unit:           targetUnit,
 				Source:         "barcode_merge",
 				ChangedBy:      auth.EmailFromContext(r.Context()),
-			})
+			}); err != nil {
+				WriteServerError(w, r, err)
+				return
+			}
 		}
 
 		item, err := scanInventoryRow(tx.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id))
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusCreated, map[string]any{
@@ -965,7 +986,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		res, err := db.Exec(`DELETE FROM inventory_skus WHERE id=?`, skuID)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		n, _ := res.RowsAffected()
@@ -1002,7 +1023,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback() // no-op after Commit
@@ -1017,7 +1038,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -1031,7 +1052,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -1067,24 +1088,30 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 		// Re-link source's SKU aliases to target (skip any that would conflict)
 		if _, err := tx.Exec(`UPDATE OR IGNORE inventory_skus SET inventory_id=? WHERE inventory_id=?`, targetID, id); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
 		// Migrate source's primary barcode as a SKU alias on target (if non-empty and not conflicting)
 		if srcBarcode != "" {
 			var collision int
-			_ = tx.QueryRow(`SELECT COUNT(*) FROM inventory WHERE barcode=? AND id!=?`, srcBarcode, id).Scan(&collision)
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM inventory WHERE barcode=? AND id!=?`, srcBarcode, id).Scan(&collision); err != nil {
+				WriteServerError(w, r, err)
+				return
+			}
 			if collision == 0 {
 				var skuCollision int
-				_ = tx.QueryRow(`SELECT COUNT(*) FROM inventory_skus WHERE barcode=?`, srcBarcode).Scan(&skuCollision)
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM inventory_skus WHERE barcode=?`, srcBarcode).Scan(&skuCollision); err != nil {
+					WriteServerError(w, r, err)
+					return
+				}
 				if skuCollision == 0 {
 					qps := srcQty
 					if qps <= 0 {
 						qps = 1
 					}
 					if _, err := tx.Exec(`INSERT OR IGNORE INTO inventory_skus (inventory_id, barcode, quantity_per_scan) VALUES (?,?,?)`, targetID, srcBarcode, qps); err != nil {
-						WriteError(w, http.StatusInternalServerError, err.Error())
+						WriteServerError(w, r, err)
 						return
 					}
 				}
@@ -1094,23 +1121,23 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Add quantity to target
 		tgtBefore, newTgtQty, err := addStock(tx, targetID, addQty)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
 		// Point recipes, shopping list rows and meal history at the target
 		if err := relinkInventoryRefs(tx, id, &targetID); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
 		// Delete source
 		if _, err := tx.Exec(`DELETE FROM inventory WHERE id=?`, id); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
-		_ = LogHistory(db, tx, LogHistoryParams{
+		if err := LogHistory(db, tx, LogHistoryParams{
 			InventoryID:    targetID,
 			ItemName:       tgtName,
 			ChangeType:     "add",
@@ -1119,17 +1146,20 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			Unit:           tgtEffUnit,
 			Source:         "item_merge",
 			ChangedBy:      auth.EmailFromContext(r.Context()),
-		})
+		}); err != nil {
+			WriteServerError(w, r, err)
+			return
+		}
 
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
 		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, targetID)
 		item, err := scanInventoryRow(row)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, item)
@@ -1151,12 +1181,12 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		// Hand references to another row of the same item if there is one,
@@ -1165,32 +1195,28 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		siblingID, ok, err := findSurvivingSibling(tx, itemName, itemUnit, []int64{id})
 		if err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if ok {
 			relinkTo = &siblingID
 			if err := moveBarcodes(tx, id, siblingID); err != nil {
 				tx.Rollback()
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		if err := relinkInventoryRefs(tx, id, relinkTo); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`DELETE FROM inventory WHERE id=?`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
-		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		_ = LogHistory(db, nil, LogHistoryParams{
+		if err := LogHistory(db, tx, LogHistoryParams{
 			InventoryID:    id,
 			ItemName:       itemName,
 			ChangeType:     "delete",
@@ -1199,7 +1225,15 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			Unit:           itemUnit,
 			Source:         "manual",
 			ChangedBy:      auth.EmailFromContext(r.Context()),
-		})
+		}); err != nil {
+			tx.Rollback()
+			WriteServerError(w, r, err)
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			WriteServerError(w, r, err)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		broadcastInventory()
 	})

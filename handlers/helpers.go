@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
@@ -18,4 +19,16 @@ func ReadJSON(r *http.Request, v any) error {
 
 func WriteError(w http.ResponseWriter, status int, msg string) {
 	WriteJSON(w, status, map[string]string{"error": msg})
+}
+
+const msgInternalError = "internal server error"
+
+// WriteServerError logs the real error and writes a generic 500.
+func WriteServerError(w http.ResponseWriter, r *http.Request, err error) {
+	if r != nil {
+		log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
+	} else {
+		log.Printf("server error: %v", err)
+	}
+	WriteError(w, http.StatusInternalServerError, msgInternalError)
 }

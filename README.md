@@ -39,6 +39,7 @@ A self-hosted app for tracking your pantry, planning meals, managing recipes, an
 
 - **Pantry tracking** — quantities, units, locations, expiry dates, low-stock alerts
 - **Use-it-up suggestions** — recipes ranked by how many expiring items they use
+- **Installable app (PWA)** — add to home screen; the shopping list works offline and check-offs sync when you're back online
 - **Barcode scanning** — use your phone camera to look up or add items
 - **Shopping list** — manual items, auto-generated from per-item par levels (restock to par), or pulled from recipes; tick items off and put them away into the pantry in one tap (Bought / Put away checked items) Weekly-plan and recipe items merge into existing unchecked rows (no duplicates) and show which recipes or week they came from
 - **Servings scaling** — scale any recipe up or down with a servings stepper; cooking, shopping lists and the meal calendar scale ingredient quantities to match
@@ -110,6 +111,8 @@ Barcode scanning requires HTTPS. To use it on your phone:
 3. Open `https://192.168.1.42:8443` on your phone.
 4. Your browser will warn about the certificate — tap **Advanced → Proceed** to continue. This is safe on your home network.
 5. When prompted, allow camera access for barcode scanning.
+
+Note: installing as a PWA (and offline support) needs a service worker, which requires HTTPS with a trusted certificate. A self-signed cert on a LAN IP usually blocks service workers on Android Chrome; `localhost` is exempt.
 
 ---
 

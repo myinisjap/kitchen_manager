@@ -29,7 +29,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	mux.HandleFunc("POST /api/shopping/generate-from-thresholds", func(w http.ResponseWriter, r *http.Request) {
 		added, err := services.GenerateFromThresholds(db)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"added": added})
@@ -38,11 +38,11 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 	mux.HandleFunc("DELETE /api/shopping/checked", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := db.Exec(`DELETE FROM shopping_list_sources WHERE shopping_id IN (SELECT id FROM shopping_list WHERE checked=1)`); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := db.Exec(`DELETE FROM shopping_list WHERE checked=1`); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"deleted": true})
@@ -74,7 +74,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		res, err := db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,?)`,
 			item.InventoryID, item.Name, item.QuantityNeeded, item.Unit, item.Source)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		id, _ := res.LastInsertId()
@@ -95,7 +95,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		rows, err := db.Query(q)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -105,7 +105,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			err = attachSources(db, items)
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, items)
@@ -128,13 +128,13 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				val = 1
 			}
 			if _, err := db.Exec(`UPDATE shopping_list SET checked=? WHERE id=?`, val, id); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		if qty, ok := patch["quantity_needed"]; ok {
 			if _, err := db.Exec(`UPDATE shopping_list SET quantity_needed=? WHERE id=?`, qty, id); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
@@ -145,11 +145,11 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if err := attachSources(db, []map[string]any{item}); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, item)
@@ -163,12 +163,12 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if _, err := db.Exec(`DELETE FROM shopping_list_sources WHERE shopping_id=?`, id); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		res, err := db.Exec(`DELETE FROM shopping_list WHERE id=?`, id)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		n, _ := res.RowsAffected()

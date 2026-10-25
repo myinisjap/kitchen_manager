@@ -126,7 +126,8 @@ func handleImportURL(w http.ResponseWriter, r *http.Request) {
 			WriteError(w, http.StatusBadRequest, blockedMsg)
 			return
 		}
-		WriteError(w, http.StatusBadGateway, err.Error()+" — try the Paste tab instead.")
+		log.Printf("recipe import fetch: %v", err)
+		WriteError(w, http.StatusBadGateway, "could not fetch url — try the Paste tab instead.")
 		return
 	}
 
@@ -187,7 +188,8 @@ func handleImportPDF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		WriteError(w, http.StatusUnprocessableEntity, "could not parse PDF: "+err.Error())
+		log.Printf("recipe import pdf: %v", err)
+		WriteError(w, http.StatusUnprocessableEntity, "could not parse PDF")
 		return
 	}
 	if strings.TrimSpace(plainText) == "" {

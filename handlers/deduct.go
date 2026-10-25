@@ -122,7 +122,7 @@ func deductStock(db *sql.DB, tx *sql.Tx, req deductRequest) (deductResult, error
 				return res, err
 			}
 		}
-		_ = LogHistory(db, tx, LogHistoryParams{
+		if err := LogHistory(db, tx, LogHistoryParams{
 			InventoryID:    l.id,
 			ItemName:       name,
 			ChangeType:     "deduct",
@@ -132,7 +132,9 @@ func deductStock(db *sql.DB, tx *sql.Tx, req deductRequest) (deductResult, error
 			Source:         req.Source,
 			RecipeID:       req.RecipeID,
 			ChangedBy:      req.ChangedBy,
-		})
+		}); err != nil {
+			return res, err
+		}
 	}
 
 	kept, survivor, err := retireEmptyLots(tx, emptied, name, unit)

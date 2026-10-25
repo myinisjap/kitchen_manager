@@ -54,7 +54,7 @@ func RegisterSettings(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.Query(`SELECT key, value FROM settings`)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -62,13 +62,13 @@ func RegisterSettings(mux *http.ServeMux, db *sql.DB) {
 		for rows.Next() {
 			var k, v string
 			if err := rows.Scan(&k, &v); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			m[k] = v
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, m)
@@ -109,14 +109,14 @@ func RegisterSettings(mux *http.ServeMux, db *sql.DB) {
 				`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 				k, v,
 			); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 		}
 		// Return full updated settings
 		rows, err := db.Query(`SELECT key, value FROM settings`)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -124,13 +124,13 @@ func RegisterSettings(mux *http.ServeMux, db *sql.DB) {
 		for rows.Next() {
 			var k, v string
 			if err := rows.Scan(&k, &v); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			m[k] = v
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, m)

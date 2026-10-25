@@ -100,7 +100,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		args = append(args, id)
 		res, err := db.Exec(`UPDATE meal_calendar SET `+strings.Join(sets, ", ")+` WHERE id=?`, args...)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
@@ -109,7 +109,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		e, err := scanCalendarEntry(db.QueryRow(calendarEntrySelect+` WHERE mc.id=?`, id))
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, e)
@@ -145,7 +145,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusNotFound, "recipe not found")
 			return
 		} else if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if input.Servings <= 0 {
@@ -157,7 +157,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		res, err := db.Exec(`INSERT INTO meal_calendar (date,meal_slot,recipe_id,servings) VALUES (?,?,?,?)`,
 			input.Date, input.MealSlot, input.RecipeID, input.Servings)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		id, _ := res.LastInsertId()
@@ -182,7 +182,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		endStr := t.AddDate(0, 0, 6).Format("2006-01-02")
 		rows, err := db.Query(calendarEntrySelect+` WHERE mc.date>=? AND mc.date<=? ORDER BY mc.date, mc.id`, startStr, endStr)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -190,13 +190,13 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		for rows.Next() {
 			e, err := scanCalendarEntry(rows)
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			entries = append(entries, e)
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if entries == nil {
@@ -213,18 +213,18 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if _, err := tx.Exec(`UPDATE meal_history SET calendar_entry_id=NULL WHERE calendar_entry_id=?`, id); err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		res, err := tx.Exec(`DELETE FROM meal_calendar WHERE id=?`, id)
 		if err != nil {
 			tx.Rollback()
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
@@ -233,7 +233,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -255,12 +255,12 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		needs, err := services.GenerateWeeklyShopping(db, startStr)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		tx, err := db.Begin()
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer tx.Rollback() //nolint:errcheck
@@ -274,7 +274,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				Mode:  services.MergeReplace,
 			})
 			if err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			if mr.Created {
@@ -290,7 +290,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			})
 		}
 		if err := tx.Commit(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"week_start": startStr, "items": items, "added": created, "merged": merged})

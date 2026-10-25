@@ -1520,3 +1520,23 @@ func TestReceiptImportMergesViaSkuAlias(t *testing.T) {
 		t.Errorf("expected 1 flour group, got %d", flourCount)
 	}
 }
+
+func TestCheckShoppingItemIdempotentAndGone(t *testing.T) {
+	mux, _ := newMux(t)
+	w := call(t, mux, "POST", "/api/shopping/", `{"name":"Salt","quantity_needed":1,"unit":""}`)
+	var created map[string]any
+	json.NewDecoder(w.Body).Decode(&created)
+	p := "/api/shopping/" + strconv.Itoa(int(created["id"].(float64)))
+	for i := 0; i < 2; i++ {
+		r := call(t, mux, "PATCH", p, `{"checked":true}`)
+		var u map[string]any
+		json.NewDecoder(r.Body).Decode(&u)
+		if r.Code != 200 || u["checked"] != true {
+			t.Fatalf("replay %d: %d %v", i, r.Code, u)
+		}
+	}
+	call(t, mux, "DELETE", p, "")
+	if r := call(t, mux, "PATCH", p, `{"checked":true}`); r.Code != 404 {
+		t.Errorf("want 404 for deleted row, got %d", r.Code)
+	}
+}

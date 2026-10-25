@@ -92,7 +92,8 @@ func handleReceiptParse(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 	items, err := parseReceiptWithClaude(imgBytes, mediaType)
 	if err != nil {
-		WriteError(w, http.StatusBadGateway, "receipt parsing failed: "+err.Error())
+		log.Printf("receipt parse: %v", err)
+		WriteError(w, http.StatusBadGateway, "receipt parsing failed")
 		return
 	}
 

@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Kitchen Manager</title>
+  <link rel="manifest" href="manifest.json" crossorigin="use-credentials">
+  <meta name="theme-color" content="#15803d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="stylesheet" href="tailwind.css">
   <script src="theme-init.js"></script>
   <script src="vendor/zxing-0.19.1.min.js"></script>
@@ -265,6 +271,10 @@
 
     <!-- ===== SHOPPING TAB ===== -->
     <section x-show="activeTab === 'shopping'">
+      <div x-show="!isOnline || pendingCount() > 0" class="mt-4 rounded-lg bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200 px-3 py-2 text-sm">
+        <span x-show="!isOnline">Offline<span x-show="pendingCount() > 0"> — <span x-text="pendingCount()"></span> change(s) will sync when back online</span></span>
+        <span x-show="isOnline && pendingCount() > 0">Syncing <span x-text="pendingCount()"></span> change(s)…</span>
+      </div>
       <div class="flex gap-2 my-4">
         <button @click="generateFromThresholds()" class="flex-1 bg-blue-600 text-white rounded-lg px-3 py-2 text-sm font-medium">
           ↻ Auto-generate from low stock

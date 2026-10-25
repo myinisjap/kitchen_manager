@@ -58,7 +58,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 
 		var total int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM inventory_history`).Scan(&total); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 
@@ -69,7 +69,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			ORDER BY changed_at DESC
 			LIMIT ? OFFSET ?`, limit, offset)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -82,7 +82,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			var recipeID sql.NullInt64
 			if err := rows.Scan(&id, &inventoryID, &itemName, &changedAt, &changedBy, &changeType,
 				&qBefore, &qAfter, &unit, &source, &recipeID); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			row := map[string]any{
@@ -113,7 +113,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			items = append(items, row)
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if items == nil {
@@ -145,7 +145,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			ORDER BY changed_at DESC
 			LIMIT ?`, id, limit)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -158,7 +158,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			var recipeID sql.NullInt64
 			if err := rows.Scan(&hid, &inventoryID, &itemName, &changedAt, &changedBy, &changeType,
 				&qBefore, &qAfter, &unit, &source, &recipeID); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			row := map[string]any{
@@ -189,7 +189,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			items = append(items, row)
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if items == nil {
@@ -208,7 +208,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			ORDER BY change_count DESC
 			LIMIT 10`)
 		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
@@ -219,7 +219,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			var itemName, lastChanged string
 			var count int
 			if err := rows.Scan(&inventoryID, &itemName, &count, &lastChanged); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
+				WriteServerError(w, r, err)
 				return
 			}
 			stats = append(stats, map[string]any{
@@ -230,7 +230,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			})
 		}
 		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
+			WriteServerError(w, r, err)
 			return
 		}
 		if stats == nil {
