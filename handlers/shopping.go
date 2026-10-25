@@ -37,6 +37,10 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	})
 
 	mux.HandleFunc("DELETE /api/shopping/checked", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := db.Exec(`DELETE FROM shopping_list_sources WHERE shopping_id IN (SELECT id FROM shopping_list WHERE checked=1)`); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		if _, err := db.Exec(`DELETE FROM shopping_list WHERE checked=1`); err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -78,6 +82,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			"id": id, "inventory_id": item.InventoryID, "name": item.Name,
 			"quantity_needed": item.QuantityNeeded, "unit": item.Unit,
 			"checked": false, "source": item.Source,
+			"sources": []map[string]any{},
 		})
 		broadcastShopping()
 	})
@@ -95,6 +100,10 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		defer rows.Close()
 		items, err := scanShoppingRows(rows)
+		rows.Close()
+		if err == nil {
+			err = attachSources(db, items)
+		}
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -139,6 +148,10 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if err := attachSources(db, []map[string]any{item}); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		WriteJSON(w, http.StatusOK, item)
 		broadcastShopping()
 	})
@@ -147,6 +160,10 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		id, ok := pathIDFromPattern(r, "id")
 		if !ok {
 			WriteError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		if _, err := db.Exec(`DELETE FROM shopping_list_sources WHERE shopping_id=?`, id); err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		res, err := db.Exec(`DELETE FROM shopping_list WHERE id=?`, id)
@@ -211,4 +228,35 @@ func scanShoppingRows(rows *sql.Rows) ([]map[string]any, error) {
 		return []map[string]any{}, nil
 	}
 	return items, nil
+}
+
+// attachSources adds a "sources" array to each item (empty when none).
+// Must be called with no rows open (single DB connection).
+func attachSources(db *sql.DB, items []map[string]any) error {
+	by := map[int64][]map[string]any{}
+	rows, err := db.Query(`SELECT shopping_id, source, label, quantity FROM shopping_list_sources ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var src, label string
+		var q float64
+		if err := rows.Scan(&id, &src, &label, &q); err != nil {
+			return err
+		}
+		by[id] = append(by[id], map[string]any{"source": src, "label": label, "quantity": q})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, it := range items {
+		s := by[it["id"].(int64)]
+		if s == nil {
+			s = []map[string]any{}
+		}
+		it["sources"] = s
+	}
+	return nil
 }
