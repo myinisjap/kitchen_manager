@@ -69,7 +69,7 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			item.QuantityNeeded = 1
 		}
 		if item.Unit != "" && !units.IsValid(units.Unit(item.Unit)) {
-			WriteError(w, http.StatusBadRequest, "invalid unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch")
+			WriteError(w, http.StatusBadRequest, "invalid unit; valid units: "+units.ValidList())
 			return
 		}
 		prodID := item.ProductID

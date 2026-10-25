@@ -176,56 +176,6 @@ func barcodeTaken(q querier, code string, exceptProduct int64) (bool, error) {
 	return n > 0, nil
 }
 
-// lotCols is the canonical lot+product SELECT; keep in sync with scanLot.
-const lotCols = `l.id,p.name,l.quantity,l.unit,l.location,l.expiration_date,p.par_level,p.barcode,p.preferred_unit,l.unit_cost_cents,p.quantity_per_scan,l.product_id`
-const lotFrom = ` FROM stock_lots l JOIN products p ON p.id=l.product_id`
-
-// scanLot reads a row selected with lotCols into the API shape.
-func scanLot(row rowScanner) (map[string]any, error) {
-	var id, productID, unitCostCents int64
-	var name, unit, location, expDate, barcode, preferredUnit string
-	var qty, par, qtyPerScan float64
-	if err := row.Scan(&id, &name, &qty, &unit, &location, &expDate, &par, &barcode, &preferredUnit, &unitCostCents, &qtyPerScan, &productID); err != nil {
-		return nil, err
-	}
-	return map[string]any{
-		"id": id, "product_id": productID, "name": name, "quantity": qty, "unit": unit,
-		"preferred_unit": preferredUnit, "location": location,
-		"expiration_date": expDate, "low_threshold": par, "barcode": barcode,
-		"unit_cost_cents": unitCostCents, "quantity_per_scan": qtyPerScan,
-	}, nil
-}
-
-func scanLots(rows *sql.Rows) ([]map[string]any, error) {
-	items := []map[string]any{}
-	for rows.Next() {
-		m, err := scanLot(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, m)
-	}
-	return items, rows.Err()
-}
-
-// getLot loads one lot in the API shape (sql.ErrNoRows if missing).
-func getLot(q querier, id int64) (map[string]any, error) {
-	return scanLot(q.QueryRow(`SELECT `+lotCols+lotFrom+` WHERE l.id=?`, id))
-}
-
-// productStub is the lot-shaped response for a product that has no lots left.
-func productStub(q querier, productID int64) (map[string]any, error) {
-	p, err := getProduct(q, productID)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{
-		"id": 0, "product_id": p.ID, "name": p.Name, "quantity": 0.0, "unit": p.EffUnit(),
-		"preferred_unit": p.PreferredUnit, "location": "", "expiration_date": "",
-		"low_threshold": p.Par, "barcode": p.Barcode, "unit_cost_cents": 0, "quantity_per_scan": p.QtyPerScan,
-	}, nil
-}
-
 // relinkProductRefs points recipe ingredients, shopping rows, meal history and
 // stock history at product `to` (or clears the link when to is nil).
 func relinkProductRefs(tx *sql.Tx, from int64, to *int64) error {

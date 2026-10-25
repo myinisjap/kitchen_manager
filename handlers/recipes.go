@@ -47,7 +47,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		for _, ing := range input.Ingredients {
 			if ing.Unit != "" && !units.IsValid(units.Unit(ing.Unit)) {
-				WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid unit %q for ingredient %q; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch", ing.Unit, ing.Name))
+				WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid unit %q for ingredient %q; valid units: %s", ing.Unit, ing.Name, units.ValidList()))
 				return
 			}
 		}

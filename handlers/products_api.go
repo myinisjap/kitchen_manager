@@ -21,22 +21,15 @@ func productJSON(q querier, id int64) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := q.Query(`SELECT `+lotCols+lotFrom+` WHERE l.product_id=?
-		ORDER BY CASE WHEN l.expiration_date='' THEN 1 ELSE 0 END, l.expiration_date, l.id`, id)
-	if err != nil {
-		return nil, err
-	}
-	lots, err := scanLots(rows)
-	rows.Close()
+	lots, err := lotsOfProduct(q, id)
 	if err != nil {
 		return nil, err
 	}
 	eff := p.EffUnit()
-	for _, l := range lots {
-		qty, _ := l["quantity"].(float64)
-		u, _ := l["unit"].(string)
-		_, cerr := units.Convert(qty, units.Unit(u), units.Unit(eff))
-		l["unit_mismatch"] = cerr != nil
+	for i := range lots {
+		_, cerr := units.Convert(lots[i].Quantity, units.Unit(lots[i].Unit), units.Unit(eff))
+		mismatch := cerr != nil
+		lots[i].UnitMismatch = &mismatch
 	}
 	srows, err := q.Query(`SELECT id, barcode, quantity_per_scan FROM product_skus WHERE product_id=? ORDER BY id`, id)
 	if err != nil {

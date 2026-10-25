@@ -18,7 +18,7 @@ var (
 	errInvalidPutAway   = errors.New("invalid put-away")
 )
 
-const invalidUnitMsg = "invalid unit; valid units: g, kg, oz, lb, ml, L, cup, tbsp, tsp, piece, clove, can, jar, bunch"
+var invalidUnitMsg = "invalid unit; valid units: " + units.ValidList()
 
 // putAwayOverrides are the optional per-row adjustments for a put-away.
 type putAwayOverrides struct {
@@ -225,10 +225,6 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 	return res, nil
 }
 
-func readInventoryLot(tx *sql.Tx, id int64) (map[string]any, error) {
-	return getLot(tx, id)
-}
-
 func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {
 	mux.HandleFunc("POST /api/shopping/{id}/bought", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathIDFromPattern(r, "id")
@@ -259,7 +255,7 @@ func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {
 			}
 			return
 		}
-		lot, err := readInventoryLot(tx, res.InventoryID)
+		lot, err := getLot(tx, res.InventoryID)
 		if err != nil {
 			WriteServerError(w, r, err)
 			return
@@ -337,7 +333,7 @@ func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {
 				WriteServerError(w, r, err)
 				return
 			}
-			lot, err := readInventoryLot(tx, res.InventoryID)
+			lot, err := getLot(tx, res.InventoryID)
 			if err != nil {
 				WriteServerError(w, r, err)
 				return
