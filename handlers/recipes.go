@@ -58,7 +58,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		recipeID, _ := res.LastInsertId()
 		for _, ing := range input.Ingredients {
-			ingName := strings.ToLower(strings.TrimSpace(ing.Name))
+			ingName := strings.TrimSpace(ing.Name)
 			invID := ing.InventoryID
 			if invID == nil {
 				invID = resolveInventoryID(db, ingName)
@@ -333,7 +333,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 		for _, ing := range input.Ingredients {
-			ingName := strings.ToLower(strings.TrimSpace(ing.Name))
+			ingName := strings.TrimSpace(ing.Name)
 			invID := ing.InventoryID
 			if invID == nil {
 				invID = resolveInventoryID(db, ingName)

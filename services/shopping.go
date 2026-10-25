@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"math"
 	"sort"
+	"strings"
 
 	"kitchen_manager/units"
 )
@@ -29,7 +30,7 @@ func (p ProductLevel) Needed() float64 { return math.Round((p.Par-p.Total)*1e4) 
 func ProductLevels(q interface {
 	Query(string, ...any) (*sql.Rows, error)
 }) ([]ProductLevel, error) {
-	rows, err := q.Query(`SELECT id, name, quantity, unit, preferred_unit, low_threshold FROM inventory ORDER BY name, id`)
+	rows, err := q.Query(`SELECT id, name, quantity, unit, preferred_unit, low_threshold FROM inventory ORDER BY name COLLATE NOCASE, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +44,7 @@ func ProductLevels(q interface {
 	}
 	byName := map[string][]lot{}
 	par := map[string]float64{}
+	display := map[string]string{}
 	for rows.Next() {
 		var l lot
 		var name string
@@ -50,9 +52,13 @@ func ProductLevels(q interface {
 		if err := rows.Scan(&l.id, &name, &l.qty, &l.unit, &l.preferred, &thr); err != nil {
 			return nil, err
 		}
-		byName[name] = append(byName[name], l)
-		if thr > par[name] {
-			par[name] = thr
+		key := strings.ToLower(name)
+		if _, ok := display[key]; !ok {
+			display[key] = name
+		}
+		byName[key] = append(byName[key], l)
+		if thr > par[key] {
+			par[key] = thr
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -60,7 +66,7 @@ func ProductLevels(q interface {
 	}
 
 	out := make([]ProductLevel, 0, len(byName))
-	for name, lots := range byName {
+	for key, lots := range byName {
 		target := lots[0].unit
 		for _, l := range lots {
 			if l.preferred != "" {
@@ -68,7 +74,7 @@ func ProductLevels(q interface {
 				break
 			}
 		}
-		pl := ProductLevel{Name: name, Unit: target, Par: par[name]}
+		pl := ProductLevel{Name: display[key], Unit: target, Par: par[key]}
 		for _, l := range lots {
 			pl.LotIDs = append(pl.LotIDs, l.id)
 			c, err := units.Convert(l.qty, units.Unit(l.unit), units.Unit(target))
@@ -79,7 +85,13 @@ func ProductLevels(q interface {
 		}
 		out = append(out, pl)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool {
+		a, b := strings.ToLower(out[i].Name), strings.ToLower(out[j].Name)
+		if a != b {
+			return a < b
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
 }
 
@@ -98,7 +110,7 @@ func GenerateFromThresholds(db *sql.DB) (int, error) {
 			continue
 		}
 		var count int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM shopping_list WHERE checked=0 AND (inventory_id IN (SELECT id FROM inventory WHERE name=?) OR (source='threshold' AND name=?))`, p.Name, p.Name).Scan(&count); err != nil {
+		if err := db.QueryRow(`SELECT COUNT(*) FROM shopping_list WHERE checked=0 AND (inventory_id IN (SELECT id FROM inventory WHERE name=? COLLATE NOCASE) OR (source='threshold' AND name=? COLLATE NOCASE))`, p.Name, p.Name).Scan(&count); err != nil {
 			return 0, err
 		}
 		if count > 0 {

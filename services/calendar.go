@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"kitchen_manager/units"
@@ -173,7 +174,7 @@ func GenerateWeeklyShopping(db *sql.DB, weekStart string) ([]ShoppingNeed, error
 				markRecipe(totals[key].recipes, e.recipeName)
 			} else {
 				// Unlinked ingredient: no conversion, use as-is
-				key := ing.name + "|" + ing.unit
+				key := strings.ToLower(ing.name) + "|" + ing.unit
 				if totals[key] == nil {
 					totals[key] = &totalNeed{
 						name:    ing.name,

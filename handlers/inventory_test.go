@@ -59,8 +59,8 @@ func TestCreateInventoryItem(t *testing.T) {
 	}
 	var item map[string]any
 	json.NewDecoder(w.Body).Decode(&item)
-	if item["name"] != "milk" {
-		t.Errorf("want name milk, got %v", item["name"])
+	if item["name"] != "Milk" {
+		t.Errorf("want name Milk, got %v", item["name"])
 	}
 	if item["id"] == nil {
 		t.Error("want id, got nil")
@@ -84,7 +84,7 @@ func TestListInventoryItems(t *testing.T) {
 	json.NewDecoder(w2.Body).Decode(&items)
 	found := false
 	for _, item := range items {
-		if item["name"] == "eggs" {
+		if item["name"] == "Eggs" {
 			found = true
 		}
 	}
@@ -158,7 +158,7 @@ func TestGetExpiringSoon(t *testing.T) {
 	json.NewDecoder(w2.Body).Decode(&items)
 	found := false
 	for _, item := range items {
-		if item["name"] == "yogurt" {
+		if item["name"] == "Yogurt" {
 			found = true
 		}
 	}
@@ -280,7 +280,7 @@ func TestGenerateFromThresholds(t *testing.T) {
 	json.NewDecoder(w3.Body).Decode(&items)
 	found := false
 	for _, item := range items {
-		if item["name"] == "thresholdtest" {
+		if item["name"] == "ThresholdTest" {
 			found = true
 		}
 	}
@@ -389,7 +389,7 @@ func TestAddRecipeToShoppingList(t *testing.T) {
 	json.NewDecoder(w3.Body).Decode(&items)
 	found := false
 	for _, item := range items {
-		if item["name"] == "recipeegg" {
+		if item["name"] == "RecipeEgg" {
 			found = true
 		}
 	}
@@ -465,10 +465,10 @@ func TestFullWeeklyPlanningFlow(t *testing.T) {
 	json.Unmarshal(listW.Body.Bytes(), &shoppingItems)
 	foundSauce, foundPasta := false, false
 	for _, item := range shoppingItems {
-		if item["name"] == "tomato sauce" {
+		if item["name"] == "Tomato Sauce" {
 			foundSauce = true
 		}
-		if item["name"] == "pasta" {
+		if item["name"] == "Pasta" {
 			foundPasta = true
 		}
 	}
@@ -524,9 +524,9 @@ func TestFullWeeklyPlanningFlow(t *testing.T) {
 	for _, item := range weekItems {
 		m := item.(map[string]any)
 		switch m["name"] {
-		case "pasta":
+		case "Pasta":
 			pastaNeeded += m["quantity_needed"].(float64)
-		case "tomato sauce":
+		case "Tomato Sauce":
 			sauceNeeded += m["quantity_needed"].(float64)
 		}
 	}
@@ -579,7 +579,7 @@ func TestWeeklyShoppingAccountsForInventory(t *testing.T) {
 	total := 0.0
 	for _, item := range items {
 		m := item.(map[string]any)
-		if m["name"] == "calegg" {
+		if m["name"] == "CalEgg" {
 			total += m["quantity_needed"].(float64)
 		}
 	}
@@ -1070,7 +1070,7 @@ func TestBarcodeLookupFallsBackToSkuAlias(t *testing.T) {
 	}
 	var item map[string]any
 	json.NewDecoder(w2.Body).Decode(&item)
-	if item["name"] != "flour" {
+	if item["name"] != "Flour" {
 		t.Errorf("want name flour, got %v", item["name"])
 	}
 	if item["quantity_per_scan"].(float64) != 250.0 {
