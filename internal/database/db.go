@@ -53,6 +53,7 @@ var migrations = []migration{
 	{name: "inventory_fk_on_delete_set_null", disableFK: true, up: migrateInventoryFKSetNull},
 	{name: "recipes_archived", up: migrateRecipesArchived},
 	{name: "meal_history_nullable_recipe", disableFK: true, up: migrateMealHistoryNullableRecipe},
+	{name: "seed_expiry_window_days", up: migrateSeedExpiryWindow},
 }
 
 // LatestVersion is the schema version produced by all known migrations.
@@ -426,4 +427,9 @@ func migrateMealHistoryNullableRecipe(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+func migrateSeedExpiryWindow(tx *sql.Tx) error {
+	_, err := tx.Exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('expiry_window_days', '7')`)
+	return err
 }
