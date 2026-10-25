@@ -113,15 +113,9 @@ func TestReceiptModelEnv(t *testing.T) {
 
 func TestReceiptPLULookupViaAlias(t *testing.T) {
 	db := testutil.NewDB(t)
-	if _, err := db.Exec(`INSERT INTO inventory (name, barcode, quantity_per_scan) VALUES ('milk','111',2)`); err != nil {
-		t.Fatal(err)
-	}
-	res, err := db.Exec(`INSERT INTO inventory (name, barcode, quantity_per_scan) VALUES ('flour','',1)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id, _ := res.LastInsertId()
-	if _, err := db.Exec(`INSERT INTO inventory_skus (inventory_id, barcode, quantity_per_scan) VALUES (?,?,3)`, id, "222"); err != nil {
+	testutil.AddLot(t, db, "milk", 1, "L", testutil.WithBarcode("111"), testutil.WithQtyPerScan(2))
+	id, _ := testutil.AddLot(t, db, "flour", 1, "kg")
+	if _, err := db.Exec(`INSERT INTO product_skus (product_id, barcode, quantity_per_scan) VALUES (?,?,3)`, id, "222"); err != nil {
 		t.Fatal(err)
 	}
 	name, qps, ok, err := lookupReceiptPLU(db, "222")

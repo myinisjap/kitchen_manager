@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"kitchen_manager/units"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -97,22 +96,22 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 
 		// Load ingredients
-		ingRows, err := db.Query(`SELECT id, inventory_id, name, quantity, unit FROM recipe_ingredients WHERE recipe_id=?`, input.RecipeID)
+		ingRows, err := db.Query(`SELECT id, product_id, name, quantity, unit FROM recipe_ingredients WHERE recipe_id=?`, input.RecipeID)
 		if err != nil {
 			WriteServerError(w, r, err)
 			return
 		}
 		type ingredient struct {
-			ID          int64
-			InventoryID sql.NullInt64
-			Name        string
-			Quantity    float64
-			Unit        string
+			ID        int64
+			ProductID sql.NullInt64
+			Name      string
+			Quantity  float64
+			Unit      string
 		}
 		var ingredients []ingredient
 		for ingRows.Next() {
 			var ing ingredient
-			if err := ingRows.Scan(&ing.ID, &ing.InventoryID, &ing.Name, &ing.Quantity, &ing.Unit); err != nil {
+			if err := ingRows.Scan(&ing.ID, &ing.ProductID, &ing.Name, &ing.Quantity, &ing.Unit); err != nil {
 				ingRows.Close()
 				WriteServerError(w, r, err)
 				return
@@ -131,14 +130,13 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var totalCost int64
 		hasCost := false
 		type mealIngRow struct {
-			inventoryID *int64
-			name        string
-			qtyUsed     float64
-			unit        string
-			costCents   *int64
+			productID *int64
+			name      string
+			qtyUsed   float64
+			unit      string
+			costCents *int64
 		}
 		var mealIngs []mealIngRow
-		remap := map[int64]int64{}
 		warnings := []string{}
 
 		for _, ing := range ingredients {
@@ -148,14 +146,10 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			var costCents *int64
 			var invIDPtr *int64
 
-			if ing.InventoryID.Valid {
-				invID := ing.InventoryID.Int64
-				if m, ok := remap[invID]; ok {
-					invID = m
-				}
+			if ing.ProductID.Valid {
 				recID := input.RecipeID
 				dres, derr := deductStock(db, tx, deductRequest{
-					ItemID:    invID,
+					ProductID: ing.ProductID.Int64,
 					Qty:       qtyUsed,
 					Unit:      ing.Unit,
 					Source:    "meal_cooked",
@@ -164,16 +158,12 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				})
 				switch {
 				case derr == nil:
-					// Reference the row that now holds this item's stock; the
-					// original row may have been folded into a sibling. The
-					// recorded quantity/unit stay in the recipe's unit.
-					if dres.ResultItemID != 0 {
-						rid := dres.ResultItemID
-						invIDPtr = &rid
-						remap[ing.InventoryID.Int64] = rid
-					}
+					// The link is to the product, so it survives lots running
+					// out. The recorded quantity/unit stay in the recipe's unit.
+					pid := ing.ProductID.Int64
+					invIDPtr = &pid
 					if dres.UnitCostCents > 0 {
-						c := int64(math.Round(dres.Requested * float64(dres.UnitCostCents)))
+						c := dres.UnitCostCents
 						costCents = &c
 						totalCost += c
 						hasCost = true
@@ -182,8 +172,8 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					// Stale link: treat as an unlinked ingredient.
 				case errors.Is(derr, errIncompatibleUnits):
 					// Skip deduction and cost for this ingredient only; keep the link.
-					lid := invID
-					invIDPtr = &lid
+					pid := ing.ProductID.Int64
+					invIDPtr = &pid
 					warnings = append(warnings, fmt.Sprintf("Couldn't deduct %s %s of %s: stock is tracked in %s", strconv.FormatFloat(qtyUsed, 'f', -1, 64), ing.Unit, ing.Name, dres.Unit))
 				default:
 					tx.Rollback()
@@ -193,11 +183,11 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 
 			mealIngs = append(mealIngs, mealIngRow{
-				inventoryID: invIDPtr,
-				name:        ing.Name,
-				qtyUsed:     qtyUsed,
-				unit:        ing.Unit,
-				costCents:   costCents,
+				productID: invIDPtr,
+				name:      ing.Name,
+				qtyUsed:   qtyUsed,
+				unit:      ing.Unit,
+				costCents: costCents,
 			})
 		}
 
@@ -239,8 +229,8 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Insert meal_history_ingredients
 		for _, mi := range mealIngs {
 			if _, err := tx.Exec(
-				`INSERT INTO meal_history_ingredients (meal_history_id, inventory_id, ingredient_name, quantity_used, unit, cost_cents) VALUES (?,?,?,?,?,?)`,
-				mealID, mi.inventoryID, mi.name, mi.qtyUsed, mi.unit, mi.costCents,
+				`INSERT INTO meal_history_ingredients (meal_history_id, product_id, ingredient_name, quantity_used, unit, cost_cents) VALUES (?,?,?,?,?,?)`,
+				mealID, mi.productID, mi.name, mi.qtyUsed, mi.unit, mi.costCents,
 			); err != nil {
 				tx.Rollback()
 				WriteServerError(w, r, err)
@@ -365,7 +355,7 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		// Load ingredients for each meal
 		for i, mealID := range mealIDs {
 			ingRows, err := db.Query(
-				`SELECT id, meal_history_id, inventory_id, ingredient_name, quantity_used, unit, cost_cents FROM meal_history_ingredients WHERE meal_history_id=?`,
+				`SELECT id, meal_history_id, product_id, ingredient_name, quantity_used, unit, cost_cents FROM meal_history_ingredients WHERE meal_history_id=?`,
 				mealID,
 			)
 			if err != nil {
@@ -389,9 +379,9 @@ func RegisterMeals(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					"unit":            unit,
 				}
 				if invID.Valid {
-					ing["inventory_id"] = invID.Int64
+					ing["product_id"] = invID.Int64
 				} else {
-					ing["inventory_id"] = nil
+					ing["product_id"] = nil
 				}
 				if costCents.Valid {
 					ing["cost_cents"] = costCents.Int64

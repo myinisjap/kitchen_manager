@@ -215,7 +215,8 @@
                     <div class="px-3 py-2 flex items-center justify-between">
                       <div class="text-sm text-gray-600 dark:text-gray-300 flex-1 min-w-0">
                         <span x-text="loc.location || 'No location'"></span>
-                        &bull; <span x-text="loc.quantity"></span> <span x-text="group.unit"></span>
+                        &bull; <span x-text="loc.quantity"></span> <span x-text="loc.unit || group.unit"></span>
+                        <template x-if="loc.unit_mismatch"><span class="text-xs text-amber-600" title="Unit cannot be converted to the product unit, so this lot is not counted in the total"> (not counted)</span></template>
                         <template x-if="loc.expiration_date">
                           <span class="text-xs text-gray-400 dark:text-gray-500"> · Exp: <span x-text="loc.expiration_date"></span></span>
                         </template>
@@ -1072,7 +1073,7 @@
           <button @click="recipeForm.ingredients.splice(idx, 1)" class="text-red-400 text-sm px-1">✕</button>
         </div>
       </template>
-      <button @click="recipeForm.ingredients.push({name:'',quantity:1,unit:'',inventory_id:null})"
+      <button @click="recipeForm.ingredients.push({name:'',quantity:1,unit:'',product_id:null})"
               class="text-sm text-blue-600 underline">+ Add ingredient</button>
 
       <div class="flex gap-2 pt-2">
@@ -1162,16 +1163,16 @@
               <li class="py-1.5 flex justify-between gap-2">
                 <span x-text="ing.name" class="text-gray-800 dark:text-gray-200"></span>
                 <span class="text-gray-500 dark:text-gray-400 shrink-0">
-                  <span x-text="ing.inventory_id
+                  <span x-text="ing.product_id
                     ? (formatQty(scaledQty(ing.quantity, cookItConfirm.servings, cookItConfirm.recipe)))
                     : '—'"></span>
-                  <span x-show="ing.inventory_id" x-text="' ' + ing.unit" class="ml-0.5"></span>
-                  <span x-show="!ing.inventory_id" class="text-xs text-gray-400">(not linked)</span>
+                  <span x-show="ing.product_id" x-text="' ' + ing.unit" class="ml-0.5"></span>
+                  <span x-show="!ing.product_id" class="text-xs text-gray-400">(not linked)</span>
                 </span>
               </li>
             </template>
           </ul>
-          <p x-show="!(cookItConfirm.recipe.ingredients || []).some(i => i.inventory_id)" class="text-xs text-amber-600">
+          <p x-show="!(cookItConfirm.recipe.ingredients || []).some(i => i.product_id)" class="text-xs text-amber-600">
             No ingredients are linked to inventory — nothing will be deducted.
           </p>
         </div>

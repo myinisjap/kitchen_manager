@@ -9,12 +9,13 @@ import (
 	"kitchen_manager/units"
 )
 
-// ProductLevel is the aggregate stock of one product (all lots sharing a name).
+// ProductLevel is the aggregate stock of one product (all its lots).
 type ProductLevel struct {
+	ID     int64
 	Name   string
-	Unit   string  // product unit: first non-empty preferred_unit, else first lot's unit
+	Unit   string  // product unit: preferred_unit, else the product's unit
 	Total  float64 // sum of convertible lots, expressed in Unit
-	Par    float64 // max low_threshold across lots (0 = unset)
+	Par    float64 // par level (0 = unset)
 	LotIDs []int64 // ascending
 }
 
@@ -24,68 +25,52 @@ func (p ProductLevel) BelowPar() bool { return p.Par > 0 && p.Total < p.Par }
 // Needed is the restock-to-par quantity (par - total), in Unit.
 func (p ProductLevel) Needed() float64 { return math.Round((p.Par-p.Total)*1e4) / 1e4 }
 
-// ProductLevels aggregates all inventory lots by name.
-// Lots whose unit cannot be converted to the product unit (different
-// dimension or different count unit) are left out of the total.
+// ProductLevels aggregates every product's lots, including products with no
+// lots left. Lots whose unit cannot be converted to the product unit
+// (different dimension or different count unit) are left out of the total.
 func ProductLevels(q interface {
 	Query(string, ...any) (*sql.Rows, error)
 }) ([]ProductLevel, error) {
-	rows, err := q.Query(`SELECT id, name, quantity, unit, preferred_unit, low_threshold FROM inventory ORDER BY name COLLATE NOCASE, id`)
+	rows, err := q.Query(`SELECT p.id, p.name, p.unit, p.preferred_unit, p.par_level, l.id, l.quantity, l.unit
+		FROM products p LEFT JOIN stock_lots l ON l.product_id = p.id ORDER BY p.name COLLATE NOCASE, p.id, l.id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	type lot struct {
-		id        int64
-		qty       float64
-		unit      string
-		preferred string
-	}
-	byName := map[string][]lot{}
-	par := map[string]float64{}
-	display := map[string]string{}
+	out := []ProductLevel{}
 	for rows.Next() {
-		var l lot
-		var name string
-		var thr float64
-		if err := rows.Scan(&l.id, &name, &l.qty, &l.unit, &l.preferred, &thr); err != nil {
+		var id int64
+		var name, unit, pref string
+		var par float64
+		var lotID sql.NullInt64
+		var qty sql.NullFloat64
+		var lotUnit sql.NullString
+		if err := rows.Scan(&id, &name, &unit, &pref, &par, &lotID, &qty, &lotUnit); err != nil {
 			return nil, err
 		}
-		key := strings.ToLower(name)
-		if _, ok := display[key]; !ok {
-			display[key] = name
+		if len(out) == 0 || out[len(out)-1].ID != id {
+			target := unit
+			if pref != "" {
+				target = pref
+			}
+			out = append(out, ProductLevel{ID: id, Name: name, Unit: target, Par: par})
 		}
-		byName[key] = append(byName[key], l)
-		if thr > par[key] {
-			par[key] = thr
+		pl := &out[len(out)-1]
+		if !lotID.Valid {
+			continue
 		}
+		pl.LotIDs = append(pl.LotIDs, lotID.Int64)
+		c, err := units.Convert(qty.Float64, units.Unit(lotUnit.String), units.Unit(pl.Unit))
+		if err != nil {
+			continue // unconvertible lot: excluded from the total
+		}
+		pl.Total += c
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	out := make([]ProductLevel, 0, len(byName))
-	for key, lots := range byName {
-		target := lots[0].unit
-		for _, l := range lots {
-			if l.preferred != "" {
-				target = l.preferred
-				break
-			}
-		}
-		pl := ProductLevel{Name: display[key], Unit: target, Par: par[key]}
-		for _, l := range lots {
-			pl.LotIDs = append(pl.LotIDs, l.id)
-			c, err := units.Convert(l.qty, units.Unit(l.unit), units.Unit(target))
-			if err != nil {
-				continue // unconvertible lot: excluded from the total
-			}
-			pl.Total += c
-		}
-		out = append(out, pl)
-	}
-	sort.Slice(out, func(i, j int) bool {
+	sort.SliceStable(out, func(i, j int) bool {
 		a, b := strings.ToLower(out[i].Name), strings.ToLower(out[j].Name)
 		if a != b {
 			return a < b
@@ -95,10 +80,11 @@ func ProductLevels(q interface {
 	return out, nil
 }
 
-// GenerateFromThresholds compares each product's total stock (all lots of the
-// same name, converted to the product unit) against its par level and, when
-// below par, adds one shopping-list row for par - total (restock to par),
-// unless the product already has an unchecked row. Returns the number added.
+// GenerateFromThresholds compares each product's total stock (all lots,
+// converted to the product unit) against its par level and, when below par,
+// adds one shopping-list row for par - total (restock to par), unless the
+// product already has an unchecked row. Products with no stock left count.
+// Returns the number added.
 func GenerateFromThresholds(db *sql.DB) (int, error) {
 	levels, err := ProductLevels(db)
 	if err != nil {
@@ -110,14 +96,14 @@ func GenerateFromThresholds(db *sql.DB) (int, error) {
 			continue
 		}
 		var count int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM shopping_list WHERE checked=0 AND (inventory_id IN (SELECT id FROM inventory WHERE name=? COLLATE NOCASE) OR (source='threshold' AND name=? COLLATE NOCASE))`, p.Name, p.Name).Scan(&count); err != nil {
+		if err := db.QueryRow(`SELECT COUNT(*) FROM shopping_list WHERE checked=0 AND (product_id=? OR (source='threshold' AND name=? COLLATE NOCASE))`, p.ID, p.Name).Scan(&count); err != nil {
 			return 0, err
 		}
 		if count > 0 {
 			continue
 		}
-		if _, err := db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'threshold')`,
-			p.LotIDs[0], p.Name, p.Needed(), p.Unit); err != nil {
+		if _, err := db.Exec(`INSERT INTO shopping_list (product_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'threshold')`,
+			p.ID, p.Name, p.Needed(), p.Unit); err != nil {
 			return 0, err
 		}
 		added++

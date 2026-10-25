@@ -20,16 +20,15 @@ type UseItUpRecipe struct {
 func RankUseItUp(db *sql.DB, cutoff string, limit int) ([]UseItUpRecipe, error) {
 	rows, err := db.Query(`
 WITH exp AS (
-  SELECT LOWER(TRIM(name)) AS lname, MIN(name) AS name, MIN(expiration_date) AS exp_date
-  FROM inventory
-  WHERE expiration_date != '' AND expiration_date <= ? AND quantity > 0
-  GROUP BY LOWER(TRIM(name))
+  SELECT p.id AS pid, LOWER(TRIM(p.name)) AS lname, p.name AS name, MIN(l.expiration_date) AS exp_date
+  FROM stock_lots l JOIN products p ON p.id = l.product_id
+  WHERE l.expiration_date != '' AND l.expiration_date <= ? AND l.quantity > 0
+  GROUP BY p.id
 )
 SELECT DISTINCT r.id, r.name, r.servings, exp.lname, exp.name, exp.exp_date
 FROM recipes r
 JOIN recipe_ingredients ri ON ri.recipe_id = r.id
-LEFT JOIN inventory inv ON inv.id = ri.inventory_id
-JOIN exp ON exp.lname = LOWER(TRIM(ri.name)) OR exp.lname = LOWER(TRIM(inv.name))
+JOIN exp ON exp.pid = ri.product_id OR exp.lname = LOWER(TRIM(ri.name))
 WHERE r.archived = 0`, cutoff)
 	if err != nil {
 		return nil, err

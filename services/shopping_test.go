@@ -8,15 +8,11 @@ import (
 	"kitchen_manager/services"
 )
 
+// insertInv adds a lot (creating its product if needed) and returns the product id.
 func insertInv(t *testing.T, db *sql.DB, name string, qty float64, unit, prefUnit string, threshold float64) int64 {
 	t.Helper()
-	var id int64
-	err := db.QueryRow(`INSERT INTO inventory (name, quantity, unit, preferred_unit, low_threshold) VALUES (?,?,?,?,?) RETURNING id`,
-		name, qty, unit, prefUnit, threshold).Scan(&id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return id
+	pid, _ := testutil.AddLot(t, db, name, qty, unit, testutil.WithPreferredUnit(prefUnit), testutil.WithPar(threshold))
+	return pid
 }
 
 func countShopping(t *testing.T, db *sql.DB) int {
@@ -46,7 +42,7 @@ func TestGenerateFromThresholds(t *testing.T) {
 	var invID int64
 	var need float64
 	var unit, source string
-	if err := db.QueryRow(`SELECT inventory_id, quantity_needed, unit, source FROM shopping_list`).Scan(&invID, &need, &unit, &source); err != nil {
+	if err := db.QueryRow(`SELECT product_id, quantity_needed, unit, source FROM shopping_list`).Scan(&invID, &need, &unit, &source); err != nil {
 		t.Fatal(err)
 	}
 	if invID != low || need != 300 || unit != "g" || source != "threshold" {
@@ -71,7 +67,7 @@ func TestGenerateFromThresholds(t *testing.T) {
 
 func shoppingRows(t *testing.T, db *sql.DB) (n int, qty float64, unit string, invID int64) {
 	t.Helper()
-	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(quantity_needed),0), COALESCE(MAX(unit),''), COALESCE(MAX(inventory_id),0) FROM shopping_list`).Scan(&n, &qty, &unit, &invID); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(quantity_needed),0), COALESCE(MAX(unit),''), COALESCE(MAX(product_id),0) FROM shopping_list`).Scan(&n, &qty, &unit, &invID); err != nil {
 		t.Fatal(err)
 	}
 	return
@@ -104,7 +100,7 @@ func TestGenerateFromThresholds_MultiLotRestockToPar(t *testing.T) {
 	}
 	// An unchecked row linked to any lot of the product blocks too.
 	db.Exec(`DELETE FROM shopping_list`)
-	db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'manual')`, second, "milk", 1, "L")
+	db.Exec(`INSERT INTO shopping_list (product_id,name,quantity_needed,unit,checked,source) VALUES (?,?,?,?,0,'manual')`, second, "milk", 1, "L")
 	if added, _ = services.GenerateFromThresholds(db); added != 0 {
 		t.Fatalf("linked-to-second-lot row did not block: %d", added)
 	}
@@ -140,5 +136,21 @@ func TestProductLevels_SkipsUnconvertibleLot(t *testing.T) {
 	}
 	if lv[0].Total != 100 || lv[0].Unit != "g" || len(lv[0].LotIDs) != 2 {
 		t.Fatalf("%+v", lv[0])
+	}
+}
+
+// A product whose last lot ran out is gone from stock but still below par.
+func TestGenerateFromThresholds_ProductWithNoLots(t *testing.T) {
+	db := testutil.NewDB(t)
+	pid, lot := testutil.AddLot(t, db, "milk", 1, "L", testutil.WithPar(2))
+	if _, err := db.Exec(`DELETE FROM stock_lots WHERE id=?`, lot); err != nil {
+		t.Fatal(err)
+	}
+	added, err := services.GenerateFromThresholds(db)
+	if err != nil || added != 1 {
+		t.Fatalf("added=%d err=%v", added, err)
+	}
+	if n, qty, unit, inv := shoppingRows(t, db); n != 1 || qty != 2 || unit != "L" || inv != pid {
+		t.Fatalf("got %d %v %s %d", n, qty, unit, inv)
 	}
 }

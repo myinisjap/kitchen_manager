@@ -8,7 +8,8 @@ import (
 
 // LogHistoryParams holds the parameters for recording an inventory change.
 type LogHistoryParams struct {
-	InventoryID    int64
+	InventoryID    int64 // stock lot id
+	ProductID      int64 // optional; looked up from the lot when 0
 	ItemName       string
 	ChangeType     string // "add", "deduct", "edit", "delete"
 	QuantityBefore *float64
@@ -26,13 +27,17 @@ func LogHistory(db *sql.DB, tx *sql.Tx, p LogHistoryParams) error {
 	if p.ChangedBy != "" {
 		changedBy = p.ChangedBy
 	}
-	q := `INSERT INTO inventory_history (inventory_id, item_name, change_type, quantity_before, quantity_after, unit, source, recipe_id, changed_by)
-		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	var productID any
+	if p.ProductID != 0 {
+		productID = p.ProductID
+	}
+	q := `INSERT INTO inventory_history (inventory_id, product_id, item_name, change_type, quantity_before, quantity_after, unit, source, recipe_id, changed_by)
+		  VALUES (?, COALESCE(?, (SELECT product_id FROM stock_lots WHERE id=?)), ?, ?, ?, ?, ?, ?, ?, ?)`
 	var err error
 	if tx != nil {
-		_, err = tx.Exec(q, p.InventoryID, p.ItemName, p.ChangeType, p.QuantityBefore, p.QuantityAfter, p.Unit, p.Source, p.RecipeID, changedBy)
+		_, err = tx.Exec(q, p.InventoryID, productID, p.InventoryID, p.ItemName, p.ChangeType, p.QuantityBefore, p.QuantityAfter, p.Unit, p.Source, p.RecipeID, changedBy)
 	} else {
-		_, err = db.Exec(q, p.InventoryID, p.ItemName, p.ChangeType, p.QuantityBefore, p.QuantityAfter, p.Unit, p.Source, p.RecipeID, changedBy)
+		_, err = db.Exec(q, p.InventoryID, productID, p.InventoryID, p.ItemName, p.ChangeType, p.QuantityBefore, p.QuantityAfter, p.Unit, p.Source, p.RecipeID, changedBy)
 	}
 	return err
 }

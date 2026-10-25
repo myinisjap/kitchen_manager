@@ -288,18 +288,18 @@ func parseReceiptResponse(respBytes []byte) ([]ReceiptItem, error) {
 	return out.Items, nil
 }
 
-// lookupReceiptPLU checks inventory.barcode, then inventory_skus aliases.
+// lookupReceiptPLU checks products.barcode, then product_skus aliases.
 func lookupReceiptPLU(db *sql.DB, plu string) (string, float64, bool, error) {
 	var name string
 	var qps float64
-	err := db.QueryRow(`SELECT name, quantity_per_scan FROM inventory WHERE barcode=? LIMIT 1`, plu).Scan(&name, &qps)
+	err := db.QueryRow(`SELECT name, quantity_per_scan FROM products WHERE barcode=? LIMIT 1`, plu).Scan(&name, &qps)
 	if err == nil {
 		return name, qps, true, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", 0, false, err
 	}
-	err = db.QueryRow(`SELECT i.name, s.quantity_per_scan FROM inventory_skus s JOIN inventory i ON i.id = s.inventory_id WHERE s.barcode=? LIMIT 1`, plu).Scan(&name, &qps)
+	err = db.QueryRow(`SELECT i.name, s.quantity_per_scan FROM product_skus s JOIN products i ON i.id = s.product_id WHERE s.barcode=? LIMIT 1`, plu).Scan(&name, &qps)
 	if err == nil {
 		return name, qps, true, nil
 	}

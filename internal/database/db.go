@@ -56,12 +56,16 @@ var migrations = []migration{
 	{name: "shopping_list_sources", up: migrateShoppingListSources},
 	{name: "meal_calendar_link_and_slots", up: migrateCalendarLinkAndSlots},
 	{name: "seed_expiry_window_days", up: migrateSeedExpiryWindow},
+	{name: "products_and_stock_lots", disableFK: true, up: migrateProductsAndStockLots},
 }
 
 // LatestVersion is the schema version produced by all known migrations.
 func LatestVersion() int { return len(migrations) }
 
-func migrate(db *sql.DB) (err error) {
+func migrate(db *sql.DB) error { return migrateTo(db, len(migrations)) }
+
+// migrateTo applies pending migrations up to and including version target.
+func migrateTo(db *sql.DB, target int) (err error) {
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -76,7 +80,7 @@ func migrate(db *sql.DB) (err error) {
 	if cur > len(migrations) {
 		return fmt.Errorf("database schema version %d is newer than this binary supports (%d)", cur, len(migrations))
 	}
-	for i := cur; i < len(migrations); i++ {
+	for i := cur; i < target; i++ {
 		if err := runMigration(ctx, conn, i+1, migrations[i]); err != nil {
 			return err
 		}

@@ -35,11 +35,7 @@ func call(t *testing.T, mux *http.ServeMux, method, path, body string) *httptest
 
 func insertLot(t *testing.T, db *sql.DB, name string, qty float64, unit, expiry, barcode string) int64 {
 	t.Helper()
-	var id int64
-	if err := db.QueryRow(`INSERT INTO inventory (name,quantity,unit,expiration_date,barcode,low_threshold) VALUES (?,?,?,?,?,1) RETURNING id`,
-		name, qty, unit, expiry, barcode).Scan(&id); err != nil {
-		t.Fatal(err)
-	}
+	_, id := testutil.AddLot(t, db, name, qty, unit, testutil.WithExpiry(expiry), testutil.WithBarcode(barcode), testutil.WithPar(1))
 	return id
 }
 
@@ -49,61 +45,70 @@ func linkRecipe(t *testing.T, db *sql.DB, invID int64) int64 {
 	if err := db.QueryRow(`INSERT INTO recipes (name) VALUES ('bread') RETURNING id`).Scan(&recipeID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,'flour',100,'g')`, recipeID, invID); err != nil {
+	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),'flour',100,'g')`, recipeID, invID); err != nil {
 		t.Fatal(err)
 	}
 	return recipeID
 }
 
-func ingredientInventoryID(t *testing.T, db *sql.DB, recipeID int64) sql.NullInt64 {
+func ingredientProductID(t *testing.T, db *sql.DB, recipeID int64) sql.NullInt64 {
 	t.Helper()
-	var invID sql.NullInt64
-	if err := db.QueryRow(`SELECT inventory_id FROM recipe_ingredients WHERE recipe_id=?`, recipeID).Scan(&invID); err != nil {
+	var pid sql.NullInt64
+	if err := db.QueryRow(`SELECT product_id FROM recipe_ingredients WHERE recipe_id=?`, recipeID).Scan(&pid); err != nil {
 		t.Fatal(err)
 	}
-	return invID
+	return pid
 }
 
-func TestDeductLinkedItemToZeroKeepsItem(t *testing.T) {
+func productOf(t *testing.T, db *sql.DB, lot int64) int64 {
+	t.Helper()
+	var pid int64
+	if err := db.QueryRow(`SELECT product_id FROM stock_lots WHERE id=?`, lot).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	return pid
+}
+
+// Emptying the last lot removes the lot but keeps the product: its recipe
+// link and par level survive, and it still reaches the shopping list.
+func TestDeductLinkedItemToZeroKeepsProduct(t *testing.T) {
 	mux, db := newSchemaMux(t)
 	id := insertLot(t, db, "flour", 500, "g", "2026-12-01", "FLOUR1")
+	pid := productOf(t, db, id)
 	recipeID := linkRecipe(t, db, id)
 
 	w := call(t, mux, http.MethodPatch, "/api/inventory/"+strconv.FormatInt(id, 10), `{"quantity":0}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var qty float64
-	var expiry string
-	if err := db.QueryRow(`SELECT quantity, expiration_date FROM inventory WHERE id=?`, id).Scan(&qty, &expiry); err != nil {
-		t.Fatalf("item should be kept at zero: %v", err)
+	if n := countRows(t, db, `SELECT COUNT(*) FROM stock_lots WHERE product_id=?`, pid); n != 0 {
+		t.Errorf("emptied lot should be deleted, %d lots left", n)
 	}
-	if qty != 0 || expiry != "" {
-		t.Errorf("expected qty 0 and cleared expiry, got qty=%v expiry=%q", qty, expiry)
+	var par float64
+	if err := db.QueryRow(`SELECT par_level FROM products WHERE id=?`, pid).Scan(&par); err != nil || par != 1 {
+		t.Errorf("product/par lost: %v %v", par, err)
 	}
-	if got := ingredientInventoryID(t, db, recipeID); !got.Valid || got.Int64 != id {
+	if got := ingredientProductID(t, db, recipeID); !got.Valid || got.Int64 != pid {
 		t.Errorf("recipe link changed: %+v", got)
 	}
 
-	// Out-of-stock items must still reach the shopping list.
+	// Out-of-stock products must still reach the shopping list.
 	w = call(t, mux, http.MethodPost, "/api/shopping/generate-from-thresholds", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("generate: %d %s", w.Code, w.Body.String())
 	}
-	var onList int
-	db.QueryRow(`SELECT COUNT(*) FROM shopping_list WHERE inventory_id=?`, id).Scan(&onList)
-	if onList != 1 {
-		t.Errorf("expected out-of-stock item on shopping list, got %d rows", onList)
+	if n := countRows(t, db, `SELECT COUNT(*) FROM shopping_list WHERE product_id=?`, pid); n != 1 {
+		t.Errorf("expected out-of-stock product on shopping list, got %d rows", n)
 	}
 }
 
-func TestDeductEmptyLotFoldsIntoSibling(t *testing.T) {
+func TestDeductEmptyLotKeepsSiblingAndProductLinks(t *testing.T) {
 	mux, db := newSchemaMux(t)
 	first := insertLot(t, db, "flour", 200, "g", "2026-11-01", "FLOUR1")
 	second := insertLot(t, db, "flour", 500, "g", "2026-12-01", "")
+	pid := productOf(t, db, first)
 	recipeID := linkRecipe(t, db, first)
-	if _, err := db.Exec(`INSERT INTO inventory_skus (inventory_id, barcode, quantity_per_scan) VALUES (?, 'FLOUR-ALIAS', 1)`, first); err != nil {
+	if _, err := db.Exec(`INSERT INTO product_skus (product_id, barcode, quantity_per_scan) VALUES (?, 'FLOUR-ALIAS', 1)`, pid); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,32 +116,33 @@ func TestDeductEmptyLotFoldsIntoSibling(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var exists int
-	db.QueryRow(`SELECT COUNT(*) FROM inventory WHERE id=?`, first).Scan(&exists)
-	if exists != 0 {
-		t.Errorf("expected emptied lot to be removed when a sibling remains")
+	if n := countRows(t, db, `SELECT COUNT(*) FROM stock_lots WHERE id=?`, first); n != 0 {
+		t.Errorf("expected emptied lot to be removed")
 	}
-	if got := ingredientInventoryID(t, db, recipeID); !got.Valid || got.Int64 != second {
-		t.Errorf("expected recipe to relink to sibling %d, got %+v", second, got)
+	if n := countRows(t, db, `SELECT COUNT(*) FROM stock_lots WHERE id=?`, second); n != 1 {
+		t.Errorf("sibling lot should remain")
+	}
+	if got := ingredientProductID(t, db, recipeID); !got.Valid || got.Int64 != pid {
+		t.Errorf("recipe should still link to product %d, got %+v", pid, got)
 	}
 	var barcode string
-	db.QueryRow(`SELECT barcode FROM inventory WHERE id=?`, second).Scan(&barcode)
+	db.QueryRow(`SELECT barcode FROM products WHERE id=?`, pid).Scan(&barcode)
 	if barcode != "FLOUR1" {
-		t.Errorf("expected primary barcode to move to sibling, got %q", barcode)
+		t.Errorf("primary barcode should stay on the product, got %q", barcode)
 	}
 	var aliasOwner int64
-	db.QueryRow(`SELECT inventory_id FROM inventory_skus WHERE barcode='FLOUR-ALIAS'`).Scan(&aliasOwner)
-	if aliasOwner != second {
-		t.Errorf("expected SKU alias to move to sibling, owner=%d", aliasOwner)
+	db.QueryRow(`SELECT product_id FROM product_skus WHERE barcode='FLOUR-ALIAS'`).Scan(&aliasOwner)
+	if aliasOwner != pid {
+		t.Errorf("SKU alias should stay on the product, owner=%d", aliasOwner)
 	}
 }
 
-func TestDeleteLinkedItem(t *testing.T) {
+func TestDeleteLastLotRemovesProductAndClearsLinks(t *testing.T) {
 	mux, db := newSchemaMux(t)
 	id := insertLot(t, db, "flour", 500, "g", "", "")
+	pid := productOf(t, db, id)
 	recipeID := linkRecipe(t, db, id)
-	if _, err := db.Exec(`INSERT INTO shopping_list (inventory_id,name,quantity_needed,unit) VALUES (?, 'flour', 1, 'g')`, id); err != nil {
+	if _, err := db.Exec(`INSERT INTO shopping_list (product_id,name,quantity_needed,unit) VALUES (?, 'flour', 1, 'g')`, pid); err != nil {
 		t.Fatal(err)
 	}
 
@@ -144,8 +150,14 @@ func TestDeleteLinkedItem(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := ingredientInventoryID(t, db, recipeID); got.Valid {
+	if got := ingredientProductID(t, db, recipeID); got.Valid {
 		t.Errorf("expected recipe link cleared, got %+v", got)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM shopping_list WHERE product_id IS NOT NULL`); n != 0 {
+		t.Errorf("shopping link not cleared")
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM products`); n != 0 {
+		t.Errorf("product should be deleted with its last lot")
 	}
 
 	w = call(t, mux, http.MethodDelete, "/api/inventory/"+strconv.FormatInt(id, 10), "")
@@ -154,18 +166,19 @@ func TestDeleteLinkedItem(t *testing.T) {
 	}
 }
 
-func TestDeleteLinkedItemRelinksToSibling(t *testing.T) {
+func TestDeleteOneOfSeveralLotsKeepsLinks(t *testing.T) {
 	mux, db := newSchemaMux(t)
 	id := insertLot(t, db, "flour", 500, "g", "2026-11-01", "")
-	sibling := insertLot(t, db, "flour", 300, "g", "2026-12-01", "")
+	insertLot(t, db, "flour", 300, "g", "2026-12-01", "")
+	pid := productOf(t, db, id)
 	recipeID := linkRecipe(t, db, id)
 
 	w := call(t, mux, http.MethodDelete, "/api/inventory/"+strconv.FormatInt(id, 10), "")
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := ingredientInventoryID(t, db, recipeID); !got.Valid || got.Int64 != sibling {
-		t.Errorf("expected recipe to relink to sibling %d, got %+v", sibling, got)
+	if got := ingredientProductID(t, db, recipeID); !got.Valid || got.Int64 != pid {
+		t.Errorf("expected recipe to keep product %d, got %+v", pid, got)
 	}
 }
 
@@ -180,8 +193,12 @@ func TestMergeLinkedItem(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if got := ingredientInventoryID(t, db, recipeID); !got.Valid || got.Int64 != target {
-		t.Errorf("expected recipe to relink to merge target %d, got %+v", target, got)
+	want := productOf(t, db, target)
+	if got := ingredientProductID(t, db, recipeID); !got.Valid || got.Int64 != want {
+		t.Errorf("expected recipe to relink to merge target product %d, got %+v", want, got)
+	}
+	if n := countRows(t, db, `SELECT COUNT(*) FROM products`); n != 1 {
+		t.Errorf("emptied source product should be folded away, %d products", n)
 	}
 }
 
@@ -196,8 +213,8 @@ func TestPatchTargetsOnlyThatLot(t *testing.T) {
 		t.Fatalf("got %d %s", w.Code, w.Body)
 	}
 	var qa, qb float64
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, a).Scan(&qa)
-	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, b).Scan(&qb)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, a).Scan(&qa)
+	db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, b).Scan(&qb)
 	if qa != 5 || qb != 1 {
 		t.Fatalf("a=%v b=%v", qa, qb)
 	}
@@ -224,7 +241,7 @@ func TestPatchMixedFieldsAllApplied(t *testing.T) {
 	var q, qps float64
 	var loc, exp, bc string
 	var cost int64
-	db.QueryRow(`SELECT quantity,location,expiration_date,barcode,quantity_per_scan,unit_cost_cents FROM inventory WHERE id=?`, id).Scan(&q, &loc, &exp, &bc, &qps, &cost)
+	db.QueryRow(`SELECT l.quantity,l.location,l.expiration_date,p.barcode,p.quantity_per_scan,l.unit_cost_cents FROM stock_lots l JOIN products p ON p.id=l.product_id WHERE l.id=?`, id).Scan(&q, &loc, &exp, &bc, &qps, &cost)
 	if q != 1 || loc != "freezer" || exp != "2026-09-09" || bc != "X1" || qps != 2 || cost != 150 {
 		t.Fatalf("got %v %s %s %s %v %d", q, loc, exp, bc, qps, cost)
 	}
@@ -244,7 +261,7 @@ func TestPatchRejectsWrongTypes(t *testing.T) {
 	var typ string
 	var q float64
 	var loc string
-	db.QueryRow(`SELECT typeof(quantity), quantity, location FROM inventory WHERE id=?`, id).Scan(&typ, &q, &loc)
+	db.QueryRow(`SELECT typeof(quantity), quantity, location FROM stock_lots WHERE id=?`, id).Scan(&typ, &q, &loc)
 	if typ != "real" || q != 5 || loc == "x" {
 		t.Fatalf("changed: %s %v %s", typ, q, loc)
 	}

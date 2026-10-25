@@ -20,7 +20,7 @@ func insertRecipe(t *testing.T, db *sql.DB, servings int) int64 {
 
 func insertIng(t *testing.T, db *sql.DB, recipeID int64, invID *int64, name string, qty float64, unit string) {
 	t.Helper()
-	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id, inventory_id, name, quantity, unit) VALUES (?,?,?,?,?)`,
+	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id, product_id, name, quantity, unit) VALUES (?,?,?,?,?)`,
 		recipeID, invID, name, qty, unit); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestWeeklyShoppingScalingAndSums(t *testing.T) {
 	insertIng(t, db, r, &inv, "flour", 100, "g")
 	schedule(t, db, "2024-01-01", r, 4)
 	res, err := services.GenerateWeeklyShopping(db, "2024-01-01")
-	if err != nil || len(res) != 1 || !near(res[0].QuantityNeeded, 150) || res[0].InventoryID == nil || *res[0].InventoryID != inv {
+	if err != nil || len(res) != 1 || !near(res[0].QuantityNeeded, 150) || res[0].ProductID == nil || *res[0].ProductID != inv {
 		t.Fatalf("%+v %v", res, err)
 	}
 	// second entry sums before inventory is subtracted once
@@ -97,7 +97,7 @@ func TestWeeklyShoppingZeroRecipeServingsAndCovered(t *testing.T) {
 	if err != nil || len(res) != 0 {
 		t.Fatalf("covered: %+v %v", res, err)
 	}
-	if _, err := db.Exec(`UPDATE inventory SET quantity=0`); err != nil {
+	if _, err := db.Exec(`UPDATE stock_lots SET quantity=0`); err != nil {
 		t.Fatal(err)
 	}
 	res, _ = services.GenerateWeeklyShopping(db, "2024-01-01")
@@ -132,7 +132,7 @@ func TestWeeklyShoppingUnits(t *testing.T) {
 	if g := m["bad"]; g.Unit != "cup" || !near(g.QuantityNeeded, 2) {
 		t.Errorf("bad: %+v", g)
 	}
-	if g := m["unlinked"]; g.InventoryID != nil || g.Unit != "tbsp" || !near(g.QuantityNeeded, 3) {
+	if g := m["unlinked"]; g.ProductID != nil || g.Unit != "tbsp" || !near(g.QuantityNeeded, 3) {
 		t.Errorf("unlinked: %+v", g)
 	}
 }
@@ -150,7 +150,7 @@ func TestWeeklyShoppingIncompatibleUnitsIgnoreStock(t *testing.T) {
 	if len(res) != 1 {
 		t.Fatalf("want 1 need, got %+v", res)
 	}
-	if g := res[0]; g.Unit != "cup" || !near(g.QuantityNeeded, 2) || g.InventoryID == nil || *g.InventoryID != sugar {
+	if g := res[0]; g.Unit != "cup" || !near(g.QuantityNeeded, 2) || g.ProductID == nil || *g.ProductID != sugar {
 		t.Errorf("sugar: %+v", g)
 	}
 }
@@ -169,6 +169,26 @@ func TestWeeklyShoppingSkipsCookedEntries(t *testing.T) {
 	}
 	res, err := services.GenerateWeeklyShopping(db, "2024-01-01")
 	if err != nil || len(res) != 1 || !near(res[0].QuantityNeeded, 100) {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+// Regression: stock split over several lots (even in different units) counts
+// as one total for the weekly shopping simulation.
+func TestWeeklyShoppingSumsAcrossLots(t *testing.T) {
+	db := testutil.NewDB(t)
+	pid, _ := testutil.AddLot(t, db, "flour", 300, "g")
+	testutil.AddLot(t, db, "flour", 0.5, "kg") // 800 g in total; each lot alone is short
+	r := insertRecipe(t, db, 1)
+	insertIng(t, db, r, &pid, "flour", 700, "g")
+	schedule(t, db, "2024-01-01", r, 1)
+	res, err := services.GenerateWeeklyShopping(db, "2024-01-01")
+	if err != nil || len(res) != 0 {
+		t.Fatalf("covered by two lots, got %+v %v", res, err)
+	}
+	schedule(t, db, "2024-01-02", r, 1) // 1400 g needed, 600 g short
+	res, err = services.GenerateWeeklyShopping(db, "2024-01-01")
+	if err != nil || len(res) != 1 || !near(res[0].QuantityNeeded, 600) {
 		t.Fatalf("%+v %v", res, err)
 	}
 }

@@ -10,7 +10,7 @@ func TestAddToShoppingListIncompatibleUnits(t *testing.T) {
 	mux, db := newMux(t)
 	inv := insertLot(t, db, "Milk", 1000, "g", "", "")
 	rid := newRecipe(t, db, "pudding", 1)
-	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,'Milk',2,'cup')`, rid, inv); err != nil {
+	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),'Milk',2,'cup')`, rid, inv); err != nil {
 		t.Fatal(err)
 	}
 	w := call(t, mux, "POST", fmt.Sprintf("/api/recipes/%d/add-to-shopping-list", rid), `{}`)
@@ -20,10 +20,10 @@ func TestAddToShoppingListIncompatibleUnits(t *testing.T) {
 	var unit string
 	var qty float64
 	var invID int64
-	if err := db.QueryRow(`SELECT unit, quantity_needed, inventory_id FROM shopping_list`).Scan(&unit, &qty, &invID); err != nil {
+	if err := db.QueryRow(`SELECT unit, quantity_needed, product_id FROM shopping_list`).Scan(&unit, &qty, &invID); err != nil {
 		t.Fatal(err)
 	}
-	if unit != "cup" || qty != 2 || invID != inv {
+	if unit != "cup" || qty != 2 || invID != productOf(t, db, inv) {
 		t.Errorf("got %v %v %v", unit, qty, invID)
 	}
 }
@@ -33,8 +33,8 @@ func TestAvailabilityIncompatibleUnits(t *testing.T) {
 	inv := insertLot(t, db, "Milk", 1000, "g", "", "")
 	bad := newRecipe(t, db, "pudding", 1)
 	good := newRecipe(t, db, "porridge", 1)
-	db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,'Milk',2,'cup')`, bad, inv)
-	db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,'Milk',100,'g')`, good, inv)
+	db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),'Milk',2,'cup')`, bad, inv)
+	db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),'Milk',100,'g')`, good, inv)
 
 	list := func(path string) map[string][]string {
 		w := call(t, mux, "GET", path, "")

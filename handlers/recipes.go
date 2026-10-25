@@ -31,7 +31,8 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			Tags         string `json:"tags"`
 			Servings     int    `json:"servings"`
 			Ingredients  []struct {
-				InventoryID *int64  `json:"inventory_id"`
+				ProductID   *int64  `json:"product_id"`
+				InventoryID *int64  `json:"inventory_id"` // legacy: a stock lot id
 				Name        string  `json:"name"`
 				Quantity    float64 `json:"quantity"`
 				Unit        string  `json:"unit"`
@@ -59,12 +60,9 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		recipeID, _ := res.LastInsertId()
 		for _, ing := range input.Ingredients {
 			ingName := strings.TrimSpace(ing.Name)
-			invID := ing.InventoryID
-			if invID == nil {
-				invID = resolveInventoryID(db, ingName)
-			}
-			if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
-				recipeID, invID, ingName, ing.Quantity, ing.Unit); err != nil {
+			prodID := ingredientProductID(db, ing.ProductID, ing.InventoryID, ingName)
+			if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
+				recipeID, prodID, ingName, ing.Quantity, ing.Unit); err != nil {
 				WriteServerError(w, r, err)
 				return
 			}
@@ -307,7 +305,8 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			Tags         string `json:"tags"`
 			Servings     int    `json:"servings"`
 			Ingredients  []struct {
-				InventoryID *int64  `json:"inventory_id"`
+				ProductID   *int64  `json:"product_id"`
+				InventoryID *int64  `json:"inventory_id"` // legacy: a stock lot id
 				Name        string  `json:"name"`
 				Quantity    float64 `json:"quantity"`
 				Unit        string  `json:"unit"`
@@ -353,12 +352,9 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		for _, ing := range input.Ingredients {
 			ingName := strings.TrimSpace(ing.Name)
-			invID := ing.InventoryID
-			if invID == nil {
-				invID = resolveInventoryID(db, ingName)
-			}
-			if _, err := tx.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
-				id, invID, ingName, ing.Quantity, ing.Unit); err != nil {
+			prodID := ingredientProductID(tx, ing.ProductID, ing.InventoryID, ingName)
+			if _, err := tx.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
+				id, prodID, ingName, ing.Quantity, ing.Unit); err != nil {
 				tx.Rollback()
 				WriteServerError(w, r, err)
 				return
@@ -416,20 +412,14 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			have := 0.0
 			displayUnit := ingUnit
 
-			if invID, ok := ing["inventory_id"]; ok && invID != nil {
-				var invQty float64
-				var invUnit, prefUnit string
-				err := db.QueryRow(`SELECT quantity, unit, preferred_unit FROM inventory WHERE id=?`, invID).Scan(&invQty, &invUnit, &prefUnit)
+			if pid, ok := ing["product_id"].(int64); ok {
+				total, targetUnit, err := productStock(db, pid)
 				if err == nil {
-					targetUnit := units.Unit(invUnit)
-					if prefUnit != "" {
-						targetUnit = units.Unit(prefUnit)
-					}
-					converted, convErr := units.Convert(needed, ingUnit, targetUnit)
+					converted, convErr := units.Convert(needed, ingUnit, units.Unit(targetUnit))
 					if convErr == nil {
 						needed = converted
-						have = invQty
-						displayUnit = targetUnit
+						have = total
+						displayUnit = units.Unit(targetUnit)
 					}
 					// else: units can't be compared; add the full need in the
 					// recipe's unit and don't subtract mismatched stock.
@@ -439,11 +429,11 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			shortfall := needed - have
 			if shortfall > 0 {
 				var invPtr *int64
-				if v, ok := ing["inventory_id"].(int64); ok {
+				if v, ok := ing["product_id"].(int64); ok {
 					invPtr = &v
 				}
 				additions = append(additions, services.ListAddition{
-					InventoryID: invPtr, Name: ing["name"].(string), Unit: string(displayUnit),
+					ProductID: invPtr, Name: ing["name"].(string), Unit: string(displayUnit),
 					Quantity: shortfall, Source: "recipe", Ref: strconv.FormatInt(id, 10),
 					Label: recipe["name"].(string), Mode: services.MergeAdd,
 				})
@@ -483,15 +473,19 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	})
 }
 
-// resolveInventoryID returns an inventory ID for the given ingredient name by
-// case-insensitive name match, or nil if no match is found.
-func resolveInventoryID(db *sql.DB, name string) *int64 {
-	var id int64
-	err := db.QueryRow(`SELECT id FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1`, name).Scan(&id)
-	if err != nil {
-		return nil
+// ingredientProductID decides which product a recipe ingredient links to: an
+// explicit product_id, else a legacy inventory_id (a stock lot id), else the
+// product with the same name, else none.
+func ingredientProductID(q querier, productID, lotID *int64, name string) *int64 {
+	if productID != nil {
+		if _, err := getProduct(q, *productID); err == nil {
+			return productID
+		}
 	}
-	return &id
+	if pid := optProductID(q, lotID); pid != nil {
+		return pid
+	}
+	return findProductIDByName(q, name)
 }
 
 func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
@@ -502,7 +496,7 @@ func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
 	if err := row.Scan(&rid, &name, &desc, &instructions, &tags, &servings, &archived); err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(`SELECT id,recipe_id,inventory_id,name,quantity,unit FROM recipe_ingredients WHERE recipe_id=?`, id)
+	rows, err := db.Query(`SELECT id,recipe_id,product_id,name,quantity,unit FROM recipe_ingredients WHERE recipe_id=?`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +515,7 @@ func getRecipeWithIngredients(db *sql.DB, id int64) (map[string]any, error) {
 			invIDVal = invID.Int64
 		}
 		ings = append(ings, map[string]any{
-			"id": iid, "recipe_id": recID, "inventory_id": invIDVal,
+			"id": iid, "recipe_id": recID, "product_id": invIDVal,
 			"name": iname, "quantity": qty, "unit": iunit,
 		})
 	}
@@ -551,14 +545,12 @@ func recipeIsAvailable(db *sql.DB, recipe map[string]any) (recipeAvailability, e
 	}
 	available := true
 	for _, ing := range ings {
-		invID, hasInvID := ing["inventory_id"]
-		if !hasInvID || invID == nil {
+		pid, hasPID := ing["product_id"].(int64)
+		if !hasPID {
 			available = false
 			continue
 		}
-		var invQty float64
-		var invUnit string
-		err := db.QueryRow(`SELECT quantity, unit FROM inventory WHERE id=?`, invID).Scan(&invQty, &invUnit)
+		invQty, invUnit, err := productStock(db, pid)
 		if err == sql.ErrNoRows {
 			available = false
 			continue

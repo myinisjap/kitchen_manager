@@ -26,7 +26,8 @@ type putAwayOverrides struct {
 	Unit           *string  `json:"unit"`
 	Location       *string  `json:"location"`
 	ExpirationDate *string  `json:"expiration_date"`
-	InventoryID    *int64   `json:"inventory_id"`
+	ProductID      *int64   `json:"product_id"`
+	InventoryID    *int64   `json:"inventory_id"` // legacy: a stock lot id
 }
 
 type putAwayResult struct {
@@ -46,7 +47,7 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 	var linked sql.NullInt64
 	var name, rowUnit string
 	var qty float64
-	err := tx.QueryRow(`SELECT inventory_id,name,quantity_needed,unit FROM shopping_list WHERE id=?`, shoppingID).
+	err := tx.QueryRow(`SELECT product_id,name,quantity_needed,unit FROM shopping_list WHERE id=?`, shoppingID).
 		Scan(&linked, &name, &qty, &rowUnit)
 	if err == sql.ErrNoRows {
 		return res, errShoppingNotFound
@@ -76,22 +77,25 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 		expiry = *o.ExpirationDate
 	}
 
-	// Resolve the product (anchor lot): explicit link, the row's link, else an
-	// existing product with the same normalised name (matches how threshold
-	// generation dedups by name), else a brand-new product.
-	var anchorID int64
-	var anchorName, anchorUnit, anchorPref, anchorLoc string
+	// Resolve the product: explicit override, the row's link, else an existing
+	// product with the same normalised name (matches how threshold generation
+	// dedups by name), else a brand-new product.
+	var prod product
 	found := false
-	load := func(id int64) (bool, error) {
-		err := tx.QueryRow(`SELECT id,name,unit,preferred_unit,location FROM inventory WHERE id=?`, id).
-			Scan(&anchorID, &anchorName, &anchorUnit, &anchorPref, &anchorLoc)
+	loadProduct := func(id int64) (bool, error) {
+		p, err := getProduct(tx, id)
 		if err == sql.ErrNoRows {
 			return false, nil
 		}
-		return err == nil, err
+		if err != nil {
+			return false, err
+		}
+		prod = p
+		return true, nil
 	}
-	if o.InventoryID != nil {
-		ok, err := load(*o.InventoryID)
+	switch {
+	case o.ProductID != nil:
+		ok, err := loadProduct(*o.ProductID)
 		if err != nil {
 			return res, err
 		}
@@ -99,34 +103,43 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 			return res, errItemNotFound
 		}
 		found = true
-	} else if linked.Valid {
-		if found, err = load(linked.Int64); err != nil {
+	case o.InventoryID != nil: // legacy: a stock lot id
+		pid, err := productOfLot(tx, *o.InventoryID)
+		if err != nil {
+			return res, err
+		}
+		if found, err = loadProduct(pid); err != nil {
+			return res, err
+		}
+	case linked.Valid:
+		if found, err = loadProduct(linked.Int64); err != nil {
 			return res, err
 		}
 	}
 	norm := strings.TrimSpace(name)
 	if !found {
-		err := tx.QueryRow(`SELECT id,name,unit,preferred_unit,location FROM inventory WHERE name=? COLLATE NOCASE ORDER BY quantity > 0 DESC, id LIMIT 1`, norm).
-			Scan(&anchorID, &anchorName, &anchorUnit, &anchorPref, &anchorLoc)
+		p, ok, err := findProductByName(tx, norm)
+		if err != nil {
+			return res, err
+		}
+		if ok {
+			prod, found = p, true
+		}
+	}
+
+	location := ""
+	if found {
+		err := tx.QueryRow(`SELECT location FROM stock_lots WHERE product_id=? ORDER BY quantity > 0 DESC, id LIMIT 1`, prod.ID).Scan(&location)
 		if err != nil && err != sql.ErrNoRows {
 			return res, err
 		}
-		found = err == nil
-	}
-
-	location := anchorLoc
-	if !found {
-		location = ""
 	}
 	if o.Location != nil && *o.Location != "" { // blank means "use the product's location"
 		location = *o.Location
 	}
 
-	// Convert into the anchor's effective unit before any write.
-	eff := anchorPref
-	if eff == "" {
-		eff = anchorUnit
-	}
+	// Convert into the product's effective unit before any write.
+	eff := prod.EffUnit()
 	converted := qty
 	if found && reqUnit != "" && eff != "" && reqUnit != eff {
 		bad := units.BaseDimension(units.Unit(reqUnit)) != units.BaseDimension(units.Unit(eff))
@@ -142,10 +155,15 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 	var invID int64
 	var before, after float64
 	histUnit := eff
-	histName := anchorName
+	histName := prod.Name
 	if !found {
-		r, err := tx.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,0,'','',0,0)`,
-			norm, qty, reqUnit, location, expiry)
+		p, _, err := getOrCreateProduct(tx, norm, reqUnit, "")
+		if err != nil {
+			return res, err
+		}
+		prod = p
+		r, err := tx.Exec(`INSERT INTO stock_lots (product_id,quantity,unit,location,expiration_date) VALUES (?,?,?,?,?)`,
+			prod.ID, qty, reqUnit, location, expiry)
 		if err != nil {
 			return res, err
 		}
@@ -156,54 +174,39 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 		histUnit = reqUnit
 		histName = norm
 	} else {
-		// Pick the lot to receive stock: same name+unit as the anchor so
-		// grouping and sibling logic keep working.
+		lotUnit := eff
+		if lotUnit == "" {
+			lotUnit = reqUnit
+		}
 		var lotID int64
-		err := tx.QueryRow(`SELECT id FROM inventory WHERE name=? COLLATE NOCASE AND unit=? AND location=? AND expiration_date=? ORDER BY id=? DESC, id LIMIT 1`,
-			anchorName, anchorUnit, location, expiry, anchorID).Scan(&lotID)
+		err := tx.QueryRow(`SELECT id FROM stock_lots WHERE product_id=? AND unit=? AND location=? AND expiration_date=? ORDER BY id LIMIT 1`,
+			prod.ID, lotUnit, location, expiry).Scan(&lotID)
 		switch {
 		case err == nil:
-		case err == sql.ErrNoRows:
-			err = tx.QueryRow(`SELECT id FROM inventory WHERE name=? COLLATE NOCASE AND unit=? AND quantity <= 0 ORDER BY id=? DESC, id LIMIT 1`,
-				anchorName, anchorUnit, anchorID).Scan(&lotID)
-			if err == nil {
-				if _, err := tx.Exec(`UPDATE inventory SET location=?, expiration_date=? WHERE id=?`, location, expiry, lotID); err != nil {
-					return res, err
-				}
-			} else if err == sql.ErrNoRows {
-				lotID = 0
-			} else {
-				return res, err
-			}
-		default:
-			return res, err
-		}
-		if lotID != 0 {
 			if before, after, err = addStock(tx, lotID, converted); err != nil {
 				return res, err
 			}
 			invID = lotID
-		} else {
-			var par float64
-			if err := tx.QueryRow(`SELECT COALESCE(MAX(low_threshold),0) FROM inventory WHERE name=? COLLATE NOCASE`, anchorName).Scan(&par); err != nil {
-				return res, err
-			}
-			r, err := tx.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,?,'',?,0,0)`,
-				anchorName, converted, anchorUnit, location, expiry, par, anchorPref)
+		case err == sql.ErrNoRows:
+			r, err := tx.Exec(`INSERT INTO stock_lots (product_id,quantity,unit,location,expiration_date) VALUES (?,?,?,?,?)`,
+				prod.ID, converted, lotUnit, location, expiry)
 			if err != nil {
 				return res, err
 			}
 			invID, _ = r.LastInsertId()
 			after = converted
 			res.Created = true
+		default:
+			return res, err
 		}
+		histUnit = lotUnit
 		res.Added = converted
 	}
 	res.InventoryID = invID
 	res.Unit = histUnit
 
 	if err := LogHistory(db, tx, LogHistoryParams{
-		InventoryID: invID, ItemName: histName, ChangeType: "add",
+		InventoryID: invID, ProductID: prod.ID, ItemName: histName, ChangeType: "add",
 		QuantityBefore: &before, QuantityAfter: &after, Unit: histUnit,
 		Source: "shopping_bought", ChangedBy: changedBy,
 	}); err != nil {
@@ -223,7 +226,7 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 }
 
 func readInventoryLot(tx *sql.Tx, id int64) (map[string]any, error) {
-	return scanInventoryRow(tx.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id))
+	return getLot(tx, id)
 }
 
 func registerPutAway(mux *http.ServeMux, db *sql.DB, broadcast func()) {

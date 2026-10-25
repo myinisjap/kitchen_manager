@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 
 	"kitchen_manager/units"
 )
@@ -14,9 +15,10 @@ var (
 )
 
 type deductRequest struct {
-	ItemID    int64   // anchor inventory row
+	ItemID    int64   // anchor stock lot (resolved to its product)
+	ProductID int64   // deduct by product instead of by anchor lot
 	Qty       float64 // amount to remove, in Unit
-	Unit      string  // requested unit; "" = already in the item's unit
+	Unit      string  // requested unit; "" = already in the product's unit
 	Source    string  // "manual", "meal_cooked", "barcode_remove", ...
 	RecipeID  *int64  // for history (cooking)
 	ChangedBy string
@@ -24,111 +26,126 @@ type deductRequest struct {
 }
 
 type deductResult struct {
+	ProductID     int64
 	ItemName      string
-	Unit          string  // inventory unit the deduction was made in
+	Unit          string  // product unit the deduction was made in
 	Requested     float64 // Qty converted into Unit
-	Deducted      float64 // actually removed (capped by stock)
-	LastLotID     int64   // lot that still has stock (0 if none)
-	ResultItemID  int64   // row references should now point at; 0 if none
-	UnitCostCents int64
+	Deducted      float64 // actually removed (capped by stock), in Unit
+	ResultItemID  int64   // a lot that still has stock; 0 if none
+	UnitCostCents int64   // total cost of what was consumed
 }
 
-// deductStock removes stock from an item, converting the requested unit into
-// the item's unit (preferred_unit, falling back to unit), consuming the
-// earliest-expiring lots first, and retiring emptied lots. The caller owns
-// commit/rollback; all queries go through tx.
+// deductStock removes stock from a product, converting the requested unit into
+// the product's unit (preferred_unit, falling back to unit) and consuming the
+// earliest-expiring lots first across all of the product's lots (converting
+// between lot units). Emptied lots are deleted; the product stays. Lots whose
+// unit can't convert are skipped. The caller owns commit/rollback; all queries
+// go through tx.
 func deductStock(db *sql.DB, tx *sql.Tx, req deductRequest) (deductResult, error) {
 	var res deductResult
-	var name, unit, pref string
-	var cost sql.NullInt64
-	err := tx.QueryRow(`SELECT name, unit, preferred_unit, unit_cost_cents FROM inventory WHERE id=?`, req.ItemID).
-		Scan(&name, &unit, &pref, &cost)
+	pid := req.ProductID
+	if pid == 0 {
+		var err error
+		if pid, err = productOfLot(tx, req.ItemID); err != nil {
+			return res, err
+		}
+	}
+	prod, err := getProduct(tx, pid)
 	if err == sql.ErrNoRows {
 		return res, errItemNotFound
 	}
 	if err != nil {
 		return res, err
 	}
-	effUnit := pref
-	if effUnit == "" {
-		effUnit = unit
-	}
-	res.ItemName = name
+	effUnit := prod.EffUnit()
+	res.ProductID = pid
+	res.ItemName = prod.Name
 	res.Unit = effUnit
-	res.UnitCostCents = cost.Int64
 
 	qty := req.Qty
 	if req.Unit != "" && effUnit != "" && req.Unit != effUnit {
 		qty, err = units.Convert(req.Qty, units.Unit(req.Unit), units.Unit(effUnit))
 		if err != nil {
-			return res, fmt.Errorf("%w: cannot deduct %g %s of %q from stock tracked in %s", errIncompatibleUnits, req.Qty, req.Unit, name, effUnit)
+			return res, fmt.Errorf("%w: cannot deduct %g %s of %q from stock tracked in %s", errIncompatibleUnits, req.Qty, req.Unit, prod.Name, effUnit)
 		}
 	}
 	res.Requested = qty
 
 	type lot struct {
-		id  int64
-		qty float64
+		id   int64
+		qty  float64
+		unit string
+		cost int64
 	}
 	var lots []lot
+	q := `SELECT id, quantity, unit, unit_cost_cents FROM stock_lots WHERE product_id=?`
+	args := []any{pid}
 	if req.SingleLot {
+		q += ` AND id=?`
+		args = append(args, req.ItemID)
+	}
+	q += ` ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END ASC, expiration_date ASC, id ASC`
+	rows, err := tx.Query(q, args...)
+	if err != nil {
+		return res, err
+	}
+	for rows.Next() {
 		var l lot
-		l.id = req.ItemID
-		if err := tx.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, req.ItemID).Scan(&l.qty); err != nil {
+		if err := rows.Scan(&l.id, &l.qty, &l.unit, &l.cost); err != nil {
+			rows.Close()
 			return res, err
 		}
-		lots = []lot{l}
-	} else {
-		rows, err := tx.Query(`SELECT id, quantity FROM inventory WHERE name=? COLLATE NOCASE AND unit=?
-			ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END ASC, expiration_date ASC, id ASC`, name, unit)
-		if err != nil {
-			return res, err
-		}
-		for rows.Next() {
-			var l lot
-			if err := rows.Scan(&l.id, &l.qty); err != nil {
-				rows.Close()
-				return res, err
-			}
-			lots = append(lots, l)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return res, err
-		}
+		lots = append(lots, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return res, err
 	}
 
-	remainingDeduct := qty
+	remaining := qty // in effUnit
 	var emptied []int64
+	var cost float64
 	for _, l := range lots {
-		if remainingDeduct <= 0 {
+		if remaining <= 0 {
 			break
 		}
 		if l.qty <= 0 {
 			continue
 		}
+		lotEff, cerr := units.Convert(l.qty, units.Unit(l.unit), units.Unit(effUnit))
+		if cerr != nil {
+			continue // lot can't be expressed in the product unit
+		}
 		before := l.qty
-		var after float64
-		if l.qty <= remainingDeduct {
-			remainingDeduct -= l.qty
-			res.Deducted += l.qty
+		var after, takenLot float64 // takenLot is in the lot's own unit
+		if lotEff <= remaining {
+			remaining -= lotEff
+			res.Deducted += lotEff
+			takenLot = l.qty
 			emptied = append(emptied, l.id)
 		} else {
-			after = l.qty - remainingDeduct
-			res.Deducted += remainingDeduct
-			remainingDeduct = 0
-			res.LastLotID = l.id
-			if _, err := tx.Exec(`UPDATE inventory SET quantity=? WHERE id=?`, after, l.id); err != nil {
+			if l.unit == effUnit {
+				takenLot = remaining
+			} else {
+				takenLot = l.qty * remaining / lotEff
+			}
+			after = l.qty - takenLot
+			res.Deducted += remaining
+			remaining = 0
+			res.ResultItemID = l.id
+			if _, err := tx.Exec(`UPDATE stock_lots SET quantity=? WHERE id=?`, after, l.id); err != nil {
 				return res, err
 			}
 		}
+		cost += takenLot * float64(l.cost)
 		if err := LogHistory(db, tx, LogHistoryParams{
 			InventoryID:    l.id,
-			ItemName:       name,
+			ProductID:      pid,
+			ItemName:       prod.Name,
 			ChangeType:     "deduct",
 			QuantityBefore: &before,
 			QuantityAfter:  &after,
-			Unit:           effUnit,
+			Unit:           l.unit,
 			Source:         req.Source,
 			RecipeID:       req.RecipeID,
 			ChangedBy:      req.ChangedBy,
@@ -136,22 +153,17 @@ func deductStock(db *sql.DB, tx *sql.Tx, req deductRequest) (deductResult, error
 			return res, err
 		}
 	}
+	res.UnitCostCents = int64(math.Round(cost))
 
-	kept, survivor, err := retireEmptyLots(tx, emptied, name, unit)
-	if err != nil {
+	if err := retireEmptyLots(tx, emptied); err != nil {
 		return res, err
 	}
-	switch {
-	case res.LastLotID != 0:
-		res.ResultItemID = res.LastLotID
-	case kept != 0:
-		res.ResultItemID = kept
-		res.LastLotID = kept
-	case survivor != 0:
-		res.ResultItemID = survivor
-	default:
-		// nothing was emptied; anchor row still exists
-		res.ResultItemID = req.ItemID
+	if res.ResultItemID == 0 {
+		// Point at any lot that still has stock, if the cascade ended exactly on a lot boundary.
+		if err := tx.QueryRow(`SELECT COALESCE((SELECT id FROM stock_lots WHERE product_id=? AND quantity>0
+			ORDER BY CASE WHEN expiration_date='' THEN 1 ELSE 0 END, expiration_date, id LIMIT 1), 0)`, pid).Scan(&res.ResultItemID); err != nil {
+			return res, err
+		}
 	}
 	return res, nil
 }

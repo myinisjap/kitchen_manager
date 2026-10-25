@@ -13,11 +13,8 @@ func day(n int) string { return time.Now().AddDate(0, 0, n).Format("2006-01-02")
 func TestRankUseItUp(t *testing.T) {
 	db := testutil.NewDB(t)
 	lot := func(name string, qty float64, exp string) int64 {
-		var id int64
-		if err := db.QueryRow(`INSERT INTO inventory (name, quantity, unit, expiration_date) VALUES (?,?,?,?) RETURNING id`, name, qty, "g", exp).Scan(&id); err != nil {
-			t.Fatal(err)
-		}
-		return id
+		pid, _ := testutil.AddLot(t, db, name, qty, "g", testutil.WithExpiry(exp))
+		return pid
 	}
 	recipe := func(name string, archived int, ings ...any) int64 {
 		var id int64
@@ -29,7 +26,7 @@ func TestRankUseItUp(t *testing.T) {
 			case string:
 				db.Exec(`INSERT INTO recipe_ingredients (recipe_id, name, quantity) VALUES (?,?,1)`, id, v)
 			case int64:
-				db.Exec(`INSERT INTO recipe_ingredients (recipe_id, inventory_id, name, quantity) VALUES (?,?,?,1)`, id, v, "linked")
+				db.Exec(`INSERT INTO recipe_ingredients (recipe_id, product_id, name, quantity) VALUES (?,?,?,1)`, id, v, "linked")
 			}
 		}
 		return id

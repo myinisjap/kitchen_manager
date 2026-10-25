@@ -17,12 +17,12 @@ func TestCookScalesByServings(t *testing.T) {
 	handlers.RegisterMeals(mux, db)
 	inv := insertLot(t, db, "Flour", 1000, "g", "", "")
 	rid := newRecipe(t, db, "r", 2)
-	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`, rid, inv, "Flour", 100, "g"); err != nil {
+	if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),?,?,?)`, rid, inv, "Flour", 100, "g"); err != nil {
 		t.Fatal(err)
 	}
 	qty := func() float64 {
 		var q float64
-		db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, inv).Scan(&q)
+		db.QueryRow(`SELECT quantity FROM stock_lots WHERE id=?`, inv).Scan(&q)
 		return q
 	}
 	if w := call(t, mux, "POST", "/api/meals", fmt.Sprintf(`{"recipe_id":%d,"servings_made":4}`, rid)); w.Code >= 300 {
@@ -51,7 +51,7 @@ func TestAddToShoppingListScaling(t *testing.T) {
 		if c.have > 0 {
 			inv = insertLot(t, db, "Rice", c.have, "g", "", "")
 		}
-		if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`, rid, inv, "Rice", 400, "g"); err != nil {
+		if _, err := db.Exec(`INSERT INTO recipe_ingredients (recipe_id,product_id,name,quantity,unit) VALUES (?,(SELECT product_id FROM stock_lots WHERE id=?),?,?,?)`, rid, inv, "Rice", 400, "g"); err != nil {
 			t.Fatal(err)
 		}
 		w := call(t, mux, "POST", fmt.Sprintf("/api/recipes/%d/add-to-shopping-list%s", rid, c.query), "")

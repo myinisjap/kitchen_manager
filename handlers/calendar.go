@@ -268,7 +268,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		created, merged := 0, 0
 		for _, n := range needs {
 			mr, err := services.MergeIntoShoppingList(tx, services.ListAddition{
-				InventoryID: n.InventoryID, Name: n.Name, Unit: n.Unit, Quantity: n.QuantityNeeded,
+				ProductID: n.ProductID, Name: n.Name, Unit: n.Unit, Quantity: n.QuantityNeeded,
 				Source: "calendar", Ref: startStr,
 				Label: "Week of " + startStr + ": " + strings.Join(n.Recipes, ", "),
 				Mode:  services.MergeReplace,
@@ -283,7 +283,7 @@ func RegisterCalendar(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				merged++
 			}
 			items = append(items, map[string]any{
-				"id": mr.ShoppingID, "inventory_id": n.InventoryID, "name": n.Name,
+				"id": mr.ShoppingID, "product_id": n.ProductID, "name": n.Name,
 				"quantity_needed": n.QuantityNeeded, "unit": n.Unit,
 				"checked": false, "source": "calendar", "merged": !mr.Created,
 				"total_quantity": mr.Quantity, "total_unit": mr.Unit,
