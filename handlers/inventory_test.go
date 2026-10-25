@@ -985,15 +985,13 @@ func TestExpiryFirstDeductionCascade(t *testing.T) {
 
 	// Patch id2 qty to 0 — cascade deducts from earliest expiry first (id1), then id2.
 	patchURL := "/api/inventory/" + strconv.FormatInt(id2, 10)
-	req := httptest.NewRequest(http.MethodPatch, patchURL, bytes.NewBufferString(`{"quantity":0}`))
+	req := httptest.NewRequest(http.MethodPost, patchURL+"/deduct", bytes.NewBufferString(`{"quantity":3}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
 	// Deduction of id2 (qty=3, newQty=0, deduct=3):
 	// Cascade order: id1 (exp 2026-05-01), id2 (exp 2026-06-01), id3 (no exp).
-	// id1 has 5 >= 3 → partial deduct: id1 becomes 5-3=2. id2 untouched by cascade... wait.
-	// Actually cascade deducts from earliest first: id1 qty=5, deduct=3 → id1 becomes 2, done.
 	// id2 and id3 unchanged.
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -1016,7 +1014,7 @@ func TestExpiryFirstDeductionCascade(t *testing.T) {
 
 	// Now deduct the remaining 2 from id1 — cascade: id1(2) fully consumed → deleted, id2 untouched.
 	patchURL1 := "/api/inventory/" + strconv.FormatInt(id1, 10)
-	req2 := httptest.NewRequest(http.MethodPatch, patchURL1, bytes.NewBufferString(`{"quantity":0}`))
+	req2 := httptest.NewRequest(http.MethodPost, patchURL1+"/deduct", bytes.NewBufferString(`{"quantity":2}`))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	mux.ServeHTTP(w2, req2)
@@ -1429,7 +1427,7 @@ func TestDeductWithLocationID(t *testing.T) {
 	pantryID := int64(pantryItem["id"].(float64))
 
 	// PATCH the Fridge row with quantity=3 and location_id=fridgeID
-	patchBody := `{"quantity":3,"location_id":` + strconv.FormatInt(fridgeID, 10) + `}`
+	patchBody := `{"quantity":3}`
 	req3 := httptest.NewRequest("PATCH", "/api/inventory/"+strconv.FormatInt(fridgeID, 10), bytes.NewBufferString(patchBody))
 	w3 := httptest.NewRecorder()
 	mux.ServeHTTP(w3, req3)

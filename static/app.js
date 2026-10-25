@@ -715,11 +715,10 @@ function app() {
       const { group, selectedLocationId, qty } = this.deductModal;
       const loc = group.locations.find(l => l.id === selectedLocationId);
       if (!loc || qty <= 0) return;
-      const newQty = Math.max(0, parseFloat((loc.quantity - qty).toFixed(4)));
-      const res = await fetch(this.baseUrl + '/api/inventory/' + selectedLocationId, {
-        method: 'PATCH',
+      const res = await fetch(this.baseUrl + '/api/inventory/' + selectedLocationId + '/deduct', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quantity: newQty, location_id: selectedLocationId }),
+        body: JSON.stringify({ quantity: qty, single_lot: true }),
       });
       if (res.ok) {
         this.showToast(`${group.name}: deducted ${qty} ${group.unit}`);
@@ -735,11 +734,21 @@ function app() {
     async saveItem() {
       if (!this.itemForm.name) return;
       if (this.editingItem) {
-        await fetch(this.baseUrl + '/api/inventory/' + this.editingItem.id, {
+        const payload = { ...this.itemForm };
+        for (const k of ['quantity', 'low_threshold', 'quantity_per_scan', 'unit_cost_cents']) {
+          if (k in payload && (typeof payload[k] !== 'number' || !Number.isFinite(payload[k]))) delete payload[k];
+        }
+        const res = await fetch(this.baseUrl + '/api/inventory/' + this.editingItem.id, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(this.itemForm),
+          body: JSON.stringify(payload),
         });
+        if (!res.ok) {
+          let msg = 'Update failed';
+          try { msg = (await res.json()).error || msg; } catch {}
+          this.showToast(msg, 'error');
+          return;
+        }
         this.showToast('Item updated');
       } else {
         await fetch(this.baseUrl + '/api/inventory/', {
@@ -1343,14 +1352,13 @@ function app() {
         if (!res.ok) { this.showToast('Item not found', 'error'); return; }
         const item = await res.json();
         const scanQty = item.quantity_per_scan > 0 ? item.quantity_per_scan : 1;
-        const newQty = Math.max(0, parseFloat((item.quantity - scanQty).toFixed(4)));
-        const patch = await fetch(this.baseUrl + '/api/inventory/' + item.id + '?source=barcode_remove', {
-          method: 'PATCH',
+        const patch = await fetch(this.baseUrl + '/api/inventory/' + item.id + '/deduct?source=barcode_remove', {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ quantity: newQty }),
+          body: JSON.stringify({ quantity: scanQty }),
         });
         if (patch.ok) {
-          this.showToast(`${item.name}: ${item.quantity} → ${newQty} ${item.unit}`, 'success');
+          this.showToast(`${item.name}: −${scanQty} ${item.preferred_unit || item.unit}`, 'success');
           this.fetchInventory();
         } else {
           this.showToast('Update failed', 'error');

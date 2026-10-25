@@ -107,7 +107,7 @@ func TestDeductEmptyLotFoldsIntoSibling(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := call(t, mux, http.MethodPatch, "/api/inventory/"+strconv.FormatInt(first, 10)+"?source=manual", `{"quantity":0,"location_id":`+strconv.FormatInt(first, 10)+`}`)
+	w := call(t, mux, http.MethodPatch, "/api/inventory/"+strconv.FormatInt(first, 10)+"?source=manual", `{"quantity":0}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -182,5 +182,73 @@ func TestMergeLinkedItem(t *testing.T) {
 	}
 	if got := ingredientInventoryID(t, db, recipeID); !got.Valid || got.Int64 != target {
 		t.Errorf("expected recipe to relink to merge target %d, got %+v", target, got)
+	}
+}
+
+func TestPatchTargetsOnlyThatLot(t *testing.T) {
+	db := testutil.NewDB(t)
+	mux := http.NewServeMux()
+	handlers.RegisterInventory(mux, db)
+	a := insertLot(t, db, "milk", 5, "L", "2026-05-01", "")
+	b := insertLot(t, db, "milk", 3, "L", "2026-06-01", "")
+	w := call(t, mux, http.MethodPatch, "/api/inventory/"+strconv.FormatInt(b, 10), `{"quantity":1}`)
+	if w.Code != 200 {
+		t.Fatalf("got %d %s", w.Code, w.Body)
+	}
+	var qa, qb float64
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, a).Scan(&qa)
+	db.QueryRow(`SELECT quantity FROM inventory WHERE id=?`, b).Scan(&qb)
+	if qa != 5 || qb != 1 {
+		t.Fatalf("a=%v b=%v", qa, qb)
+	}
+	var ct string
+	var before, after float64
+	if err := db.QueryRow(`SELECT change_type, quantity_before, quantity_after FROM inventory_history WHERE inventory_id=?`, b).Scan(&ct, &before, &after); err != nil {
+		t.Fatal(err)
+	}
+	if ct != "deduct" || before != 3 || after != 1 {
+		t.Fatalf("history %s %v %v", ct, before, after)
+	}
+}
+
+func TestPatchMixedFieldsAllApplied(t *testing.T) {
+	db := testutil.NewDB(t)
+	mux := http.NewServeMux()
+	handlers.RegisterInventory(mux, db)
+	id := insertLot(t, db, "rice", 5, "kg", "", "")
+	w := call(t, mux, http.MethodPatch, "/api/inventory/"+strconv.FormatInt(id, 10),
+		`{"quantity":1,"location":"freezer","expiration_date":"2026-09-09","barcode":"X1","quantity_per_scan":2,"unit_cost_cents":150}`)
+	if w.Code != 200 {
+		t.Fatalf("got %d %s", w.Code, w.Body)
+	}
+	var q, qps float64
+	var loc, exp, bc string
+	var cost int64
+	db.QueryRow(`SELECT quantity,location,expiration_date,barcode,quantity_per_scan,unit_cost_cents FROM inventory WHERE id=?`, id).Scan(&q, &loc, &exp, &bc, &qps, &cost)
+	if q != 1 || loc != "freezer" || exp != "2026-09-09" || bc != "X1" || qps != 2 || cost != 150 {
+		t.Fatalf("got %v %s %s %s %v %d", q, loc, exp, bc, qps, cost)
+	}
+}
+
+func TestPatchRejectsWrongTypes(t *testing.T) {
+	db := testutil.NewDB(t)
+	mux := http.NewServeMux()
+	handlers.RegisterInventory(mux, db)
+	id := insertLot(t, db, "rice", 5, "kg", "", "")
+	u := "/api/inventory/" + strconv.FormatInt(id, 10)
+	for _, body := range []string{`{"quantity":"5"}`, `{"unit_cost_cents":"abc"}`, `{"low_threshold":"1"}`, `{"location":"x","quantity":"5"}`} {
+		if w := call(t, mux, http.MethodPatch, u, body); w.Code != 400 {
+			t.Errorf("%s: got %d", body, w.Code)
+		}
+	}
+	var typ string
+	var q float64
+	var loc string
+	db.QueryRow(`SELECT typeof(quantity), quantity, location FROM inventory WHERE id=?`, id).Scan(&typ, &q, &loc)
+	if typ != "real" || q != 5 || loc == "x" {
+		t.Fatalf("changed: %s %v %s", typ, q, loc)
+	}
+	if w := call(t, mux, http.MethodPatch, "/api/inventory/99999", `{"quantity":1}`); w.Code != 404 {
+		t.Errorf("missing: %d", w.Code)
 	}
 }
