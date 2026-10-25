@@ -16,6 +16,8 @@ func newAllMux(t *testing.T) (*http.ServeMux, *sql.DB) {
 	db := testutil.NewDB(t)
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db)
+	handlers.RegisterProducts(mux, db)
+	handlers.RegisterHistory(mux, db)
 	handlers.RegisterShopping(mux, db)
 	handlers.RegisterRecipes(mux, db)
 	handlers.RegisterMeals(mux, db)
@@ -248,7 +250,7 @@ func TestDeductCascadesAcrossProductLotsAndLeavesStub(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	m := decodeMap(t, w.Body.Bytes())
-	if m["deducted"].(float64) != 200 || m["quantity"].(float64) != 0 || int64(m["product_id"].(float64)) != pid {
+	if m["id"].(float64) != 0 || m["deducted"].(float64) != 200 || m["quantity"].(float64) != 0 || int64(m["product_id"].(float64)) != pid {
 		t.Fatalf("%v", m)
 	}
 	if countRows(t, db, `SELECT COUNT(*) FROM products WHERE id=?`, pid) != 1 {

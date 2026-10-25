@@ -42,20 +42,69 @@ func LogHistory(db *sql.DB, tx *sql.Tx, p LogHistoryParams) error {
 	return err
 }
 
-// RegisterHistory registers the three read endpoints for inventory history.
+const historyCols = `id, inventory_id, product_id, item_name, changed_at, COALESCE(changed_by,''), change_type,
+			       quantity_before, quantity_after, unit, COALESCE(source,''), recipe_id`
+
+// scanHistoryRows reads rows selected with historyCols into the API shape.
+func scanHistoryRows(rows *sql.Rows) ([]map[string]any, error) {
+	items := []map[string]any{}
+	for rows.Next() {
+		var id, inventoryID int64
+		var itemName, changedAt, changedBy, changeType, unit, source string
+		var qBefore, qAfter sql.NullFloat64
+		var recipeID, productID sql.NullInt64
+		if err := rows.Scan(&id, &inventoryID, &productID, &itemName, &changedAt, &changedBy, &changeType,
+			&qBefore, &qAfter, &unit, &source, &recipeID); err != nil {
+			return nil, err
+		}
+		row := map[string]any{
+			"id":              id,
+			"inventory_id":    inventoryID,
+			"product_id":      nil,
+			"item_name":       itemName,
+			"changed_at":      changedAt,
+			"changed_by":      changedBy,
+			"change_type":     changeType,
+			"unit":            unit,
+			"source":          source,
+			"quantity_before": nil,
+			"quantity_after":  nil,
+			"recipe_id":       nil,
+		}
+		if productID.Valid {
+			row["product_id"] = productID.Int64
+		}
+		if qBefore.Valid {
+			row["quantity_before"] = qBefore.Float64
+		}
+		if qAfter.Valid {
+			row["quantity_after"] = qAfter.Float64
+		}
+		if recipeID.Valid {
+			row["recipe_id"] = recipeID.Int64
+		}
+		items = append(items, row)
+	}
+	return items, rows.Err()
+}
+
+func historyLimit(r *http.Request) int {
+	limit := 50
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 && v <= 200 {
+			limit = v
+		}
+	}
+	return limit
+}
+
+// RegisterHistory registers the read endpoints for inventory history.
 func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 	// GET /api/history - paginated activity log
 	mux.HandleFunc("GET /api/history", func(w http.ResponseWriter, r *http.Request) {
-		limitStr := r.URL.Query().Get("limit")
-		offsetStr := r.URL.Query().Get("offset")
-		limit := 50
+		limit := historyLimit(r)
 		offset := 0
-		if limitStr != "" {
-			if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 200 {
-				limit = v
-			}
-		}
-		if offsetStr != "" {
+		if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
 			if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
 				offset = v
 			}
@@ -67,9 +116,7 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 
-		rows, err := db.Query(`
-			SELECT id, inventory_id, item_name, changed_at, COALESCE(changed_by,''), change_type,
-			       quantity_before, quantity_after, unit, COALESCE(source,''), recipe_id
+		rows, err := db.Query(`SELECT `+historyCols+`
 			FROM inventory_history
 			ORDER BY changed_at DESC
 			LIMIT ? OFFSET ?`, limit, offset)
@@ -78,127 +125,61 @@ func RegisterHistory(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer rows.Close()
-
-		var items []map[string]any
-		for rows.Next() {
-			var id, inventoryID int64
-			var itemName, changedAt, changedBy, changeType, unit, source string
-			var qBefore, qAfter sql.NullFloat64
-			var recipeID sql.NullInt64
-			if err := rows.Scan(&id, &inventoryID, &itemName, &changedAt, &changedBy, &changeType,
-				&qBefore, &qAfter, &unit, &source, &recipeID); err != nil {
-				WriteServerError(w, r, err)
-				return
-			}
-			row := map[string]any{
-				"id":           id,
-				"inventory_id": inventoryID,
-				"item_name":    itemName,
-				"changed_at":   changedAt,
-				"changed_by":   changedBy,
-				"change_type":  changeType,
-				"unit":         unit,
-				"source":       source,
-			}
-			if qBefore.Valid {
-				row["quantity_before"] = qBefore.Float64
-			} else {
-				row["quantity_before"] = nil
-			}
-			if qAfter.Valid {
-				row["quantity_after"] = qAfter.Float64
-			} else {
-				row["quantity_after"] = nil
-			}
-			if recipeID.Valid {
-				row["recipe_id"] = recipeID.Int64
-			} else {
-				row["recipe_id"] = nil
-			}
-			items = append(items, row)
-		}
-		if err := rows.Err(); err != nil {
+		items, err := scanHistoryRows(rows)
+		if err != nil {
 			WriteServerError(w, r, err)
 			return
-		}
-		if items == nil {
-			items = []map[string]any{}
 		}
 		WriteJSON(w, http.StatusOK, map[string]any{"total": total, "rows": items})
 	})
 
-	// GET /api/history/item/{id} - history for a single inventory item
+	// GET /api/history/item/{id} - history for a single stock lot
 	mux.HandleFunc("GET /api/history/item/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := pathIDFromPattern(r, "id")
 		if !ok {
 			WriteError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		limitStr := r.URL.Query().Get("limit")
-		limit := 50
-		if limitStr != "" {
-			if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 200 {
-				limit = v
-			}
-		}
-
-		rows, err := db.Query(`
-			SELECT id, inventory_id, item_name, changed_at, COALESCE(changed_by,''), change_type,
-			       quantity_before, quantity_after, unit, COALESCE(source,''), recipe_id
+		rows, err := db.Query(`SELECT `+historyCols+`
 			FROM inventory_history
 			WHERE inventory_id = ?
 			ORDER BY changed_at DESC
-			LIMIT ?`, id, limit)
+			LIMIT ?`, id, historyLimit(r))
 		if err != nil {
 			WriteServerError(w, r, err)
 			return
 		}
 		defer rows.Close()
-
-		var items []map[string]any
-		for rows.Next() {
-			var hid, inventoryID int64
-			var itemName, changedAt, changedBy, changeType, unit, source string
-			var qBefore, qAfter sql.NullFloat64
-			var recipeID sql.NullInt64
-			if err := rows.Scan(&hid, &inventoryID, &itemName, &changedAt, &changedBy, &changeType,
-				&qBefore, &qAfter, &unit, &source, &recipeID); err != nil {
-				WriteServerError(w, r, err)
-				return
-			}
-			row := map[string]any{
-				"id":           hid,
-				"inventory_id": inventoryID,
-				"item_name":    itemName,
-				"changed_at":   changedAt,
-				"changed_by":   changedBy,
-				"change_type":  changeType,
-				"unit":         unit,
-				"source":       source,
-			}
-			if qBefore.Valid {
-				row["quantity_before"] = qBefore.Float64
-			} else {
-				row["quantity_before"] = nil
-			}
-			if qAfter.Valid {
-				row["quantity_after"] = qAfter.Float64
-			} else {
-				row["quantity_after"] = nil
-			}
-			if recipeID.Valid {
-				row["recipe_id"] = recipeID.Int64
-			} else {
-				row["recipe_id"] = nil
-			}
-			items = append(items, row)
-		}
-		if err := rows.Err(); err != nil {
+		items, err := scanHistoryRows(rows)
+		if err != nil {
 			WriteServerError(w, r, err)
 			return
 		}
-		if items == nil {
-			items = []map[string]any{}
+		WriteJSON(w, http.StatusOK, items)
+	})
+
+	// GET /api/history/product/{id} - history across all lots of a product.
+	// History outlives products, so an unknown id yields an empty list.
+	mux.HandleFunc("GET /api/history/product/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, ok := pathIDFromPattern(r, "id")
+		if !ok {
+			WriteError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		rows, err := db.Query(`SELECT `+historyCols+`
+			FROM inventory_history
+			WHERE product_id = ?
+			ORDER BY changed_at DESC, id DESC
+			LIMIT ?`, id, historyLimit(r))
+		if err != nil {
+			WriteServerError(w, r, err)
+			return
+		}
+		defer rows.Close()
+		items, err := scanHistoryRows(rows)
+		if err != nil {
+			WriteServerError(w, r, err)
+			return
 		}
 		WriteJSON(w, http.StatusOK, items)
 	})

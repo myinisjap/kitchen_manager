@@ -120,10 +120,32 @@
 
       <!-- Item list -->
       <div class="space-y-2">
-        <template x-for="group in inventoryItems" :key="group.name + '|' + group.unit">
+        <template x-for="group in inventoryItems" :key="group.product_id">
           <div x-data="{ expanded: false }" class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border dark:border-gray-700">
 
-            <!-- Single-location: render exactly as before -->
+            <!-- Out of stock: product with no lots -->
+<template x-if="group.locations.length === 0">
+  <div class="p-3 flex items-start justify-between">
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-2">
+        <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="group.name"></span>
+        <span class="text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded">Out of stock</span>
+        <template x-if="group.below_par">
+          <span class="text-xs bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">Low</span>
+        </template>
+      </div>
+      <template x-if="group.par_level > 0">
+        <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Par: <span x-text="group.par_level"></span> <span x-text="group.par_unit"></span></div>
+      </template>
+    </div>
+    <div class="flex gap-2 ml-2">
+      <button @click="addStockToProduct(group)" class="text-blue-600 text-sm font-medium">+ Add</button>
+      <button @click="deleteProduct(group)" class="text-red-500 text-sm">✕</button>
+    </div>
+  </div>
+</template>
+
+<!-- Single-location: render exactly as before -->
             <template x-if="group.locations.length === 1">
               <div>
                 <div class="p-3 flex items-start justify-between">
@@ -135,7 +157,7 @@
                       </template>
                     </div>
                     <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                      <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span>
+                      <span x-text="group.locations[0].quantity"></span> <span x-text="group.locations[0].unit || group.unit"></span><template x-if="group.locations[0].unit_mismatch"><span class="text-xs text-amber-600" title="Unit cannot be converted to the product unit, so this lot is not counted in the total"> (not counted)</span></template>
                       &bull; <span x-text="group.locations[0].location || 'No location'"></span>
                       <template x-if="group.par_level > 0"><span> &bull; Par: <span x-text="group.par_level"></span> <span x-text="group.par_unit"></span></span></template>
                       <template x-if="group.locations[0].expiration_date">
@@ -683,7 +705,7 @@
               <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Location</label>
               <select x-model.number="deductModal.selectedLocationId" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
                 <template x-for="loc in deductModal.group.locations" :key="loc.id">
-                  <option :value="loc.id" x-text="(loc.location || 'No location') + ' · ' + loc.quantity + ' ' + deductModal.group.unit + (loc.expiration_date ? ' · exp ' + loc.expiration_date : '')"></option>
+                  <option :value="loc.id" x-text="(loc.location || 'No location') + ' · ' + loc.quantity + ' ' + (loc.unit || deductModal.group.unit) + (loc.expiration_date ? ' · exp ' + loc.expiration_date : '')"></option>
                 </template>
               </select>
             </div>
