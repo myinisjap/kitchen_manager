@@ -12,6 +12,7 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func ReadJSON(r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, MaxJSONBodyBytes)
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
