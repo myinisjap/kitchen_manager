@@ -58,10 +58,13 @@ func TestIndexHasNoExternalOrInlineCode(t *testing.T) {
 	if regexp.MustCompile(`(?is)<script[^>]*>\s*[^<\s][^<]*</script>`).MatchString(s) {
 		t.Error("index.html has an inline script (blocked by CSP)")
 	}
+	if !strings.Contains(s, `<script type="module" src="app.js"></script>`) {
+		t.Error("index.html must load app.js as an ES module")
+	}
 	if strings.Contains(s, "<style") {
 		t.Error("index.html has a <style> block (blocked by CSP)")
 	}
-	for _, g := range []string{"static/vendor/alpine-*.min.js", "static/vendor/zxing-*.min.js", "static/app.js", "static/theme-init.js", "static/tailwind.css"} {
+	for _, g := range []string{"static/vendor/alpine-*.min.js", "static/vendor/zxing-*.min.js", "static/app.js", "static/js/api.js", "static/theme-init.js", "static/tailwind.css"} {
 		if m, _ := filepath.Glob(g); len(m) == 0 {
 			t.Errorf("missing %s", g)
 		}
@@ -106,11 +109,23 @@ func TestHealthzDBDown(t *testing.T) {
 // Any fetch with a second argument (method/body) must go through apiFetch,
 // whose own inner fetch is the only allowed exception.
 func TestMutatingFetchesUseWrapper(t *testing.T) {
-	b, err := os.ReadFile("static/app.js")
-	if err != nil {
-		t.Fatal(err)
+	files := []string{"static/app.js"}
+	mods, _ := filepath.Glob("static/js/*.js")
+	files = append(files, mods...)
+	var found []string
+	for _, file := range files {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found = append(found, fetchesWithOptions(string(b), file)...)
 	}
-	src := string(b)
+	if len(found) != 1 || !strings.HasPrefix(found[0], "fetch(this.baseUrl + path, opts)") {
+		t.Fatalf("only apiFetch may call fetch with options; found: %v", found)
+	}
+}
+
+func fetchesWithOptions(src, file string) []string {
 	var found []string
 	for i := 0; i < len(src); {
 		j := strings.Index(src[i:], "fetch(")
@@ -146,12 +161,10 @@ func TestMutatingFetchesUseWrapper(t *testing.T) {
 		}
 		if hasComma {
 			line := strings.Count(src[:start], "\n") + 1
-			found = append(found, src[start:start+len("fetch(this.baseUrl + path, opts)")]+" @line "+strconv.Itoa(line))
+			found = append(found, src[start:start+len("fetch(this.baseUrl + path, opts)")]+" @"+file+":"+strconv.Itoa(line))
 		}
 	}
-	if len(found) != 1 || !strings.HasPrefix(found[0], "fetch(this.baseUrl + path, opts)") {
-		t.Fatalf("only apiFetch may call fetch with options; found: %v", found)
-	}
+	return found
 }
 
 func TestPWAManifest(t *testing.T) {
@@ -242,6 +255,19 @@ func TestServiceWorkerShell(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join("static", p)); err != nil {
 			t.Errorf("SHELL entry missing: %s", p)
+		}
+	}
+	inShell := map[string]bool{}
+	for _, e := range entries {
+		inShell[e[1]] = true
+	}
+	mods, _ := filepath.Glob("static/js/*.js")
+	if len(mods) == 0 {
+		t.Error("no ES modules found in static/js")
+	}
+	for _, f := range mods {
+		if !inShell["js/"+filepath.Base(f)] {
+			t.Errorf("SHELL must list module js/%s", filepath.Base(f))
 		}
 	}
 	for _, bad := range []string{"'/api/", "/kitchen-manager"} {

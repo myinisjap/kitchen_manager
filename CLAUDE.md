@@ -26,7 +26,7 @@ go test ./handlers/
 go test -v -run TestGetInventoryItemByBarcode ./handlers/
 ```
 
-No Makefile. Frontend has no runtime build step: Alpine and ZXing are vendored in `static/vendor/` (see its README) and Tailwind CSS is pre-built and committed as `static/tailwind.css`. After changing classes in `static/index.html` or `static/app.js`, rebuild: `npx tailwindcss@3.4.19 -c tailwind.config.js -i web/tailwind.input.css -o static/tailwind.css --minify`.
+No Makefile. Frontend has no runtime build step: Alpine and ZXing are vendored in `static/vendor/` (see its README) and Tailwind CSS is pre-built and committed as `static/tailwind.css`. After changing classes in `static/index.html`, `static/app.js` or `static/js/*.js`, rebuild: `npx tailwindcss@3.4.19 -c tailwind.config.js -i web/tailwind.input.css -o static/tailwind.css --minify`.
 
 Tests must build their database with `testutil.NewDB(t)` (`internal/testutil`, real schema via `database.OpenDB(":memory:")`), never a hand-written schema.
 
@@ -94,7 +94,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 **Use-it-up:** `GET /api/recipes/use-it-up` (`services/useitup.go`) ranks non-archived recipes by distinct expiring products (quantity>0, expiry ≤ today+`settings.expiry_window_days`, 1..365, default 7, `?days=` overrides) matched by ingredient name or linked lot name, case-insensitively; `/api/inventory/expiring` uses the same window.
 - `deploy/` — Dockerfile, docker-compose.yml (Traefik reverse proxy, not Caddy)
   Do not add a headless-browser renderer (e.g. Splash) to the compose network; it was removed for security (it could reach app:8080 bypassing forward-auth). Recipe URL import is a direct SSRF-safe fetch (`handlers/safefetch.go`).
-- `static/index.html` — frontend markup; logic in `static/app.js`, dark-mode bootstrap in `static/theme-init.js`, styles in generated `static/tailwind.css`, third-party JS in `static/vendor/`. No inline scripts/styles (CSP)
+- `static/index.html` — frontend markup; logic is native ES modules (no bundler): `static/app.js` is the entry (core state, init, tabs, WebSocket; composes the parts and sets `window.app`) and `static/js/{api,inventory,scanner,shopping,recipes,calendar,meals}.js` each export a factory returning state+methods. Parts are merged by `compose` (copies property descriptors so getters survive; duplicate keys throw). Don't use object spread to merge, and add new modules to the SW `SHELL`. Dark-mode bootstrap in `static/theme-init.js`, styles in generated `static/tailwind.css`, third-party JS in `static/vendor/`. No inline scripts/styles (CSP)
 
 **Request flow:** Frontend → Handler → Service (if needed) → Raw SQL → SQLite (`kitchen.db`)
 
@@ -124,9 +124,9 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **Testing:** Tests use in-memory SQLite (not mocks). tests build the schema via `testutil.NewDB` and add stock with `testutil.AddLot`; `units/units_test.go` tests conversion logic directly.
 
-**Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units). Every mutating request (POST/PUT/PATCH/DELETE) must use `apiFetch(path, opts, {errorPrefix, onError})` in `static/app.js`. It shows an error toast with the server's `error` message on non-2xx or network failure and returns null, so callers must bail out without updating state. `TestMutatingFetchesUseWrapper` enforces this.
+**Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units). Every mutating request (POST/PUT/PATCH/DELETE) must use `apiFetch(path, opts, {errorPrefix, onError})` (defined in `static/js/api.js`). It shows an error toast with the server's `error` message on non-2xx or network failure and returns null, so callers must bail out without updating state. `TestMutatingFetchesUseWrapper` enforces this by scanning `static/app.js` and `static/js/*.js`.
 
-**PWA / offline:** `static/sw.js`, `static/manifest.json` and `static/icons/` make the app installable. The SW caches only the app shell (`SHELL` list, network-first) and `GET api/shopping/`; all other API calls are network only. Bump `CACHE` in `sw.js` when the shell list or caching logic changes, and update `SHELL` when vendor filenames change (`TestServiceWorkerShell` enforces existence). All PWA URLs are relative or built from `basePath` (app runs at `/` or `/kitchen-manager`). Offline shopping check-offs are queued in localStorage (`km:<basePath>:pendingChecks`) and flushed on `online`, WS reconnect and init, via `apiFetch`'s `onNetworkError` option. Logout clears the SW caches and the queue.
+**PWA / offline:** `static/sw.js`, `static/manifest.json` and `static/icons/` make the app installable. The SW caches only the app shell (`SHELL` list, network-first) and `GET api/shopping/`; all other API calls are network only. Bump `CACHE` in `sw.js` when the shell list or caching logic changes, and update `SHELL` when vendor filenames change (`TestServiceWorkerShell` enforces existence, and that `SHELL` lists every `static/js/*.js` module). All PWA URLs are relative or built from `basePath` (app runs at `/` or `/kitchen-manager`). Offline shopping check-offs are queued in localStorage (`km:<basePath>:pendingChecks`) and flushed on `online`, WS reconnect and init, via `apiFetch`'s `onNetworkError` option. Logout clears the SW caches and the queue.
 
 **In-app OAuth (`OAUTH_ENABLED`):** optional second layer behind Traefik forward-auth. Unauthenticated HTML requests redirect to `BASE_URL/auth/login`; `/api/*` and `/ws` get 401 JSON; session token is renewed on login.
 
