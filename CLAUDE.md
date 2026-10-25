@@ -62,6 +62,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml down && docker compo
 | `DB_PATH` | `./kitchen.db` | SQLite file path |
 | `SELF_SIGNED_TLS` | unset | Set to `true` to serve self-signed HTTPS on :8443 |
 | `OAUTH_ENABLED` | unset | Set to `true` to require Google OAuth |
+| `TRUST_FORWARDED_USER` | unset | Set to `true` only when the app is reachable solely through Traefik forward-auth (which must forward `X-Forwarded-User`); the header then becomes the user identity (history `changed_by`, `/api/me`). Leave unset otherwise: the header is spoofable. OAuth session email takes precedence. |
 | `OAUTH_ALLOWED_EMAILS` | — | Comma-separated email whitelist |
 | `GOOGLE_CLIENT_ID` | — | Google Cloud OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | — | Google Cloud OAuth client secret |

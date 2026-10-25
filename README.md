@@ -182,6 +182,7 @@ All settings go in your `.env` file:
 | `SELF_SIGNED_TLS` | — | Set to `true` to serve HTTPS on port 8443 (needed for phone barcode scanning) |
 | `OAUTH_ENABLED` | — | Set to `true` to require Google login |
 | `OAUTH_ALLOWED_EMAILS` | — | Comma-separated list of emails allowed to log in |
+| `TRUST_FORWARDED_USER` | — | Set to `true` only if the app is reachable solely via Traefik forward-auth; trusts `X-Forwarded-User` for "changed by" history |
 | `GOOGLE_CLIENT_ID` | — | From Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | — | From Google Cloud Console |
 | `SESSION_SECRET` | — | Random string for securing login cookies (`openssl rand -hex 32`) |
