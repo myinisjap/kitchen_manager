@@ -59,7 +59,7 @@ You'll need [Docker](https://docs.docker.com/get-docker/) installed.
 ### 1. Download the files
 
 ```bash
-git clone https://github.com/jpierce42/kitchen_manager
+git clone https://github.com/myinisjap/kitchen_manager
 cd kitchen_manager
 ```
 
