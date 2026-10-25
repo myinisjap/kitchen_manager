@@ -118,7 +118,7 @@ func putAwayShoppingItem(db *sql.DB, tx *sql.Tx, shoppingID int64, o putAwayOver
 	if !found {
 		location = ""
 	}
-	if o.Location != nil {
+	if o.Location != nil && *o.Location != "" { // blank means "use the product's location"
 		location = *o.Location
 	}
 

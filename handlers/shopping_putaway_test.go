@@ -212,3 +212,17 @@ func TestShoppingCreateStillWorks(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
+
+func TestBoughtBlankLocationUsesLotLocation(t *testing.T) {
+	mux, db := newSchemaMux(t)
+	lot := insertLot(t, db, "milk", 1, "L", "", "")
+	db.Exec(`UPDATE inventory SET location='fridge' WHERE id=?`, lot)
+	sid := insertShopping(t, db, &lot, "milk", 2, "L", false)
+	code, m := bought(t, mux, sid, `{"location":"","expiration_date":""}`)
+	if code != 200 || m["created"] != false {
+		t.Fatal(code, m)
+	}
+	if qtyOf(t, db, lot) != 3 || countRows(t, db, `SELECT COUNT(*) FROM inventory`) != 1 {
+		t.Fatal("blank location created a new lot")
+	}
+}
