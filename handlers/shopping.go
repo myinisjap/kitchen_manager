@@ -19,6 +19,13 @@ func RegisterShopping(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 	}
 
+	registerPutAway(mux, db, func() {
+		if wsHub != nil {
+			wsHub.Broadcast("inventory_updated")
+			wsHub.Broadcast("shopping_updated")
+		}
+	})
+
 	mux.HandleFunc("POST /api/shopping/generate-from-thresholds", func(w http.ResponseWriter, r *http.Request) {
 		added, err := services.GenerateFromThresholds(db)
 		if err != nil {

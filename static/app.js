@@ -66,6 +66,8 @@ function app() {
     // Shopping
     shoppingItems: [],
     shoppingForm: { name: '', quantity_needed: 1, unit: '' },
+    putAwayForm: { id: null, name: '', quantity: 1, unit: '', location: '', expiration_date: '' },
+    putAwayBatch: [],
 
     // Receipt import
     receiptFile: null,
@@ -778,6 +780,57 @@ function app() {
       this.modal = null;
       await this.fetchShoppingList();
       this.showToast('Added to list');
+    },
+
+    openBought(item) {
+      this.putAwayForm = { id: item.id, name: item.name, quantity: item.quantity_needed, unit: item.unit || '', location: '', expiration_date: '' };
+      this.modal = 'bought';
+    },
+
+    async saveBought() {
+      const f = this.putAwayForm;
+      const res = await fetch(this.baseUrl + '/api/shopping/' + f.id + '/bought', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quantity: f.quantity, unit: f.unit, location: f.location, expiration_date: f.expiration_date }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        this.showToast(err.error || 'Could not add to pantry');
+        return;
+      }
+      this.modal = null;
+      await Promise.all([this.fetchShoppingList(), this.fetchInventory()]);
+      this.showToast('Added to pantry');
+    },
+
+    openPutAwayChecked() {
+      const checked = this.shoppingItems.filter(i => i.checked);
+      if (checked.length === 0) {
+        this.showToast('No checked items');
+        return;
+      }
+      this.putAwayBatch = checked.map(i => ({ id: i.id, name: i.name, quantity: i.quantity_needed, unit: i.unit || '', location: '', expiration_date: '' }));
+      this.modal = 'putAway';
+    },
+
+    async savePutAway() {
+      const res = await fetch(this.baseUrl + '/api/shopping/put-away', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: this.putAwayBatch.map(r => ({ id: r.id, quantity: r.quantity, unit: r.unit, location: r.location, expiration_date: r.expiration_date })) }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        this.showToast(err.error || 'Could not put away items');
+        return;
+      }
+      const data = await res.json();
+      this.modal = null;
+      await Promise.all([this.fetchShoppingList(), this.fetchInventory()]);
+      let msg = `Put away ${data.put_away.length} item(s)`;
+      if (data.skipped.length) msg += '; skipped: ' + data.skipped.map(s => s.name + ' (' + s.reason + ')').join(', ');
+      this.showToast(msg);
     },
 
     async toggleShoppingItem(item) {
