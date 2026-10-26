@@ -150,9 +150,10 @@ export function inventory() {
 
     openAddItem() {
       this.editingItem = null;
-      this.itemForm = { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 };
+      this.itemForm = { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', storage_unit_id: null, expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 };
       this.suggestions = [];
       this.showSuggestions = false;
+      this.syncPickerRoom();
       this.modal = 'item';
     },
 
@@ -166,7 +167,12 @@ export function inventory() {
         locOrItem = await res.json();
       }
       this.editingItem = locOrItem;
-      this.itemForm = { ...locOrItem, preferred_unit: locOrItem.preferred_unit || '' };
+      this.itemForm = {
+        ...locOrItem,
+        preferred_unit: locOrItem.preferred_unit || '',
+        storage_unit_id: locOrItem.storage_unit_id ?? null,
+      };
+      this.syncPickerRoom();
       this.modal = 'item';
     },
 

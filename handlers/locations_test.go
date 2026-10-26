@@ -306,3 +306,69 @@ func TestInventoryEndpointsReflectStorageUnit(t *testing.T) {
 		t.Error("unfiled lot should omit storage_unit")
 	}
 }
+
+// Filing a lot has to be reachable through the inventory endpoints the UI
+// already uses, not just by direct SQL.
+func TestInventoryAcceptsStorageUnitID(t *testing.T) {
+	mux, db := locMux(t)
+
+	w := call(t, mux, "POST", "/api/rooms", `{"name":"Kitchen"}`)
+	room := mustJSON[handlers.Room](t, w.Body.Bytes())
+	w = call(t, mux, "POST", fmt.Sprintf("/api/rooms/%d/storage-units", room.ID), `{"name":"Fridge"}`)
+	unit := mustJSON[handlers.StorageUnit](t, w.Body.Bytes())
+
+	// POST files the new lot straight away.
+	w = call(t, mux, "POST", "/api/inventory/",
+		fmt.Sprintf(`{"name":"Milk","quantity":1,"unit":"L","storage_unit_id":%d}`, unit.ID))
+	if w.Code != 200 && w.Code != 201 {
+		t.Fatalf("create filed lot: %d %s", w.Code, w.Body)
+	}
+	created := mustJSON[handlers.Lot](t, w.Body.Bytes())
+	if created.StorageUnitID == nil || *created.StorageUnitID != unit.ID {
+		t.Fatalf("POST storage_unit_id: %v, want %d", created.StorageUnitID, unit.ID)
+	}
+
+	// A bad id is a 400, not a silently stored dangling reference.
+	w = call(t, mux, "POST", "/api/inventory/", `{"name":"Eggs","quantity":6,"unit":"piece","storage_unit_id":9999}`)
+	if w.Code != 400 {
+		t.Errorf("POST bad unit: want 400, got %d %s", w.Code, w.Body)
+	}
+
+	// PATCH moves a lot between units.
+	w = call(t, mux, "POST", fmt.Sprintf("/api/rooms/%d/storage-units", room.ID), `{"name":"Pantry"}`)
+	other := mustJSON[handlers.StorageUnit](t, w.Body.Bytes())
+	w = call(t, mux, "PATCH", fmt.Sprintf("/api/inventory/%d", created.ID),
+		fmt.Sprintf(`{"storage_unit_id":%d}`, other.ID))
+	if w.Code != 200 {
+		t.Fatalf("patch move: %d %s", w.Code, w.Body)
+	}
+	moved := mustJSON[handlers.Lot](t, w.Body.Bytes())
+	if moved.StorageUnitID == nil || *moved.StorageUnitID != other.ID {
+		t.Errorf("after move: %v, want %d", moved.StorageUnitID, other.ID)
+	}
+
+	// Explicit null unfiles it; omitting the key leaves it alone.
+	w = call(t, mux, "PATCH", fmt.Sprintf("/api/inventory/%d", created.ID), `{"storage_unit_id":null}`)
+	if w.Code != 200 {
+		t.Fatalf("patch unfile: %d %s", w.Code, w.Body)
+	}
+	if got := mustJSON[handlers.Lot](t, w.Body.Bytes()); got.StorageUnitID != nil {
+		t.Errorf("explicit null should unfile, got %v", *got.StorageUnitID)
+	}
+	if _, err := db.Exec(`UPDATE stock_lots SET storage_unit_id=? WHERE id=?`, unit.ID, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	w = call(t, mux, "PATCH", fmt.Sprintf("/api/inventory/%d", created.ID), `{"quantity":3}`)
+	if w.Code != 200 {
+		t.Fatalf("patch other field: %d %s", w.Code, w.Body)
+	}
+	if got := mustJSON[handlers.Lot](t, w.Body.Bytes()); got.StorageUnitID == nil || *got.StorageUnitID != unit.ID {
+		t.Errorf("omitted key must leave the link alone, got %v", got.StorageUnitID)
+	}
+
+	// And a bad id on PATCH is likewise rejected.
+	w = call(t, mux, "PATCH", fmt.Sprintf("/api/inventory/%d", created.ID), `{"storage_unit_id":9999}`)
+	if w.Code != 400 {
+		t.Errorf("patch bad unit: want 400, got %d %s", w.Code, w.Body)
+	}
+}

@@ -660,7 +660,36 @@
           </template>
         </select>
       </div>
-      <input x-model="itemForm.location" placeholder="Location (fridge, pantry...)" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
+      <!-- Structured location: room, then one of its storage units. The legacy
+           free-text itemForm.location is still sent unchanged by saveItem, so
+           existing grouped/putaway views keep working. -->
+      <div class="space-y-2">
+        <label class="text-sm text-gray-600 dark:text-gray-300">Location</label>
+        <div class="flex gap-2">
+          <select x-model="pickerRoomId" @change="onPickerRoomChange()"
+                  class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+            <option value="">Room…</option>
+            <template x-for="r in rooms" :key="r.id">
+              <option :value="r.id" x-text="r.name"></option>
+            </template>
+          </select>
+          <select :value="itemForm.storage_unit_id ?? ''" @change="onPickerUnitChange($event.target.value)"
+                  :disabled="!pickerRoomId"
+                  class="flex-1 border rounded-lg px-3 py-2 text-sm disabled:opacity-50 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+            <option value="">Unfiled</option>
+            <template x-for="u in unitsOfRoom(pickerRoomId)" :key="u.id">
+              <option :value="u.id" x-text="u.name"></option>
+            </template>
+          </select>
+        </div>
+        <div class="flex gap-2" x-show="pickerRoomId">
+          <input x-model="newUnitName" @keydown.enter.prevent="addStorageUnitInline()"
+                 placeholder="New storage unit…"
+                 class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
+          <button type="button" @click="addStorageUnitInline()" :disabled="!newUnitName.trim()"
+                  class="px-3 py-2 text-sm rounded-lg bg-blue-600 text-white disabled:opacity-50">Add</button>
+        </div>
+      </div>
       <input x-model="itemForm.expiration_date" type="date" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100" />
       <div class="flex gap-2">
         <label class="text-sm text-gray-600 dark:text-gray-300 self-center">Par level:</label>
