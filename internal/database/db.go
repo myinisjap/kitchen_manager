@@ -57,6 +57,7 @@ var migrations = []migration{
 	{name: "meal_calendar_link_and_slots", up: migrateCalendarLinkAndSlots},
 	{name: "seed_expiry_window_days", up: migrateSeedExpiryWindow},
 	{name: "products_and_stock_lots", disableFK: true, up: migrateProductsAndStockLots},
+	{name: "rooms_and_storage_units", up: migrateRoomsAndStorageUnits},
 }
 
 // LatestVersion is the schema version produced by all known migrations.
