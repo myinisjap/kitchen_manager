@@ -1,6 +1,6 @@
 # Intent: rooms & storage units (structured locations)
 
-Status: **backend rebuilt and merged-ready; frontend picker outstanding.**
+Status: **complete.** Backend in #37, picker and API plumbing in #38.
 Captured 2026-10-25 from an
 uncommitted local implementation (`handlers/locations.go`, 262 lines +
 `handlers/locations_test.go`, 407 lines) that predates main's
@@ -134,29 +134,29 @@ The original suite covered four things; keep these as the contract:
       ambiguity case the original didn't cover.
 - [x] Verify against a copy of production data: all 26 lots keep their links,
       existing units are reused not duplicated, and a second start is a no-op.
-- [ ] **Re-add the location picker to the ES-module frontend (`static/js/`).**
-      Not started — see below.
+- [x] Re-add the location picker to the ES-module frontend
+      (`static/js/locations.js`, composed into `app.js`, precached in `sw.js`).
+- [x] Accept `storage_unit_id` on `POST`/`PATCH /api/inventory` — without this
+      the picker had nothing to save to.
 
-## Outstanding: frontend
+## Frontend
 
-The API is live but nothing in the UI calls it yet, so locations are currently
-only settable through the API. This is deliberately deferred rather than
-half-built: since the original was written the frontend grew grouped inventory
-views, a putaway flow and `recommended_location_id`, so the picker needs to fit
-that rather than being dropped in as the old single-file version did.
+`static/js/locations.js` holds the shared hierarchy, fetched once in `init()`
+and composed into the app object like the other modules. The item modal's old
+free-text input is now two selects (room, then its units) plus an inline
+"new storage unit" field, and `syncPickerRoom()` preselects the room that owns
+the item's current unit when the modal opens.
 
-Scope when picked up:
+`sw.js` must list the module or the PWA breaks offline — there is a test
+(`TestServiceWorkerShell`) that enforces this.
 
-- Fetch `/api/rooms` once into shared state; drive every picker from it.
-- Two selects (room, then its units); preselect from a lot's
-  `storage_unit.room`, which the API already returns for exactly this.
-- Inline "add storage unit" from the picker (POST, then refresh shared state).
-- Show `Unfiled` for a null `storage_unit_id`.
-- Reconcile with the existing grouped/putaway location UI, which still keys off
-  the legacy `location` text.
+### Still legacy
 
-Until then `stock_lots.location` remains the field the UI reads, which is why
-migration 11 keeps it rather than dropping it.
+The grouped inventory view, the location filter and the putaway flow still key
+off the free-text `stock_lots.location`, which is why migration 11 keeps that
+column and `saveItem` still sends it. Migrating those views onto
+`storage_unit_id` is separate work; the two representations coexist for now,
+and nothing regressed.
 
 ## Note on the 415
 

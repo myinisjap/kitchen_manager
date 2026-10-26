@@ -1,7 +1,7 @@
 // Bump CACHE whenever the SHELL list or caching logic changes.
 const CACHE = 'km-v2';
 // Relative entries resolve against this script's URL, so they work under any prefix.
-const SHELL = ['./', 'index.html', 'app.js', 'js/api.js', 'js/inventory.js', 'js/scanner.js', 'js/shopping.js', 'js/recipes.js', 'js/calendar.js', 'js/meals.js', 'theme-init.js', 'tailwind.css', 'vendor/alpine-3.14.9.min.js', 'vendor/zxing-0.19.1.min.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
+const SHELL = ['./', 'index.html', 'app.js', 'js/api.js', 'js/inventory.js', 'js/scanner.js', 'js/shopping.js', 'js/recipes.js', 'js/calendar.js', 'js/meals.js', 'js/locations.js', 'theme-init.js', 'tailwind.css', 'vendor/alpine-3.14.9.min.js', 'vendor/zxing-0.19.1.min.js', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -272,3 +272,14 @@ func listRooms(db *sql.DB) ([]Room, error) {
 func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
+
+// storageUnitExists guards writes that point a lot at a unit: the column is a
+// plain REFERENCES, and SQLite only enforces it when foreign_keys is ON, so a
+// bad id would otherwise be stored silently.
+func storageUnitExists(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, id int64) (bool, error) {
+	var n int
+	err := q.QueryRow(`SELECT COUNT(*) FROM storage_units WHERE id=?`, id).Scan(&n)
+	return n > 0, err
+}

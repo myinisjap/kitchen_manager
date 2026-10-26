@@ -36,6 +36,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			Unit            string  `json:"unit"`
 			PreferredUnit   string  `json:"preferred_unit"`
 			Location        string  `json:"location"`
+			StorageUnitID   *int64  `json:"storage_unit_id"`
 			ExpirationDate  string  `json:"expiration_date"`
 			LowThreshold    float64 `json:"low_threshold"`
 			Barcode         string  `json:"barcode"`
@@ -209,8 +210,19 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			return
 		}
 
-		res, err := tx.Exec(`INSERT INTO stock_lots (product_id,quantity,unit,location,expiration_date,unit_cost_cents) VALUES (?,?,?,?,?,?)`,
-			prod.ID, lotQty, lotUnit, item.Location, item.ExpirationDate, item.UnitCostCents)
+		if item.StorageUnitID != nil {
+			ok, err := storageUnitExists(tx, *item.StorageUnitID)
+			if err != nil {
+				WriteServerError(w, r, err)
+				return
+			}
+			if !ok {
+				WriteError(w, http.StatusBadRequest, "storage unit not found")
+				return
+			}
+		}
+		res, err := tx.Exec(`INSERT INTO stock_lots (product_id,quantity,unit,location,storage_unit_id,expiration_date,unit_cost_cents) VALUES (?,?,?,?,?,?,?)`,
+			prod.ID, lotQty, lotUnit, item.Location, item.StorageUnitID, item.ExpirationDate, item.UnitCostCents)
 		if err != nil {
 			WriteServerError(w, r, err)
 			return
@@ -720,6 +732,27 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		if p.Location != nil {
 			add("location", *p.Location)
+		}
+		if len(p.StorageUnitID) > 0 {
+			if string(p.StorageUnitID) == "null" {
+				add("storage_unit_id", nil) // explicit null: unfile the lot
+			} else {
+				var unitID int64
+				if err := json.Unmarshal(p.StorageUnitID, &unitID); err != nil {
+					WriteError(w, http.StatusBadRequest, "invalid storage_unit_id")
+					return
+				}
+				ok, err := storageUnitExists(tx, unitID)
+				if err != nil {
+					WriteServerError(w, r, err)
+					return
+				}
+				if !ok {
+					WriteError(w, http.StatusBadRequest, "storage unit not found")
+					return
+				}
+				add("storage_unit_id", unitID)
+			}
 		}
 		if p.ExpirationDate != nil {
 			add("expiration_date", *p.ExpirationDate)
@@ -1305,17 +1338,23 @@ func pathIDFromPattern(r *http.Request, param string) (int64, bool) {
 	return id, err == nil
 }
 
-// inventoryPatch: quantity/unit/location/expiration_date/unit_cost_cents edit
-// the lot; the rest edit its product.
+// inventoryPatch: quantity/unit/location/storage_unit_id/expiration_date/
+// unit_cost_cents edit the lot; the rest edit its product.
+//
+// storage_unit_id has three distinct cases: absent (leave alone), null
+// (unfile) and an id (file there).
 type inventoryPatch struct {
-	Name            *string  `json:"name"`
-	Quantity        *float64 `json:"quantity"`
-	Unit            *string  `json:"unit"`
-	Location        *string  `json:"location"`
-	ExpirationDate  *string  `json:"expiration_date"`
-	LowThreshold    *float64 `json:"low_threshold"`
-	Barcode         *string  `json:"barcode"`
-	PreferredUnit   *string  `json:"preferred_unit"`
-	UnitCostCents   *int64   `json:"unit_cost_cents"`
-	QuantityPerScan *float64 `json:"quantity_per_scan"`
+	Name     *string  `json:"name"`
+	Quantity *float64 `json:"quantity"`
+	Unit     *string  `json:"unit"`
+	Location *string  `json:"location"`
+	// RawMessage, not **int64: encoding/json sets a double pointer to nil for
+	// an explicit null, making it indistinguishable from an absent key.
+	StorageUnitID   json.RawMessage `json:"storage_unit_id"`
+	ExpirationDate  *string         `json:"expiration_date"`
+	LowThreshold    *float64        `json:"low_threshold"`
+	Barcode         *string         `json:"barcode"`
+	PreferredUnit   *string         `json:"preferred_unit"`
+	UnitCostCents   *int64          `json:"unit_cost_cents"`
+	QuantityPerScan *float64        `json:"quantity_per_scan"`
 }
