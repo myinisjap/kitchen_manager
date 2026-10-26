@@ -20,9 +20,15 @@ type Lot struct {
 	Quantity        float64  `json:"quantity"`
 	QuantityPerScan float64  `json:"quantity_per_scan"`
 	SKUID           int64    `json:"sku_id,omitempty"`
-	Unit            string   `json:"unit"`
-	UnitCostCents   int64    `json:"unit_cost_cents"`
-	UnitMismatch    *bool    `json:"unit_mismatch,omitempty"` // product view only; emitted even when false
+	// StorageUnit is the structured location, nested so a client can render
+	// "Kitchen › Fridge" without a second lookup. Nil when the lot is unfiled.
+	// StorageUnitID is the flat id for form binding. Location (above) is the
+	// legacy free text, kept as the record of the original string.
+	StorageUnit   *StorageUnit `json:"storage_unit,omitempty"`
+	StorageUnitID *int64       `json:"storage_unit_id"`
+	Unit          string       `json:"unit"`
+	UnitCostCents int64        `json:"unit_cost_cents"`
+	UnitMismatch  *bool        `json:"unit_mismatch,omitempty"` // product view only; emitted even when false
 }
 
 // lotFallback is the minimal lot-like response used when the full lot can't be
@@ -36,16 +42,27 @@ type lotFallback struct {
 }
 
 // lotCols is the canonical lot+product SELECT; keep in sync with scanLot.
-const lotCols = `l.id,p.name,l.quantity,l.unit,l.location,l.expiration_date,p.par_level,p.barcode,p.preferred_unit,l.unit_cost_cents,p.quantity_per_scan,l.product_id`
-const lotFrom = ` FROM stock_lots l JOIN products p ON p.id=l.product_id`
+const lotCols = `l.id,p.name,l.quantity,l.unit,l.location,l.expiration_date,p.par_level,p.barcode,p.preferred_unit,l.unit_cost_cents,p.quantity_per_scan,l.product_id,l.storage_unit_id,u.name,rm.name`
+
+// LEFT JOIN: storage_unit_id is nullable (an unfiled lot is valid).
+const lotFrom = ` FROM stock_lots l JOIN products p ON p.id=l.product_id` +
+	` LEFT JOIN storage_units u ON u.id=l.storage_unit_id` +
+	` LEFT JOIN rooms rm ON rm.id=u.room_id`
 
 type rowScanner interface{ Scan(...any) error }
 
 // scanLot reads a row selected with lotCols.
 func scanLot(row rowScanner) (Lot, error) {
 	var l Lot
+	var unitID sql.NullInt64
+	var unitName, roomName sql.NullString
 	err := row.Scan(&l.ID, &l.Name, &l.Quantity, &l.Unit, &l.Location, &l.ExpirationDate, &l.LowThreshold,
-		&l.Barcode, &l.PreferredUnit, &l.UnitCostCents, &l.QuantityPerScan, &l.ProductID)
+		&l.Barcode, &l.PreferredUnit, &l.UnitCostCents, &l.QuantityPerScan, &l.ProductID,
+		&unitID, &unitName, &roomName)
+	if unitID.Valid {
+		l.StorageUnitID = &unitID.Int64
+		l.StorageUnit = &StorageUnit{ID: unitID.Int64, Name: unitName.String, Room: roomName.String}
+	}
 	return l, err
 }
 

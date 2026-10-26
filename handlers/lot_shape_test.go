@@ -12,8 +12,12 @@ import (
 	"kitchen_manager/internal/testutil"
 )
 
+// storage_unit_id is always present (null when unfiled) so clients can bind a
+// form field unconditionally; storage_unit is omitempty and so only appears on
+// a filed lot, which is why it is not in this base list.
 var baseLotKeys = []string{"barcode", "expiration_date", "id", "location", "low_threshold", "name",
-	"preferred_unit", "product_id", "quantity", "quantity_per_scan", "unit", "unit_cost_cents"}
+	"preferred_unit", "product_id", "quantity", "quantity_per_scan", "storage_unit_id", "unit",
+	"unit_cost_cents"}
 
 func keysOf(t *testing.T, body []byte) []string {
 	t.Helper()
