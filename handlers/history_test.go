@@ -34,7 +34,7 @@ func TestGetHistoryAfterInventoryChange(t *testing.T) {
 	// Create item
 	createW := httptest.NewRecorder()
 	mux.ServeHTTP(createW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"HistItem","quantity":10,"unit":"g","location":"pantry"}`)))
+		bytes.NewBufferString(`{"name":"HistItem","quantity":10,"unit":"g"}`)))
 	if createW.Code != http.StatusCreated {
 		t.Fatalf("create item: want 201, got %d: %s", createW.Code, createW.Body)
 	}
@@ -116,7 +116,7 @@ func TestGetHistoryForItem(t *testing.T) {
 	createItem := func(name string) int {
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/inventory/",
-			bytes.NewBufferString(`{"name":"`+name+`","quantity":10,"unit":"g","location":"pantry"}`)))
+			bytes.NewBufferString(`{"name":"`+name+`","quantity":10,"unit":"g"}`)))
 		var item map[string]any
 		json.NewDecoder(w.Body).Decode(&item)
 		return int(item["id"].(float64))

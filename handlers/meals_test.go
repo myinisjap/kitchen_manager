@@ -48,7 +48,7 @@ func TestLogMealDeductsInventory(t *testing.T) {
 	// Create inventory item via HTTP
 	invW := httptest.NewRecorder()
 	mux.ServeHTTP(invW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"Flour","quantity":10,"unit":"g","location":"pantry"}`)))
+		bytes.NewBufferString(`{"name":"Flour","quantity":10,"unit":"g"}`)))
 	if invW.Code != http.StatusCreated {
 		t.Fatalf("create item: want 201, got %d: %s", invW.Code, invW.Body)
 	}

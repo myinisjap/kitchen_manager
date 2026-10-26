@@ -11,107 +11,38 @@ import (
 	"time"
 
 	"kitchen_manager/handlers"
+	"kitchen_manager/internal/database"
 	_ "modernc.org/sqlite"
 )
 
+// newTestDB builds the real production schema in memory, so tests exercise the
+// same migrations the server runs rather than a hand-maintained copy.
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(`PRAGMA foreign_keys = ON;
-	CREATE TABLE IF NOT EXISTS inventory (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL,
-		quantity REAL NOT NULL DEFAULT 0,
-		unit TEXT NOT NULL DEFAULT '',
-		location TEXT NOT NULL DEFAULT '',
-		expiration_date TEXT NOT NULL DEFAULT '',
-		low_threshold REAL NOT NULL DEFAULT 1,
-		barcode TEXT NOT NULL DEFAULT '',
-		preferred_unit TEXT NOT NULL DEFAULT '',
-		unit_cost_cents INTEGER NOT NULL DEFAULT 0,
-		quantity_per_scan REAL NOT NULL DEFAULT 0
-	);
-	CREATE TABLE IF NOT EXISTS inventory_history (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		inventory_id INTEGER NOT NULL,
-		item_name TEXT NOT NULL DEFAULT '',
-		changed_at TEXT DEFAULT CURRENT_TIMESTAMP,
-		changed_by TEXT DEFAULT 'system',
-		change_type TEXT NOT NULL,
-		quantity_before REAL,
-		quantity_after REAL,
-		unit TEXT NOT NULL DEFAULT '',
-		source TEXT NOT NULL DEFAULT '',
-		recipe_id INTEGER REFERENCES recipes(id)
-	);
-	CREATE TABLE IF NOT EXISTS shopping_list (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		inventory_id INTEGER REFERENCES inventory(id),
-		name TEXT NOT NULL,
-		quantity_needed REAL NOT NULL DEFAULT 1,
-		unit TEXT NOT NULL DEFAULT '',
-		checked INTEGER NOT NULL DEFAULT 0,
-		source TEXT NOT NULL DEFAULT 'manual'
-	);
-	CREATE TABLE IF NOT EXISTS recipes (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL,
-		description TEXT NOT NULL DEFAULT '',
-		instructions TEXT NOT NULL DEFAULT '',
-		tags TEXT NOT NULL DEFAULT '',
-		servings INTEGER NOT NULL DEFAULT 1
-	);
-	CREATE TABLE IF NOT EXISTS recipe_ingredients (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
-		inventory_id INTEGER REFERENCES inventory(id),
-		name TEXT NOT NULL,
-		quantity REAL NOT NULL,
-		unit TEXT NOT NULL DEFAULT ''
-	);
-	CREATE TABLE IF NOT EXISTS meal_calendar (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		date TEXT NOT NULL,
-		meal_slot TEXT NOT NULL DEFAULT 'dinner',
-		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
-		servings INTEGER NOT NULL DEFAULT 1
-	);
-	CREATE TABLE IF NOT EXISTS settings (
-		key TEXT PRIMARY KEY,
-		value TEXT NOT NULL DEFAULT ''
-	);
-	CREATE TABLE IF NOT EXISTS meal_history (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		recipe_id INTEGER NOT NULL REFERENCES recipes(id),
-		recipe_name TEXT NOT NULL DEFAULT '',
-		cooked_at TEXT NOT NULL,
-		servings_made INTEGER NOT NULL DEFAULT 1,
-		total_cost_cents INTEGER,
-		notes TEXT NOT NULL DEFAULT ''
-	);
-	CREATE TABLE IF NOT EXISTS meal_history_ingredients (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		meal_history_id INTEGER NOT NULL REFERENCES meal_history(id),
-		inventory_id INTEGER REFERENCES inventory(id),
-		ingredient_name TEXT NOT NULL DEFAULT '',
-		quantity_used REAL NOT NULL DEFAULT 0,
-		unit TEXT NOT NULL DEFAULT '',
-		cost_cents INTEGER
-	);
-	CREATE TABLE IF NOT EXISTS inventory_skus (
-		id                INTEGER PRIMARY KEY AUTOINCREMENT,
-		inventory_id      INTEGER NOT NULL REFERENCES inventory(id) ON DELETE CASCADE,
-		barcode           TEXT    NOT NULL UNIQUE,
-		quantity_per_scan REAL    NOT NULL DEFAULT 1
-	);`)
+	db, err := database.OpenDB(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+// newStorageUnit creates a room + storage unit and returns the unit's id.
+func newStorageUnit(t *testing.T, db *sql.DB, roomName, unitName string) int64 {
+	t.Helper()
+	if _, err := db.Exec(`INSERT OR IGNORE INTO rooms (name) VALUES (?)`, roomName); err != nil {
+		t.Fatal(err)
+	}
+	var roomID int64
+	if err := db.QueryRow(`SELECT id FROM rooms WHERE name=?`, roomName).Scan(&roomID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := db.Exec(`INSERT INTO storage_units (room_id, name) VALUES (?,?)`, roomID, unitName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := res.LastInsertId()
+	return id
 }
 
 func TestPreferredUnitColumnExists(t *testing.T) {
@@ -142,6 +73,7 @@ func newMux(t *testing.T) (*http.ServeMux, *sql.DB) {
 	db := newTestDB(t)
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db)
+	handlers.RegisterLocations(mux, db)
 	handlers.RegisterShopping(mux, db)
 	handlers.RegisterRecipes(mux, db)
 	handlers.RegisterCalendar(mux, db)
@@ -153,7 +85,7 @@ func newMux(t *testing.T) (*http.ServeMux, *sql.DB) {
 
 func TestCreateInventoryItem(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Milk","quantity":1,"unit":"L","location":"fridge","low_threshold":0.5}`
+	body := `{"name":"Milk","quantity":1,"unit":"L","low_threshold":0.5}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -172,7 +104,7 @@ func TestCreateInventoryItem(t *testing.T) {
 
 func TestListInventoryItems(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Eggs","quantity":12,"unit":"piece","location":"fridge"}`
+	body := `{"name":"Eggs","quantity":12,"unit":"piece"}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -198,7 +130,7 @@ func TestListInventoryItems(t *testing.T) {
 
 func TestUpdateInventoryItem(t *testing.T) {
 	mux, _ := newMux(t)
-	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(`{"name":"Butter","quantity":2,"unit":"oz","location":"fridge"}`))
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(`{"name":"Butter","quantity":2,"unit":"oz"}`))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	var created map[string]any
@@ -221,7 +153,7 @@ func TestUpdateInventoryItem(t *testing.T) {
 
 func TestDeleteInventoryItem(t *testing.T) {
 	mux, _ := newMux(t)
-	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(`{"name":"ToDelete","quantity":1,"unit":"","location":""}`))
+	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(`{"name":"ToDelete","quantity":1,"unit":""}`))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	var created map[string]any
@@ -246,7 +178,7 @@ func TestDeleteInventoryItem(t *testing.T) {
 func TestGetExpiringSoon(t *testing.T) {
 	mux, _ := newMux(t)
 	expirationDate := time.Now().AddDate(0, 0, 3).Format("2006-01-02")
-	body := `{"name":"Yogurt","quantity":1,"unit":"ml","location":"fridge","expiration_date":"` + expirationDate + `"}`
+	body := `{"name":"Yogurt","quantity":1,"unit":"ml","expiration_date":"` + expirationDate + `"}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -359,7 +291,7 @@ func TestClearCheckedShoppingItems(t *testing.T) {
 
 func TestGenerateFromThresholds(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"ThresholdTest","quantity":0.2,"unit":"L","location":"pantry","low_threshold":1.0}`
+	body := `{"name":"ThresholdTest","quantity":0.2,"unit":"L","low_threshold":1.0}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -396,7 +328,7 @@ func TestGenerateFromThresholdsIdempotent(t *testing.T) {
 	mux, _ := newMux(t)
 	// Create item below threshold
 	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"IdempTest","quantity":0.1,"unit":"kg","location":"pantry","low_threshold":1.0}`)))
+		bytes.NewBufferString(`{"name":"IdempTest","quantity":0.1,"unit":"kg","low_threshold":1.0}`)))
 
 	// First call — should add 1
 	w1 := httptest.NewRecorder()
@@ -465,7 +397,7 @@ func TestAddRecipeToShoppingList(t *testing.T) {
 	// Create inventory item with 0 quantity
 	invW := httptest.NewRecorder()
 	mux.ServeHTTP(invW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"RecipeEgg","quantity":0,"unit":"piece","location":"fridge"}`)))
+		bytes.NewBufferString(`{"name":"RecipeEgg","quantity":0,"unit":"piece"}`)))
 	var invItem map[string]any
 	json.NewDecoder(invW.Body).Decode(&invItem)
 	invID := int(invItem["id"].(float64))
@@ -530,7 +462,7 @@ func TestFullWeeklyPlanningFlow(t *testing.T) {
 	// Step 1: Add pasta to inventory (above threshold — should NOT appear in threshold shopping)
 	pastaW := httptest.NewRecorder()
 	mux.ServeHTTP(pastaW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"Pasta","quantity":500,"unit":"g","location":"Pantry","low_threshold":200}`)))
+		bytes.NewBufferString(`{"name":"Pasta","quantity":500,"unit":"g","low_threshold":200}`)))
 	if pastaW.Code != http.StatusCreated {
 		t.Fatalf("create pasta: want 201, got %d: %s", pastaW.Code, pastaW.Body)
 	}
@@ -541,7 +473,7 @@ func TestFullWeeklyPlanningFlow(t *testing.T) {
 	// Step 2: Add sauce to inventory (below threshold — SHOULD appear in threshold shopping)
 	sauceW := httptest.NewRecorder()
 	mux.ServeHTTP(sauceW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"Tomato Sauce","quantity":1,"unit":"can","location":"Pantry","low_threshold":2}`)))
+		bytes.NewBufferString(`{"name":"Tomato Sauce","quantity":1,"unit":"can","low_threshold":2}`)))
 	if sauceW.Code != http.StatusCreated {
 		t.Fatalf("create sauce: want 201, got %d: %s", sauceW.Code, sauceW.Body)
 	}
@@ -648,7 +580,7 @@ func TestWeeklyShoppingAccountsForInventory(t *testing.T) {
 	// Add inventory: 2 eggs
 	invW := httptest.NewRecorder()
 	mux.ServeHTTP(invW, httptest.NewRequest("POST", "/api/inventory/",
-		bytes.NewBufferString(`{"name":"CalEgg","quantity":2,"unit":"piece","location":"fridge"}`)))
+		bytes.NewBufferString(`{"name":"CalEgg","quantity":2,"unit":"piece"}`)))
 	var inv map[string]any
 	json.NewDecoder(invW.Body).Decode(&inv)
 	invID := int(inv["id"].(float64))
@@ -693,7 +625,7 @@ func TestWeeklyShoppingAccountsForInventory(t *testing.T) {
 
 func TestCreateInventoryItemInvalidUnit(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Pasta","quantity":500,"unit":"handful","location":"Pantry"}`
+	body := `{"name":"Pasta","quantity":500,"unit":"handful"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -704,7 +636,7 @@ func TestCreateInventoryItemInvalidUnit(t *testing.T) {
 
 func TestCreateInventoryItemMismatchedPreferredUnit(t *testing.T) {
 	mux, _ := newMux(t)
-	body := `{"name":"Pasta","quantity":500,"unit":"g","preferred_unit":"ml","location":"Pantry"}`
+	body := `{"name":"Pasta","quantity":500,"unit":"g","preferred_unit":"ml"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/inventory/", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -860,11 +792,13 @@ func TestInventorySuggestions(t *testing.T) {
 	mux, db := newMux(t)
 
 	// Insert two items
-	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Pasta',500,'g','kg','Pantry',100,'','')`)
+	pantryID := newStorageUnit(t, db, "Kitchen", "Pantry")
+	fridgeID := newStorageUnit(t, db, "Kitchen", "Fridge")
+	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,storage_unit_id,low_threshold,expiration_date,barcode) VALUES ('Pasta',500,'g','kg',?,100,'','')`, pantryID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Pasta Sauce',3,'jar','','Fridge',2,'','')`)
+	_, err = db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,storage_unit_id,low_threshold,expiration_date,barcode) VALUES ('Pasta Sauce',3,'jar','',?,2,'','')`, fridgeID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -891,8 +825,8 @@ func TestInventorySuggestions(t *testing.T) {
 			if r["unit"] != "g" {
 				t.Errorf("expected unit g, got %v", r["unit"])
 			}
-			if r["location"] != "Pantry" {
-				t.Errorf("expected location Pantry, got %v", r["location"])
+			if int64(r["storage_unit_id"].(float64)) != pantryID {
+				t.Errorf("expected storage_unit_id %d, got %v", pantryID, r["storage_unit_id"])
 			}
 		}
 	}
@@ -953,7 +887,8 @@ func TestGetInventoryItemByBarcode(t *testing.T) {
 	mux, db := newMux(t)
 
 	// Insert item with a known barcode
-	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Olive Oil',1,'L','','Pantry',1,'','5000157024671')`)
+	pantryID := newStorageUnit(t, db, "Kitchen", "Pantry")
+	_, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,storage_unit_id,low_threshold,expiration_date,barcode) VALUES ('Olive Oil',1,'L','',?,1,'','5000157024671')`, pantryID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -975,6 +910,17 @@ func TestGetInventoryItemByBarcode(t *testing.T) {
 	if item["barcode"] != "5000157024671" {
 		t.Errorf("expected barcode 5000157024671, got %v", item["barcode"])
 	}
+	// Nested storage_unit shape is the same everywhere an item is returned.
+	su, ok := item["storage_unit"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested storage_unit object, got %v", item["storage_unit"])
+	}
+	if su["name"] != "Pantry" || su["room"] != "Kitchen" {
+		t.Errorf("expected Pantry in Kitchen, got %v", su)
+	}
+	if int64(item["storage_unit_id"].(float64)) != pantryID {
+		t.Errorf("expected storage_unit_id %d, got %v", pantryID, item["storage_unit_id"])
+	}
 
 	// Not found: unknown barcode → 404
 	req2 := httptest.NewRequest(http.MethodGet, "/api/inventory/barcode/9999999999999", nil)
@@ -985,7 +931,7 @@ func TestGetInventoryItemByBarcode(t *testing.T) {
 	}
 
 	// Second item with different barcode should not be returned
-	_, err = db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,location,low_threshold,expiration_date,barcode) VALUES ('Butter',250,'g','','Fridge',50,'','1234567890123')`)
+	_, err = db.Exec(`INSERT INTO inventory (name,quantity,unit,preferred_unit,storage_unit_id,low_threshold,expiration_date,barcode) VALUES ('Butter',250,'g','',?,50,'','1234567890123')`, newStorageUnit(t, db, "Kitchen", "Fridge"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1386,16 +1332,27 @@ func TestDeleteInventoryItemCascadesSkus(t *testing.T) {
 func TestGetGroupedInventory(t *testing.T) {
 	mux, db := newMux(t)
 
-	// Insert two rows: same name+unit, different locations and expiration dates.
+	// Insert two rows: same name+unit, different storage units and expiration dates.
 	// id1: Pantry, expires sooner; id2: Fridge, expires later.
+	pantryUnit := newStorageUnit(t, db, "Kitchen", "Pantry")
+	fridgeUnit := newStorageUnit(t, db, "Kitchen", "Fridge")
+	cellarUnit := newStorageUnit(t, db, "Basement", "Cellar")
 	var id1, id2 int64
-	err := db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',0.5,'L','Pantry','2026-06-01',1,'','') RETURNING id`).Scan(&id1)
+	err := db.QueryRow(`INSERT INTO inventory (name,quantity,unit,storage_unit_id,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',0.5,'L',?,'2026-06-01',1,'','') RETURNING id`, pantryUnit).Scan(&id1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',1.0,'L','Fridge','2026-09-01',1,'','') RETURNING id`).Scan(&id2)
+	err = db.QueryRow(`INSERT INTO inventory (name,quantity,unit,storage_unit_id,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',1.0,'L',?,'2026-09-01',1,'','') RETURNING id`, fridgeUnit).Scan(&id2)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	unitName := func(entry any) any {
+		su, ok := entry.(map[string]any)["storage_unit"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		return su["name"]
 	}
 
 	getGrouped := func(query string) []map[string]any {
@@ -1434,13 +1391,11 @@ func TestGetGroupedInventory(t *testing.T) {
 	// --- Test 2: Sort order — locations sorted by expiration ASC, empty expiration last ---
 	// id1 expires 2026-06-01 (sooner), id2 expires 2026-09-01 (later).
 	// First entry should be the Pantry one (soonest expiry).
-	loc0 := locs[0].(map[string]any)
-	if loc0["location"] != "Pantry" {
-		t.Errorf("sort order: want first location 'Pantry' (soonest expiry), got %v", loc0["location"])
+	if unitName(locs[0]) != "Pantry" {
+		t.Errorf("sort order: want first unit 'Pantry' (soonest expiry), got %v", unitName(locs[0]))
 	}
-	loc1 := locs[1].(map[string]any)
-	if loc1["location"] != "Fridge" {
-		t.Errorf("sort order: want second location 'Fridge', got %v", loc1["location"])
+	if unitName(locs[1]) != "Fridge" {
+		t.Errorf("sort order: want second unit 'Fridge', got %v", unitName(locs[1]))
 	}
 
 	// --- Test 3: recommended_location_id — should be id of soonest-expiring row ---
@@ -1451,7 +1406,7 @@ func TestGetGroupedInventory(t *testing.T) {
 
 	// Insert a row with no expiration date to verify it sorts last.
 	var id3 int64
-	err = db.QueryRow(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',0.25,'L','Cellar','',1,'','') RETURNING id`).Scan(&id3)
+	err = db.QueryRow(`INSERT INTO inventory (name,quantity,unit,storage_unit_id,expiration_date,low_threshold,barcode,preferred_unit) VALUES ('olive oil',0.25,'L',?,'',1,'','') RETURNING id`, cellarUnit).Scan(&id3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1464,9 +1419,8 @@ func TestGetGroupedInventory(t *testing.T) {
 		t.Fatalf("sort with no-expiry: want 3 locations, got %d", len(locs2))
 	}
 	// Last entry should be the one with empty expiration.
-	lastLoc := locs2[2].(map[string]any)
-	if lastLoc["location"] != "Cellar" {
-		t.Errorf("sort order: want last location 'Cellar' (no expiry), got %v", lastLoc["location"])
+	if unitName(locs2[2]) != "Cellar" {
+		t.Errorf("sort order: want last unit 'Cellar' (no expiry), got %v", unitName(locs2[2]))
 	}
 
 	// --- Test 4: Empty response for non-matching name filter → [] (not null/404) ---
@@ -1478,27 +1432,27 @@ func TestGetGroupedInventory(t *testing.T) {
 		t.Errorf("empty name filter: want 0 groups, got %d", len(groups3))
 	}
 
-	// --- Test 5: Location filter → only returns groups that have a row in that location ---
-	groups4 := getGrouped("?location=Pantry")
+	// --- Test 5: storage_unit_id filter → only rows in that unit ---
+	groups4 := getGrouped("?storage_unit_id=" + strconv.FormatInt(pantryUnit, 10))
 	if len(groups4) != 1 {
-		t.Fatalf("location filter: want 1 group for Pantry, got %d", len(groups4))
+		t.Fatalf("unit filter: want 1 group for Pantry, got %d", len(groups4))
 	}
 	locs4 := groups4[0]["locations"].([]any)
 	if len(locs4) != 1 {
-		t.Fatalf("location filter: want 1 location entry for Pantry, got %d", len(locs4))
+		t.Fatalf("unit filter: want 1 entry for Pantry, got %d", len(locs4))
 	}
-	pantryLoc := locs4[0].(map[string]any)
-	if pantryLoc["location"] != "Pantry" {
-		t.Errorf("location filter: want location 'Pantry', got %v", pantryLoc["location"])
+	if unitName(locs4[0]) != "Pantry" {
+		t.Errorf("unit filter: want unit 'Pantry', got %v", unitName(locs4[0]))
 	}
 
-	// Location filter for a location with no items → empty array.
-	groups5 := getGrouped("?location=Freezer")
+	// Filter for a storage unit with no items → empty array.
+	emptyUnit := newStorageUnit(t, db, "Kitchen", "Freezer")
+	groups5 := getGrouped("?storage_unit_id=" + strconv.FormatInt(emptyUnit, 10))
 	if groups5 == nil {
-		t.Error("location filter no match: want [] not nil")
+		t.Error("unit filter no match: want [] not nil")
 	}
 	if len(groups5) != 0 {
-		t.Errorf("location filter no match: want 0 groups, got %d", len(groups5))
+		t.Errorf("unit filter no match: want 0 groups, got %d", len(groups5))
 	}
 }
 
@@ -1506,7 +1460,7 @@ func TestDeductWithLocationID(t *testing.T) {
 	mux, _ := newMux(t)
 
 	// Insert Fridge row: milk 5 oz
-	fridgeBody := `{"name":"milk","quantity":5,"unit":"oz","location":"Fridge"}`
+	fridgeBody := `{"name":"milk","quantity":5,"unit":"oz"}`
 	req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(fridgeBody))
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -1518,7 +1472,7 @@ func TestDeductWithLocationID(t *testing.T) {
 	fridgeID := int64(fridgeItem["id"].(float64))
 
 	// Insert Pantry row: milk 10 oz
-	pantryBody := `{"name":"milk","quantity":10,"unit":"oz","location":"Pantry"}`
+	pantryBody := `{"name":"milk","quantity":10,"unit":"oz"}`
 	req2 := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(pantryBody))
 	w2 := httptest.NewRecorder()
 	mux.ServeHTTP(w2, req2)
@@ -1566,11 +1520,12 @@ func TestDeductWithLocationID(t *testing.T) {
 }
 
 func TestDeductWithLocationIDMultiLocation(t *testing.T) {
-	mux, _ := newMux(t)
+	mux, db := newMux(t)
 
 	// Three sibling rows: Fridge(2), Pantry(4), Freezer(10) — same name+unit
 	create := func(loc string, qty float64) int64 {
-		body := `{"name":"milk","quantity":` + strconv.FormatFloat(qty, 'f', -1, 64) + `,"unit":"cup","location":"` + loc + `"}`
+		unitID := newStorageUnit(t, db, "Kitchen", loc)
+		body := `{"name":"milk","quantity":` + strconv.FormatFloat(qty, 'f', -1, 64) + `,"unit":"cup","storage_unit_id":` + strconv.FormatInt(unitID, 10) + `}`
 		req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)
@@ -1644,10 +1599,11 @@ func TestDeductWithLocationIDMultiLocation(t *testing.T) {
 }
 
 func TestDeductWithLocationIDNoCascadeToSiblings(t *testing.T) {
-	mux, _ := newMux(t)
+	mux, db := newMux(t)
 
 	createEggs := func(loc string, qty float64) int64 {
-		body := `{"name":"eggs","quantity":` + strconv.FormatFloat(qty, 'f', -1, 64) + `,"unit":"piece","location":"` + loc + `"}`
+		unitID := newStorageUnit(t, db, "Kitchen", loc)
+		body := `{"name":"eggs","quantity":` + strconv.FormatFloat(qty, 'f', -1, 64) + `,"unit":"piece","storage_unit_id":` + strconv.FormatInt(unitID, 10) + `}`
 		req := httptest.NewRequest("POST", "/api/inventory/", bytes.NewBufferString(body))
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)

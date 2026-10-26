@@ -9,7 +9,9 @@ import (
 	"testing"
 )
 
-func TestGetSettingsEmpty(t *testing.T) {
+// A fresh database is seeded with default_servings by the schema migration, so
+// "unconfigured" means exactly those defaults and nothing else.
+func TestGetSettingsDefaults(t *testing.T) {
 	mux, _ := newMux(t)
 	req := httptest.NewRequest("GET", "/api/settings", nil)
 	w := httptest.NewRecorder()
@@ -19,8 +21,8 @@ func TestGetSettingsEmpty(t *testing.T) {
 	}
 	var resp map[string]string
 	json.NewDecoder(w.Body).Decode(&resp)
-	if len(resp) != 0 {
-		t.Errorf("want empty settings map, got %v", resp)
+	if len(resp) != 1 || resp["default_servings"] != "2" {
+		t.Errorf("want only seeded default_servings=2, got %v", resp)
 	}
 }
 

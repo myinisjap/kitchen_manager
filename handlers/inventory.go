@@ -33,16 +33,16 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 
 	mux.HandleFunc("POST /api/inventory/", func(w http.ResponseWriter, r *http.Request) {
 		var item struct {
-			Name             string  `json:"name"`
-			Quantity         float64 `json:"quantity"`
-			Unit             string  `json:"unit"`
-			PreferredUnit    string  `json:"preferred_unit"`
-			Location         string  `json:"location"`
-			ExpirationDate   string  `json:"expiration_date"`
-			LowThreshold     float64 `json:"low_threshold"`
-			Barcode          string  `json:"barcode"`
-			UnitCostCents    int64   `json:"unit_cost_cents"`
-			QuantityPerScan  float64 `json:"quantity_per_scan"`
+			Name            string  `json:"name"`
+			Quantity        float64 `json:"quantity"`
+			Unit            string  `json:"unit"`
+			PreferredUnit   string  `json:"preferred_unit"`
+			StorageUnitID   *int64  `json:"storage_unit_id"`
+			ExpirationDate  string  `json:"expiration_date"`
+			LowThreshold    float64 `json:"low_threshold"`
+			Barcode         string  `json:"barcode"`
+			UnitCostCents   int64   `json:"unit_cost_cents"`
+			QuantityPerScan float64 `json:"quantity_per_scan"`
 		}
 		if err := ReadJSON(r, &item); err != nil || item.Name == "" {
 			WriteError(w, http.StatusBadRequest, "invalid body")
@@ -91,8 +91,8 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		var err error
 		if item.Barcode != "" {
 			err = db.QueryRow(
-				`SELECT id, quantity FROM inventory WHERE name=? AND unit=? AND location=? AND barcode=? AND expiration_date=? LIMIT 1`,
-				item.Name, item.Unit, item.Location, item.Barcode, item.ExpirationDate,
+				`SELECT id, quantity FROM inventory WHERE name=? AND unit=? AND storage_unit_id IS ? AND barcode=? AND expiration_date=? LIMIT 1`,
+				item.Name, item.Unit, item.StorageUnitID, item.Barcode, item.ExpirationDate,
 			).Scan(&existingID, &existingQty)
 		} else {
 			err = sql.ErrNoRows
@@ -119,7 +119,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				Unit:           item.Unit,
 				Source:         "manual",
 			})
-			row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, existingID)
+			row := db.QueryRow(inventorySelect+` WHERE i.id=?`, existingID)
 			updated, err := scanInventoryRow(row)
 			if err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
@@ -164,7 +164,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 					Unit:           parentUnit,
 					Source:         "receipt_merge",
 				})
-				row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, skuInvID)
+				row := db.QueryRow(inventorySelect+` WHERE i.id=?`, skuInvID)
 				updated, e := scanInventoryRow(row)
 				if e != nil {
 					WriteError(w, http.StatusInternalServerError, e.Error())
@@ -179,8 +179,8 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 		}
 
-		res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			item.Name, item.Quantity, item.Unit, item.Location, item.ExpirationDate, item.LowThreshold, item.Barcode, item.PreferredUnit, item.UnitCostCents, item.QuantityPerScan)
+		res, err := db.Exec(`INSERT INTO inventory (name,quantity,unit,storage_unit_id,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			item.Name, item.Quantity, item.Unit, item.StorageUnitID, item.ExpirationDate, item.LowThreshold, item.Barcode, item.PreferredUnit, item.UnitCostCents, item.QuantityPerScan)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -198,13 +198,14 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			Source:         "manual",
 			ChangedBy:      auth.EmailFromContext(r.Context()),
 		})
-		WriteJSON(w, http.StatusCreated, map[string]any{
-			"id": id, "name": item.Name, "quantity": item.Quantity,
-			"unit": item.Unit, "preferred_unit": item.PreferredUnit,
-			"location": item.Location, "expiration_date": item.ExpirationDate,
-			"low_threshold": item.LowThreshold, "barcode": item.Barcode,
-			"unit_cost_cents": item.UnitCostCents, "quantity_per_scan": item.QuantityPerScan,
-		})
+		// Re-read through inventorySelect so the 201 body carries the same nested
+		// storage_unit shape as every other item response.
+		created, err := scanInventoryRow(db.QueryRow(inventorySelect+` WHERE i.id=?`, id))
+		if err != nil {
+			WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		WriteJSON(w, http.StatusCreated, created)
 		broadcastInventory()
 	})
 
@@ -217,7 +218,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 		}
 		cutoff := time.Now().AddDate(0, 0, days).Format("2006-01-02")
-		rows, err := db.Query(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE expiration_date != '' AND expiration_date <= ?`, cutoff)
+		rows, err := db.Query(inventorySelect+` WHERE i.expiration_date != '' AND i.expiration_date <= ?`, cutoff)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -235,10 +236,17 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		q := r.URL.Query().Get("q")
 		var rows *sql.Rows
 		var err error
+		// The "most recently used storage unit for this item name" smart-default is
+		// preserved from the old free-text version: the correlated subquery now keys
+		// on storage_unit_id, falling back to MAX(storage_unit_id) when the item has
+		// no history rows yet.
+		const suggestionSelect = `SELECT i.name, MAX(i.unit) AS unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold,
+			COALESCE((SELECT inv.storage_unit_id FROM inventory inv JOIN inventory_history h ON h.inventory_id = inv.id WHERE inv.name = i.name ORDER BY h.changed_at DESC LIMIT 1), MAX(i.storage_unit_id)) AS storage_unit_id
+			FROM inventory i`
 		if q == "" {
-			rows, err = db.Query(`SELECT i.name, MAX(i.unit) AS unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold, COALESCE((SELECT inv.location FROM inventory inv JOIN inventory_history h ON h.inventory_id = inv.id WHERE inv.name = i.name ORDER BY h.changed_at DESC LIMIT 1), MAX(i.location)) AS location FROM inventory i GROUP BY i.name ORDER BY i.name LIMIT 10`)
+			rows, err = db.Query(suggestionSelect + ` GROUP BY i.name ORDER BY i.name LIMIT 10`)
 		} else {
-			rows, err = db.Query(`SELECT i.name, MAX(i.unit) AS unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold, COALESCE((SELECT inv.location FROM inventory inv JOIN inventory_history h ON h.inventory_id = inv.id WHERE inv.name = i.name ORDER BY h.changed_at DESC LIMIT 1), MAX(i.location)) AS location FROM inventory i WHERE i.name LIKE ? GROUP BY i.name ORDER BY i.name LIMIT 10`, q+"%")
+			rows, err = db.Query(suggestionSelect+` WHERE i.name LIKE ? GROUP BY i.name ORDER BY i.name LIMIT 10`, q+"%")
 		}
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
@@ -249,21 +257,17 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		for rows.Next() {
 			var name, unit, preferredUnit string
 			var lowThreshold float64
-			var location sql.NullString
-			if err := rows.Scan(&name, &unit, &preferredUnit, &lowThreshold, &location); err != nil {
+			var storageUnitID sql.NullInt64
+			if err := rows.Scan(&name, &unit, &preferredUnit, &lowThreshold, &storageUnitID); err != nil {
 				WriteError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			loc := ""
-			if location.Valid {
-				loc = location.String
-			}
 			suggestions = append(suggestions, map[string]any{
-				"name":           name,
-				"unit":           unit,
-				"preferred_unit": preferredUnit,
-				"location":       loc,
-				"low_threshold":  lowThreshold,
+				"name":            name,
+				"unit":            unit,
+				"preferred_unit":  preferredUnit,
+				"storage_unit_id": nullableID(storageUnitID),
+				"low_threshold":   lowThreshold,
 			})
 		}
 		if err := rows.Err(); err != nil {
@@ -276,30 +280,8 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		WriteJSON(w, http.StatusOK, suggestions)
 	})
 
-	mux.HandleFunc("GET /api/inventory/locations", func(w http.ResponseWriter, r *http.Request) {
-		// Return unique non-empty locations from inventory
-		rows, err := db.Query(`SELECT DISTINCT location FROM inventory WHERE location != '' AND location IS NOT NULL ORDER BY location LIMIT 100`)
-		if err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		defer rows.Close()
-
-		var locations []string
-		for rows.Next() {
-			var loc string
-			if err := rows.Scan(&loc); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			locations = append(locations, loc)
-		}
-		if err := rows.Err(); err != nil {
-			WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		WriteJSON(w, http.StatusOK, locations)
-	})
+	// GET /api/inventory/locations (flat free-text autocomplete) is replaced by
+	// GET /api/rooms, which returns the room -> storage unit hierarchy.
 
 	mux.HandleFunc("GET /api/inventory/barcode/{code}", func(w http.ResponseWriter, r *http.Request) {
 		code := r.PathValue("code")
@@ -307,7 +289,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusBadRequest, "missing barcode")
 			return
 		}
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE barcode=?`, code)
+		row := db.QueryRow(inventorySelect+` WHERE i.barcode=?`, code)
 		item, err := scanInventoryRow(row)
 		if err == sql.ErrNoRows {
 			// Fallback: check SKU alias table
@@ -322,7 +304,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				WriteError(w, http.StatusInternalServerError, skuErr.Error())
 				return
 			}
-			row2 := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, skuInventoryID)
+			row2 := db.QueryRow(inventorySelect+` WHERE i.id=?`, skuInventoryID)
 			item2, err2 := scanInventoryRow(row2)
 			if err2 != nil {
 				WriteError(w, http.StatusInternalServerError, err2.Error())
@@ -356,57 +338,50 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		conds := make([]string, len(words))
 		args := make([]any, len(words))
 		for i, w := range words {
-			conds[i] = "name LIKE ?"
+			conds[i] = "i.name LIKE ?"
 			args[i] = "%" + w + "%"
 		}
-		q := `SELECT id, name, quantity, unit, preferred_unit, location FROM inventory WHERE ` + strings.Join(conds, " AND ") + ` LIMIT 3`
-		rows, err := db.Query(q, args...)
+		rows, err := db.Query(inventorySelect+` WHERE `+strings.Join(conds, " AND ")+` LIMIT 3`, args...)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		defer rows.Close()
-		var candidates []map[string]any
-		for rows.Next() {
-			var id int64
-			var n, unit, preferredUnit, location string
-			var qty float64
-			if err := rows.Scan(&id, &n, &qty, &unit, &preferredUnit, &location); err != nil {
-				WriteError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			candidates = append(candidates, map[string]any{
-				"id": id, "name": n, "quantity": qty,
-				"unit": unit, "preferred_unit": preferredUnit, "location": location,
-			})
-		}
-		if err := rows.Err(); err != nil {
+		candidates, err := scanInventoryRows(rows)
+		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
 			return
-		}
-		if candidates == nil {
-			candidates = []map[string]any{}
 		}
 		WriteJSON(w, http.StatusOK, candidates)
 	})
 
 	mux.HandleFunc("GET /api/inventory/grouped", func(w http.ResponseWriter, r *http.Request) {
-		locFilter := r.URL.Query().Get("location")
+		unitFilter := r.URL.Query().Get("storage_unit_id")
 		nameFilter := r.URL.Query().Get("name")
 
-		q := `SELECT name, unit, MAX(preferred_unit) AS preferred_unit, MAX(low_threshold) AS low_threshold, SUM(quantity) AS total_quantity, json_group_array(json_object('id', id, 'location', location, 'quantity', quantity, 'expiration_date', expiration_date, 'barcode', barcode)) AS locations_json FROM inventory WHERE 1=1`
+		q := `SELECT i.name, i.unit, MAX(i.preferred_unit) AS preferred_unit, MAX(i.low_threshold) AS low_threshold, SUM(i.quantity) AS total_quantity,
+			json_group_array(json_object('id', i.id, 'storage_unit', CASE WHEN i.storage_unit_id IS NULL THEN json('null') ELSE json_object('id', u.id, 'name', u.name, 'room_id', r.id, 'room', r.name) END, 'quantity', i.quantity, 'expiration_date', i.expiration_date, 'barcode', i.barcode)) AS locations_json
+			FROM inventory i
+			LEFT JOIN storage_units u ON u.id = i.storage_unit_id
+			LEFT JOIN rooms r ON r.id = u.room_id
+			WHERE 1=1`
 		args := []any{}
-		if locFilter == "__none__" {
-			q += ` AND (location='' OR location IS NULL)`
-		} else if locFilter != "" {
-			q += ` AND location=?`
-			args = append(args, locFilter)
+		if unitFilter == "__none__" {
+			q += ` AND i.storage_unit_id IS NULL`
+		} else if unitFilter != "" {
+			id, err := strconv.ParseInt(unitFilter, 10, 64)
+			if err != nil {
+				WriteError(w, http.StatusBadRequest, "invalid storage_unit_id")
+				return
+			}
+			q += ` AND i.storage_unit_id=?`
+			args = append(args, id)
 		}
 		if nameFilter != "" {
-			q += ` AND name LIKE ?`
+			q += ` AND i.name LIKE ?`
 			args = append(args, "%"+nameFilter+"%")
 		}
-		q += ` GROUP BY name, unit ORDER BY name`
+		q += ` GROUP BY i.name, i.unit ORDER BY i.name`
 
 		rows, err := db.Query(q, args...)
 		if err != nil {
@@ -415,12 +390,19 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 		defer rows.Close()
 
+		type groupedStorageUnit struct {
+			ID     int64  `json:"id"`
+			Name   string `json:"name"`
+			RoomID int64  `json:"room_id"`
+			Room   string `json:"room"`
+		}
+
 		type locationEntry struct {
-			ID             int64   `json:"id"`
-			Location       string  `json:"location"`
-			Quantity       float64 `json:"quantity"`
-			ExpirationDate string  `json:"expiration_date"`
-			Barcode        string  `json:"barcode"`
+			ID             int64               `json:"id"`
+			StorageUnit    *groupedStorageUnit `json:"storage_unit"`
+			Quantity       float64             `json:"quantity"`
+			ExpirationDate string              `json:"expiration_date"`
+			Barcode        string              `json:"barcode"`
 		}
 
 		type groupedItem struct {
@@ -490,7 +472,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			WriteError(w, http.StatusBadRequest, "invalid id")
 			return
 		}
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id)
+		row := db.QueryRow(inventorySelect+` WHERE i.id=?`, id)
 		item, err := scanInventoryRow(row)
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "not found")
@@ -504,15 +486,24 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	})
 
 	mux.HandleFunc("GET /api/inventory/", func(w http.ResponseWriter, r *http.Request) {
-		q := `SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE 1=1`
+		q := inventorySelect + ` WHERE 1=1`
 		args := []any{}
 		if name := r.URL.Query().Get("name"); name != "" {
-			q += ` AND name LIKE ?`
+			q += ` AND i.name LIKE ?`
 			args = append(args, "%"+name+"%")
 		}
-		if loc := r.URL.Query().Get("location"); loc != "" {
-			q += ` AND location=?`
-			args = append(args, loc)
+		if su := r.URL.Query().Get("storage_unit_id"); su != "" {
+			if su == "__none__" {
+				q += ` AND i.storage_unit_id IS NULL`
+			} else {
+				id, err := strconv.ParseInt(su, 10, 64)
+				if err != nil {
+					WriteError(w, http.StatusBadRequest, "invalid storage_unit_id")
+					return
+				}
+				q += ` AND i.storage_unit_id=?`
+				args = append(args, id)
+			}
 		}
 		rows, err := db.Query(q, args...)
 		if err != nil {
@@ -714,7 +705,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			}
 
 			if lastSibID != 0 {
-				row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, lastSibID)
+				row := db.QueryRow(inventorySelect+` WHERE i.id=?`, lastSibID)
 				item, err := scanInventoryRow(row)
 				if err != nil {
 					WriteError(w, http.StatusInternalServerError, err.Error())
@@ -730,7 +721,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 		}
 
 		// Non-deduction patch: apply fields directly.
-		allowed := []string{"name", "quantity", "unit", "location", "expiration_date", "low_threshold", "barcode", "preferred_unit", "unit_cost_cents", "quantity_per_scan"}
+		allowed := []string{"name", "quantity", "unit", "storage_unit_id", "expiration_date", "low_threshold", "barcode", "preferred_unit", "unit_cost_cents", "quantity_per_scan"}
 		for _, field := range allowed {
 			if val, ok := patch[field]; ok {
 				if _, err := db.Exec(`UPDATE inventory SET `+field+`=? WHERE id=?`, val, id); err != nil {
@@ -739,7 +730,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 				}
 			}
 		}
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id)
+		row := db.QueryRow(inventorySelect+` WHERE i.id=?`, id)
 		item, err := scanInventoryRow(row)
 		if err == sql.ErrNoRows {
 			WriteError(w, http.StatusNotFound, "not found")
@@ -899,7 +890,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			})
 		}
 
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, id)
+		row := db.QueryRow(inventorySelect+` WHERE i.id=?`, id)
 		item, err := scanInventoryRow(row)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
@@ -1105,7 +1096,7 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			ChangedBy:      auth.EmailFromContext(r.Context()),
 		})
 
-		row := db.QueryRow(`SELECT id,name,quantity,unit,location,expiration_date,low_threshold,barcode,preferred_unit,unit_cost_cents,quantity_per_scan FROM inventory WHERE id=?`, targetID)
+		row := db.QueryRow(inventorySelect+` WHERE i.id=?`, targetID)
 		item, err := scanInventoryRow(row)
 		if err != nil {
 			WriteError(w, http.StatusInternalServerError, err.Error())
@@ -1146,47 +1137,79 @@ func RegisterInventory(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	})
 }
 
-func scanInventoryRow(row *sql.Row) (map[string]any, error) {
+// inventorySelect is the canonical inventory row projection. Every endpoint
+// returning a full item uses it, so the column list and scan order stay in sync.
+// It joins through to storage_units/rooms so responses carry human-readable
+// names alongside storage_unit_id.
+const inventorySelect = `SELECT i.id,i.name,i.quantity,i.unit,i.storage_unit_id,u.name,r.id,r.name,i.expiration_date,i.low_threshold,i.barcode,i.preferred_unit,i.unit_cost_cents,i.quantity_per_scan
+	FROM inventory i
+	LEFT JOIN storage_units u ON u.id = i.storage_unit_id
+	LEFT JOIN rooms r ON r.id = u.room_id`
+
+// scanner is satisfied by both *sql.Row and *sql.Rows.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+// scanInventoryRow reads one inventorySelect row. The storage unit is exposed as
+// a nested object (null when the item is unfiled) so every endpoint returning an
+// item hands the frontend the same shape.
+func scanInventoryRow(s scanner) (map[string]any, error) {
 	var id int64
-	var name, unit, location, expDate, barcode, preferredUnit string
+	var name, unit, expDate, barcode, preferredUnit string
 	var qty, threshold, qtyPerScan float64
 	var unitCostCents int64
-	err := row.Scan(&id, &name, &qty, &unit, &location, &expDate, &threshold, &barcode, &preferredUnit, &unitCostCents, &qtyPerScan)
+	var storageUnitID, roomID sql.NullInt64
+	var storageUnitName, roomName sql.NullString
+	err := s.Scan(&id, &name, &qty, &unit, &storageUnitID, &storageUnitName, &roomID, &roomName,
+		&expDate, &threshold, &barcode, &preferredUnit, &unitCostCents, &qtyPerScan)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"id": id, "name": name, "quantity": qty, "unit": unit,
-		"preferred_unit": preferredUnit, "location": location,
+		"preferred_unit":  preferredUnit,
+		"storage_unit_id": nullableID(storageUnitID),
+		"storage_unit":    storageUnitJSON(storageUnitID, storageUnitName, roomID, roomName),
 		"expiration_date": expDate, "low_threshold": threshold, "barcode": barcode,
 		"unit_cost_cents": unitCostCents, "quantity_per_scan": qtyPerScan,
 	}, nil
 }
 
 func scanInventoryRows(rows *sql.Rows) ([]map[string]any, error) {
-	var items []map[string]any
+	items := []map[string]any{}
 	for rows.Next() {
-		var id int64
-		var name, unit, location, expDate, barcode, preferredUnit string
-		var qty, threshold, qtyPerScan float64
-		var unitCostCents int64
-		if err := rows.Scan(&id, &name, &qty, &unit, &location, &expDate, &threshold, &barcode, &preferredUnit, &unitCostCents, &qtyPerScan); err != nil {
+		item, err := scanInventoryRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		items = append(items, map[string]any{
-			"id": id, "name": name, "quantity": qty, "unit": unit,
-			"preferred_unit": preferredUnit, "location": location,
-			"expiration_date": expDate, "low_threshold": threshold, "barcode": barcode,
-			"unit_cost_cents": unitCostCents, "quantity_per_scan": qtyPerScan,
-		})
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if items == nil {
-		return []map[string]any{}, nil
-	}
 	return items, nil
+}
+
+func nullableID(id sql.NullInt64) any {
+	if !id.Valid {
+		return nil
+	}
+	return id.Int64
+}
+
+// storageUnitJSON is the one nested shape used everywhere an item's location is
+// reported: {"id":1,"name":"Kitchen 1","room_id":2,"room":"Kitchen"}, or null.
+func storageUnitJSON(unitID sql.NullInt64, unitName sql.NullString, roomID sql.NullInt64, roomName sql.NullString) any {
+	if !unitID.Valid {
+		return nil
+	}
+	return map[string]any{
+		"id":      unitID.Int64,
+		"name":    unitName.String,
+		"room_id": roomID.Int64,
+		"room":    roomName.String,
+	}
 }
 
 // pathIDFromPattern reads a named path parameter from Go 1.22 ServeMux patterns.

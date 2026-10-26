@@ -35,6 +35,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	handlers.RegisterInventory(mux, db, hub)
+	handlers.RegisterLocations(mux, db, hub)
 	handlers.RegisterShopping(mux, db, hub)
 	handlers.RegisterRecipes(mux, db, hub)
 	handlers.RegisterRecipeImport(mux)

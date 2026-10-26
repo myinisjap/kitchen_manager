@@ -292,7 +292,7 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 			ingName := strings.ToLower(strings.TrimSpace(ing.Name))
 			invID := ing.InventoryID
 			if invID == nil {
-				invID = resolveInventoryID(db, ingName)
+				invID = resolveInventoryID(tx, ingName)
 			}
 			if _, err := tx.Exec(`INSERT INTO recipe_ingredients (recipe_id,inventory_id,name,quantity,unit) VALUES (?,?,?,?,?)`,
 				id, invID, ingName, ing.Quantity, ing.Unit); err != nil {
@@ -390,9 +390,16 @@ func RegisterRecipes(mux *http.ServeMux, db *sql.DB, hub ...*Hub) {
 	})
 }
 
+// querier is satisfied by *sql.DB and *sql.Tx. Callers inside a transaction must
+// pass the tx: the pool is limited to a single connection, so querying *sql.DB
+// while a tx holds that connection deadlocks.
+type querier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
 // resolveInventoryID returns an inventory ID for the given ingredient name by
 // case-insensitive name match, or nil if no match is found.
-func resolveInventoryID(db *sql.DB, name string) *int64 {
+func resolveInventoryID(db querier, name string) *int64 {
 	var id int64
 	err := db.QueryRow(`SELECT id FROM inventory WHERE LOWER(name)=LOWER(?) LIMIT 1`, name).Scan(&id)
 	if err != nil {

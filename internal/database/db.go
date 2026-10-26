@@ -204,5 +204,86 @@ func createSchema(db *sql.DB) error {
 		return err
 	}
 
+	// Migration: rooms / storage_units — structured two-level replacement for inventory.location.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS rooms (
+		id   INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT    NOT NULL UNIQUE
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS storage_units (
+		id      INTEGER PRIMARY KEY AUTOINCREMENT,
+		room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+		name    TEXT    NOT NULL,
+		UNIQUE(room_id, name)
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE inventory ADD COLUMN storage_unit_id INTEGER REFERENCES storage_units(id)`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+
+	return backfillStorageUnits(db)
+}
+
+// UnsortedRoom is the catch-all room that legacy free-text inventory.location
+// values are migrated into. Users are expected to re-file those units into real
+// rooms afterwards; the name makes it obvious which ones still need attention.
+const UnsortedRoom = "Unsorted"
+
+// Backfill re-runs the legacy location migration. OpenDB already calls it; this
+// is exported so tests can seed legacy rows and verify idempotency.
+func Backfill(db *sql.DB) error { return backfillStorageUnits(db) }
+
+// backfillStorageUnits converts legacy free-text inventory.location values into
+// storage_units under the "Unsorted" room. It only ever touches rows that still
+// have location text and no storage_unit_id, so it is a no-op on every startup
+// after the first — matching this schema's IF NOT EXISTS / duplicate-column
+// tolerant style. inventory.location is deliberately left in place: this
+// codebase never drops columns.
+func backfillStorageUnits(db *sql.DB) error {
+	rows, err := db.Query(`SELECT DISTINCT location FROM inventory WHERE location != '' AND storage_unit_id IS NULL`)
+	if err != nil {
+		return err
+	}
+	var legacy []string
+	for rows.Next() {
+		var loc string
+		if err := rows.Scan(&loc); err != nil {
+			rows.Close()
+			return err
+		}
+		legacy = append(legacy, loc)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(legacy) == 0 {
+		return nil
+	}
+
+	if _, err := db.Exec(`INSERT OR IGNORE INTO rooms (name) VALUES (?)`, UnsortedRoom); err != nil {
+		return err
+	}
+	var roomID int64
+	if err := db.QueryRow(`SELECT id FROM rooms WHERE name=?`, UnsortedRoom).Scan(&roomID); err != nil {
+		return err
+	}
+	for _, loc := range legacy {
+		if _, err := db.Exec(`INSERT OR IGNORE INTO storage_units (room_id, name) VALUES (?,?)`, roomID, loc); err != nil {
+			return err
+		}
+		var unitID int64
+		if err := db.QueryRow(`SELECT id FROM storage_units WHERE room_id=? AND name=?`, roomID, loc).Scan(&unitID); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`UPDATE inventory SET storage_unit_id=? WHERE location=? AND storage_unit_id IS NULL`, unitID, loc); err != nil {
+			return err
+		}
+	}
 	return nil
 }

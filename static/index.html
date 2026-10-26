@@ -44,13 +44,18 @@
     <section x-show="activeTab === 'inventory'">
       <div class="flex flex-wrap gap-2 my-4">
         <input x-model="inventorySearch" @input.debounce.300ms="fetchInventory()" type="text" placeholder="Search items..." class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
-        <select x-model="inventoryLocation" @change="fetchInventory()" class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+        <select x-model="inventoryStorageUnitId" @change="fetchInventory()" class="border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
           <option value="">All Locations</option>
-          <option value="__none__">No location</option>
-          <template x-for="loc in locations">
-            <option :value="loc" x-text="loc"></option>
+          <option value="__none__">Unfiled</option>
+          <template x-for="room in rooms" :key="room.id">
+            <optgroup :label="room.name">
+              <template x-for="u in room.storage_units" :key="u.id">
+                <option :value="u.id" x-text="u.name"></option>
+              </template>
+            </optgroup>
           </template>
         </select>
+        <button @click="modal = 'rooms'" class="border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-2 rounded-lg text-sm font-medium" title="Manage rooms &amp; storage units">🏠 Rooms</button>
         <button @click="hideEmptyInventory = !hideEmptyInventory; localStorage.setItem('km-hide-empty', hideEmptyInventory)"
                 :class="hideEmptyInventory ? 'bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200' : 'border border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500'"
                 class="px-3 py-2 rounded-lg text-sm font-medium">Hide empty</button>
@@ -82,7 +87,7 @@
                   </div>
                   <div class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
                     <span x-text="item.quantity"></span> <span x-text="item.unit"></span>
-                    &bull; <span x-text="item.location || 'No location'"></span>
+                    &bull; <span x-text="locationLabel(item)"></span>
                   </div>
                 </div>
                 <div class="flex items-center gap-1 ml-2">
@@ -117,7 +122,7 @@
                   <span x-text="group.total_quantity"></span> <span x-text="group.unit"></span>
                   &bull;
                   <template x-if="group.locations.length === 1">
-                    <span x-text="group.locations[0].location || 'No location'"></span>
+                    <span x-text="locationLabel(group.locations[0])"></span>
                   </template>
                   <template x-if="group.locations.length > 1">
                     <span class="text-blue-600 dark:text-blue-400" x-text="group.locations.length + ' locations'"></span>
@@ -140,7 +145,7 @@
               <template x-for="loc in group.locations" :key="loc.id">
                 <div class="px-3 py-2 flex items-center justify-between">
                   <div class="text-sm text-gray-600 dark:text-gray-300 flex-1 min-w-0">
-                    <span class="font-medium" x-text="loc.location || 'No location'"></span>
+                    <span class="font-medium" x-text="locationLabel(loc)"></span>
                     <span class="text-gray-400 dark:text-gray-500">
                       &nbsp;&bull; <span x-text="loc.quantity"></span> <span x-text="group.unit"></span>
                     </span>
@@ -448,7 +453,7 @@
                  :class="i === suggestionIndex ? 'bg-blue-100 dark:bg-blue-900/50' : 'hover:bg-blue-50 dark:hover:bg-blue-900/30'"
                  class="flex items-center justify-between px-3 py-2 text-sm cursor-pointer">
               <span x-text="s.name" class="font-medium dark:text-gray-100"></span>
-              <span x-text="s.location + ' · ' + s.unit" class="text-xs text-gray-400 dark:text-gray-500 ml-2"></span>
+              <span x-text="s.unit" class="text-xs text-gray-400 dark:text-gray-500 ml-2"></span>
             </div>
           </template>
         </div>
@@ -479,6 +484,25 @@
             </optgroup>
           </template>
         </select>
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Location</label>
+        <div x-data="locationPicker(() => itemForm)" class="flex gap-2">
+          <select x-model.number="roomId" @change="onRoomChange()" class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+            <option value="">Room…</option>
+            <template x-for="room in rooms" :key="room.id">
+              <option :value="room.id" x-text="room.name"></option>
+            </template>
+          </select>
+          <select x-model.number="itemForm.storage_unit_id" class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+            <option :value="null">Unfiled</option>
+            <template x-for="u in unitsInRoom(roomId)" :key="u.id">
+              <option :value="u.id" x-text="u.name"></option>
+            </template>
+          </select>
+          <button type="button" @click="addUnit()" title="New storage unit"
+                  class="border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-2 py-2 rounded-lg text-sm shrink-0">+</button>
+        </div>
       </div>
       <div class="flex gap-2">
         <label class="text-sm text-gray-600 dark:text-gray-300 self-center">Low threshold:</label>
@@ -633,7 +657,7 @@
                   <div class="flex-1 min-w-0">
                     <span class="font-medium dark:text-gray-100 truncate" x-text="c.name"></span>
                     <span class="text-gray-400 dark:text-gray-500 ml-1" x-text="c.quantity + ' ' + c.unit"></span>
-                    <span x-show="c.location" class="text-gray-400 dark:text-gray-500 ml-1" x-text="'· ' + c.location"></span>
+                    <span x-show="c.storage_unit" class="text-gray-400 dark:text-gray-500 ml-1" x-text="'· ' + locationLabel(c)"></span>
                     <template x-if="unitDimension(c.unit) && unitDimension(itemForm.unit) && unitDimension(c.unit) !== unitDimension(itemForm.unit)">
                       <span class="ml-1 text-xs text-red-400">⚠ incompatible units</span>
                     </template>
@@ -671,7 +695,7 @@
               <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Location</label>
               <select x-model.number="deductModal.selectedLocationId" @change="deductModal.plan = null" class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
                 <template x-for="loc in deductModal.group.locations" :key="loc.id">
-                  <option :value="loc.id" x-text="(loc.location || 'No location') + ' · ' + loc.quantity + ' ' + deductModal.group.unit + (loc.expiration_date ? ' · exp ' + loc.expiration_date : '')"></option>
+                  <option :value="loc.id" x-text="locationLabel(loc) + ' · ' + loc.quantity + ' ' + deductModal.group.unit + (loc.expiration_date ? ' · exp ' + loc.expiration_date : '')"></option>
                 </template>
               </select>
             </div>
@@ -689,7 +713,7 @@
               </p>
               <template x-for="step in deductModal.plan.steps" :key="step.id">
                 <div class="flex justify-between text-sm text-gray-700 dark:text-gray-300">
-                  <span x-text="step.location || 'No location'"></span>
+                  <span x-text="locationLabel(step)"></span>
                   <span class="font-medium" x-text="'−' + step.deduct + ' ' + deductModal.group.unit"></span>
                 </div>
               </template>
@@ -698,7 +722,7 @@
                 <div class="flex gap-2 pt-1">
                   <select x-model.number="deductModal.plan.nextId" class="flex-1 border rounded-lg px-2 py-1.5 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
                     <template x-for="loc in deductModal.plan.available" :key="loc.id">
-                      <option :value="loc.id" x-text="(loc.location || 'No location') + ' · ' + loc.quantity + ' ' + deductModal.group.unit"></option>
+                      <option :value="loc.id" x-text="locationLabel(loc) + ' · ' + loc.quantity + ' ' + deductModal.group.unit"></option>
                     </template>
                   </select>
                   <button @click="deductPlanAddLocation()" class="bg-amber-500 hover:bg-amber-600 text-white text-sm px-3 py-1.5 rounded-lg font-medium">Add</button>
@@ -776,8 +800,22 @@
         </div>
         <div>
           <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Location</label>
-          <input x-model="groceryItemForm.location" type="text" placeholder="e.g. Pantry, Fridge"
-                 class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
+          <div x-data="locationPicker(() => groceryItemForm)" class="flex gap-2">
+            <select x-model.number="roomId" @change="onRoomChange()" class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+              <option value="">Room…</option>
+              <template x-for="room in rooms" :key="room.id">
+                <option :value="room.id" x-text="room.name"></option>
+              </template>
+            </select>
+            <select x-model.number="groceryItemForm.storage_unit_id" class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+              <option :value="null">Unfiled</option>
+              <template x-for="u in unitsInRoom(roomId)" :key="u.id">
+                <option :value="u.id" x-text="u.name"></option>
+              </template>
+            </select>
+            <button type="button" @click="addUnit()" title="New storage unit"
+                    class="border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-2 py-2 rounded-lg text-sm shrink-0">+</button>
+          </div>
         </div>
         <div>
           <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Expiry (optional)</label>
@@ -884,7 +922,7 @@
                   <div class="flex-1 min-w-0">
                     <p class="text-white font-medium" x-text="candidate.name || 'Unknown'"></p>
                     <p class="text-sm text-gray-400 mt-0.5" x-text="(candidate.unit && candidate.quantity) ? candidate.quantity + ' ' + candidate.unit : ''"></p>
-                    <p class="text-xs text-gray-500 mt-0.5" x-text="candidate.location || 'No location'"></p>
+                    <p class="text-xs text-gray-500 mt-0.5" x-text="locationLabel(candidate)"></p>
                   </div>
                   <button @click="mergeWithItem(candidate)"
                           class="bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-1.5 rounded-lg font-medium">
@@ -1170,21 +1208,23 @@
           <div class="text-sm text-gray-500 dark:text-gray-400">
             <span class="font-medium text-gray-800 dark:text-gray-100" x-text="editLocationForm.name"></span>
           </div>
-          <div class="relative">
+          <div>
             <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Location</label>
-            <input x-model="editLocationForm.location" type="text" placeholder="e.g. Pantry, Fridge"
-                   @input="clearTimeout(_locationSuggestionTimer); _locationSuggestionTimer = setTimeout(() => fetchEditLocationSuggestions(), 250)"
-                   @keydown.escape="showEditLocationSuggestions = false"
-                   @blur="setTimeout(() => { showEditLocationSuggestions = false }, 150)"
-                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
-                   autocomplete="off" />
-            <div x-show="showEditLocationSuggestions && editLocationSuggestions.length"
-                 class="absolute z-30 left-0 right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg overflow-hidden">
-              <template x-for="loc in editLocationSuggestions" :key="loc">
-                <div @click="editLocationForm.location = loc; showEditLocationSuggestions = false"
-                     class="px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/30 dark:text-gray-100"
-                     x-text="loc"></div>
-              </template>
+            <div x-data="locationPicker(() => editLocationForm)" class="flex gap-2">
+              <select x-model.number="roomId" @change="onRoomChange()" class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+                <option value="">Room…</option>
+                <template x-for="room in rooms" :key="room.id">
+                  <option :value="room.id" x-text="room.name"></option>
+                </template>
+              </select>
+              <select x-model.number="editLocationForm.storage_unit_id" class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+                <option :value="null">Unfiled</option>
+                <template x-for="u in unitsInRoom(roomId)" :key="u.id">
+                  <option :value="u.id" x-text="u.name"></option>
+                </template>
+              </select>
+              <button type="button" @click="addUnit()" title="New storage unit"
+                      class="border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-2 py-2 rounded-lg text-sm shrink-0">+</button>
             </div>
           </div>
           <div>
@@ -1215,21 +1255,23 @@
           <div class="text-sm text-gray-500 dark:text-gray-400">
             Adding stock for <span class="font-medium text-gray-800 dark:text-gray-100" x-text="addLocationForm.name"></span>
           </div>
-          <div class="relative">
-            <input x-model="addLocationForm.location"
-                   @input="clearTimeout(_locationSuggestionTimer); _locationSuggestionTimer = setTimeout(() => { fetchAddLocationSuggestions(); }, 250)"
-                   @keydown.escape="showAddLocationSuggestions = false"
-                   @blur="setTimeout(() => { showAddLocationSuggestions = false }, 150)"
-                   placeholder="Location (e.g. Pantry, Fridge)"
-                   class="w-full border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
-                   autocomplete="off" />
-            <div x-show="showAddLocationSuggestions && addLocationSuggestions.length"
-                 class="absolute z-30 left-0 right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg overflow-hidden">
-              <template x-for="loc in addLocationSuggestions" :key="loc">
-                <div @click="addLocationForm.location = loc; showAddLocationSuggestions = false"
-                     class="px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/30 dark:text-gray-100"
-                     x-text="loc"></div>
-              </template>
+          <div>
+            <label class="block text-sm text-gray-600 dark:text-gray-300 mb-1">Location</label>
+            <div x-data="locationPicker(() => addLocationForm)" class="flex gap-2">
+              <select x-model.number="roomId" @change="onRoomChange()" class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+                <option value="">Room…</option>
+                <template x-for="room in rooms" :key="room.id">
+                  <option :value="room.id" x-text="room.name"></option>
+                </template>
+              </select>
+              <select x-model.number="addLocationForm.storage_unit_id" class="flex-1 min-w-0 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100">
+                <option :value="null">Unfiled</option>
+                <template x-for="u in unitsInRoom(roomId)" :key="u.id">
+                  <option :value="u.id" x-text="u.name"></option>
+                </template>
+              </select>
+              <button type="button" @click="addUnit()" title="New storage unit"
+                      class="border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-2 py-2 rounded-lg text-sm shrink-0">+</button>
             </div>
           </div>
           <div>
@@ -1248,6 +1290,64 @@
           </div>
         </div>
       </template>
+    </div>
+  </div>
+
+  <!-- Rooms & Storage Units Modal -->
+  <div x-show="modal === 'rooms'" class="fixed inset-0 bg-black/50 z-20 flex items-end justify-center sm:items-center">
+    <div class="bg-white dark:bg-gray-800 rounded-t-2xl sm:rounded-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+      <h2 class="text-lg font-bold dark:text-gray-100">Rooms &amp; Storage Units</h2>
+      <div class="space-y-3">
+        <template x-for="room in rooms" :key="room.id">
+          <div class="border dark:border-gray-700 rounded-lg p-3 space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-medium text-gray-900 dark:text-gray-100 truncate" x-text="room.name"></span>
+              <div class="flex items-center gap-1 shrink-0">
+                <button @click="renameRoom(room)" class="text-blue-500 hover:text-blue-600 p-1 rounded" title="Rename room">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
+                </button>
+                <button @click="deleteRoom(room)" class="text-red-400 hover:text-red-600 p-1 rounded" title="Delete room">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="pl-3 border-l dark:border-gray-700 space-y-1">
+              <template x-for="u in room.storage_units" :key="u.id">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-sm text-gray-600 dark:text-gray-300 truncate" x-text="u.name"></span>
+                  <div class="flex items-center gap-1 shrink-0">
+                    <button @click="renameStorageUnit(u)" class="text-blue-400 hover:text-blue-600 p-1 rounded" title="Rename">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>
+                    </button>
+                    <button @click="deleteStorageUnit(u)" class="text-red-400 hover:text-red-600 p-1 rounded" title="Delete">
+                      <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </template>
+              <template x-if="room.storage_units.length === 0">
+                <p class="text-xs text-gray-400 italic">No storage units yet</p>
+              </template>
+              <form @submit.prevent="addUnitFromForm(room.id)" class="flex gap-1 pt-1">
+                <input x-model="newUnitName[room.id]" placeholder="New storage unit"
+                       class="flex-1 border rounded-lg px-2 py-1 text-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
+                <button type="submit" class="text-xs bg-green-600 text-white px-2 py-1 rounded">Add</button>
+              </form>
+            </div>
+          </div>
+        </template>
+        <template x-if="rooms.length === 0">
+          <p class="text-center text-gray-400 dark:text-gray-500 py-4 text-sm">No rooms yet. Add one below.</p>
+        </template>
+        <form @submit.prevent="addRoomFromForm()" class="flex gap-2">
+          <input x-model="newRoomName" placeholder="New room (e.g. Kitchen)"
+                 class="flex-1 border rounded-lg px-3 py-2 text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400" />
+          <button type="submit" class="bg-green-600 text-white rounded-lg px-4 py-2 text-sm font-medium">Add Room</button>
+        </form>
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button @click="modal = null" class="flex-1 border rounded-lg py-2 text-sm dark:border-gray-600 dark:text-gray-300">Done</button>
+      </div>
     </div>
   </div>
 
@@ -1327,7 +1427,7 @@
                       <div class="flex items-center justify-between gap-2 py-0.5">
                         <span class="text-xs text-gray-700 dark:text-gray-300 truncate">
                           <span x-text="candidate.name"></span>
-                          <span class="text-gray-400 dark:text-gray-500" x-text="' · ' + candidate.quantity + ' ' + candidate.unit + (candidate.location ? ' · ' + candidate.location : '')"></span>
+                          <span class="text-gray-400 dark:text-gray-500" x-text="' · ' + candidate.quantity + ' ' + candidate.unit + (candidate.storage_unit ? ' · ' + locationLabel(candidate) : '')"></span>
                         </span>
                         <button @click="item._mergeTarget = candidate; item._include = true"
                                 class="flex-shrink-0 text-xs bg-amber-500 hover:bg-amber-600 text-white px-2 py-0.5 rounded font-medium">
@@ -1423,6 +1523,36 @@
   </div>
 
   <script>
+    // Room -> storage unit picker shared by every form that assigns a location.
+    // `getForm` returns the form object holding storage_unit_id (a getter, because
+    // the modals swap the whole object out when they open). Room is local UI state
+    // only; the form still stores just the unit id the API wants.
+    function locationPicker(getForm) {
+      return {
+        roomId: '',
+        get form() { return getForm() || {}; },
+        init() {
+          // Preselect the room owning the already-assigned unit, and keep it in
+          // sync when the form is reopened for a different item.
+          this.$watch('form.storage_unit_id', id => { this.roomId = this.roomIdForUnit(id); });
+          this.roomId = this.roomIdForUnit(this.form.storage_unit_id);
+        },
+        onRoomChange() {
+          // Dropping the room unfiles the item unless its unit is in the new room.
+          if (!this.unitsInRoom(this.roomId).some(u => u.id === this.form.storage_unit_id)) {
+            this.form.storage_unit_id = null;
+          }
+        },
+        async addUnit() {
+          const id = await this.promptNewStorageUnit(this.roomId);
+          if (id) {
+            this.form.storage_unit_id = id;
+            this.roomId = this.roomIdForUnit(id);
+          }
+        },
+      };
+    }
+
     function app() {
       return {
         // State
@@ -1449,15 +1579,13 @@
         expiringItems: [],
         expiryOpen: false,
         inventorySearch: '',
-        inventoryLocation: '',
+        inventoryStorageUnitId: '',
         hideEmptyInventory: localStorage.getItem('km-hide-empty') !== 'false',
-        locations: [],
+        rooms: [],
         editingItem: null,
-        // Location autocomplete
-        locationSuggestions: [],
-        showLocationSuggestions: false,
-        locationSuggestionIndex: -1,
-        _locationSuggestionTimer: null,
+        // Rooms & storage units management modal
+        newRoomName: '',
+        newUnitName: {},   // roomId -> pending storage-unit name
         unitGroups: {},
         suggestions: [],
         showSuggestions: false,
@@ -1481,15 +1609,11 @@
         _removeStockStream: null,
         _removeStockRaf: null,
         _removeStockActive: false,
-        groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
-        itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
+        groceryItemForm: { name: '', quantity: 1, unit: '', preferred_unit: '', storage_unit_id: null, expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
+        itemForm: { name: '', quantity: 0, unit: '', preferred_unit: '', storage_unit_id: null, expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 },
         deductModal: null,   // { group, selectedLocationId, qty }
-        editLocationForm: null,   // { id, name, unit, location, quantity, expiration_date }
-        addLocationForm: null,    // { name, unit, preferred_unit, low_threshold, location, quantity, expiration_date }
-        addLocationSuggestions: [],
-        showAddLocationSuggestions: false,
-        editLocationSuggestions: [],
-        showEditLocationSuggestions: false,
+        editLocationForm: null,   // { id, name, unit, storage_unit_id, quantity, expiration_date }
+        addLocationForm: null,    // { name, unit, preferred_unit, low_threshold, storage_unit_id, quantity, expiration_date }
         mergeSearch: '',
         mergeCandidateItems: [],
         _mergeSearchTimer: null,
@@ -1593,6 +1717,7 @@
           this.fetchMe();
           await this.fetchInventory();
           await this.fetchExpiring();
+          await this.fetchRooms();
           await this.fetchShoppingList();
           await this.fetchRecipes();
           await this.fetchCalendar();
@@ -1647,33 +1772,171 @@
           }
         },
 
-        async fetchLocationSuggestions() {
-          if (!this.itemForm.location) { this.locationSuggestions = []; this.showLocationSuggestions = false; return; }
+        // --- Rooms & storage units ---
+        // One shared hierarchy powers every location picker; the room -> unit
+        // selects are driven off it client-side rather than per-picker fetches.
+        async fetchRooms() {
           try {
-            const res = await fetch('/kitchen-manager/api/inventory/locations');
-            if (!res.ok) { this.locationSuggestions = []; this.showLocationSuggestions = false; return; }
-            const allLocations = await res.json();
-            this.locationSuggestions = allLocations.filter(loc =>
-              loc.toLowerCase().includes(this.itemForm.location.toLowerCase())
-            ).slice(0, 10);
-            this.showLocationSuggestions = this.locationSuggestions.length > 0;
-          } catch {
-            this.locationSuggestions = [];
-            this.showLocationSuggestions = false;
-          }
+            const res = await fetch(this.baseUrl + '/api/rooms');
+            if (res.ok) this.rooms = await res.json();
+          } catch { /* keep whatever we had */ }
         },
 
-        selectLocationSuggestion(loc) {
-          this.itemForm.location = loc;
-          this.locationSuggestions = [];
-          this.showLocationSuggestions = false;
+        // "Kitchen › Kitchen 1", or "Unfiled" when the item has no storage unit.
+        // Accepts anything carrying a nested storage_unit (item, location row, candidate).
+        locationLabel(obj) {
+          const su = obj && obj.storage_unit;
+          return su ? su.room + ' › ' + su.name : 'Unfiled';
+        },
+
+        // Grouped-endpoint location rows carry only the nested storage_unit,
+        // while item responses also carry a flat storage_unit_id; read both.
+        unitIdOf(obj) {
+          return (obj && (obj.storage_unit_id ?? (obj.storage_unit && obj.storage_unit.id))) ?? null;
+        },
+
+        // The room a unit id belongs to, so a picker can preselect its room select.
+        roomIdForUnit(unitId) {
+          if (!unitId) return '';
+          const r = this.rooms.find(rm => rm.storage_units.some(u => u.id === unitId));
+          return r ? r.id : '';
+        },
+
+        unitsInRoom(roomId) {
+          const r = this.rooms.find(rm => rm.id === roomId);
+          return r ? r.storage_units : [];
+        },
+
+        async createRoom(name) {
+          const trimmed = (name || '').trim();
+          if (!trimmed) return null;
+          const res = await fetch(this.baseUrl + '/api/rooms', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: trimmed }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            this.showToast(err.error || 'Failed to add room', 'error');
+            return null;
+          }
+          const room = await res.json();
+          await this.fetchRooms();
+          return room;
+        },
+
+        async createStorageUnit(roomId, name) {
+          const trimmed = (name || '').trim();
+          if (!roomId || !trimmed) return null;
+          const res = await fetch(this.baseUrl + '/api/rooms/' + roomId + '/storage-units', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: trimmed }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            this.showToast(err.error || 'Failed to add storage unit', 'error');
+            return null;
+          }
+          const unit = await res.json();
+          await this.fetchRooms();
+          return unit;
+        },
+
+        async renameRoom(room) {
+          const name = prompt('Rename room', room.name);
+          if (name === null || !name.trim() || name.trim() === room.name) return;
+          const res = await fetch(this.baseUrl + '/api/rooms/' + room.id, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name.trim() }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            this.showToast(err.error || 'Rename failed', 'error');
+            return;
+          }
+          await this.fetchRooms();
+          await this.fetchInventory();
+        },
+
+        async renameStorageUnit(unit) {
+          const name = prompt('Rename storage unit', unit.name);
+          if (name === null || !name.trim() || name.trim() === unit.name) return;
+          const res = await fetch(this.baseUrl + '/api/storage-units/' + unit.id, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name.trim() }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            this.showToast(err.error || 'Rename failed', 'error');
+            return;
+          }
+          await this.fetchRooms();
+          await this.fetchInventory();
+        },
+
+        // Rooms and units both refuse deletion with 409 while items still
+        // reference them; surface that message instead of a generic failure.
+        async deleteRoom(room) {
+          const ok = await this._showDialog({ title: `Delete room "${room.name}"?`, body: 'Its storage units are deleted too.', confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });
+          if (!ok) return;
+          const res = await fetch(this.baseUrl + '/api/rooms/' + room.id, { method: 'DELETE' });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            this.showToast(err.error || 'Delete failed', 'error');
+            return;
+          }
+          await this.fetchRooms();
+          await this.fetchInventory();
+          this.showToast('Room deleted');
+        },
+
+        async deleteStorageUnit(unit) {
+          const ok = await this._showDialog({ title: `Delete storage unit "${unit.name}"?`, confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });
+          if (!ok) return;
+          const res = await fetch(this.baseUrl + '/api/storage-units/' + unit.id, { method: 'DELETE' });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            this.showToast(err.error || 'Delete failed', 'error');
+            return;
+          }
+          await this.fetchRooms();
+          await this.fetchInventory();
+          this.showToast('Storage unit deleted');
+        },
+
+        // Add a room from the management view's inline field.
+        async addRoomFromForm() {
+          if (await this.createRoom(this.newRoomName)) this.newRoomName = '';
+        },
+
+        // Add a unit from the management view's per-room inline field.
+        async addUnitFromForm(roomId) {
+          if (await this.createStorageUnit(roomId, this.newUnitName[roomId])) this.newUnitName[roomId] = '';
+        },
+
+        // Shared by every Room/Unit picker: prompt for the two names, create
+        // whatever is missing, and return the new unit id to select.
+        async promptNewStorageUnit(roomId) {
+          let targetRoom = roomId;
+          if (!targetRoom) {
+            const roomName = prompt('New room name');
+            const room = await this.createRoom(roomName);
+            if (!room) return null;
+            targetRoom = room.id;
+          }
+          const unitName = prompt('New storage unit name');
+          const unit = await this.createStorageUnit(targetRoom, unitName);
+          return unit ? unit.id : null;
         },
 
         selectSuggestion(s) {
           this.itemForm.name = s.name;
           this.itemForm.unit = s.unit;
           this.itemForm.preferred_unit = s.preferred_unit;
-          this.itemForm.location = s.location;
+          this.itemForm.storage_unit_id = s.storage_unit_id;
           this.itemForm.low_threshold = s.low_threshold;
           this.showSuggestions = false;
         },
@@ -2037,7 +2300,7 @@
           // Not in inventory — pause for unknown item form
           this._groceryProcessing = false;
           this.groceryScanPaused = true;
-          let prefill = { barcode: code, quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0 };
+          let prefill = { barcode: code, quantity: 1, unit: '', preferred_unit: '', storage_unit_id: null, expiration_date: '', low_threshold: 0 };
 
           try {
             const offPromise = fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json`).then(r => r.json());
@@ -2062,7 +2325,7 @@
               const invRes = await fetch('/kitchen-manager/api/inventory/?name=' + encodeURIComponent(prefill.name));
               if (invRes.ok) {
                 const invData = await invRes.json();
-                if (invData && invData.length > 0 && invData[0].location) prefill.location = invData[0].location;
+                if (invData && invData.length > 0) prefill.storage_unit_id = this.unitIdOf(invData[0]);
               }
             } catch { /* silent */ }
           }
@@ -2091,7 +2354,7 @@
           }
 
           this.groceryNewItem = prefill;
-          this.groceryItemForm = { name: prefill.name || '', quantity: prefill.quantity, unit: prefill.unit, preferred_unit: prefill.preferred_unit, location: prefill.location, expiration_date: '', low_threshold: 0, barcode: code, quantity_per_scan: prefill.quantity || 1 };
+          this.groceryItemForm = { name: prefill.name || '', quantity: prefill.quantity, unit: prefill.unit, preferred_unit: prefill.preferred_unit, storage_unit_id: prefill.storage_unit_id, expiration_date: '', low_threshold: 0, barcode: code, quantity_per_scan: prefill.quantity || 1 };
         },
 
         async confirmGroceryNewItem() {
@@ -2116,7 +2379,7 @@
         skipGroceryNewItem() {
           this.groceryNewItem = null;
           this.groceryScanPaused = false;
-          this.groceryItemForm = { name: '', quantity: 1, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '' };
+          this.groceryItemForm = { name: '', quantity: 1, unit: '', preferred_unit: '', storage_unit_id: null, expiration_date: '', low_threshold: 0, barcode: '' };
         },
 
         showToast(msg, style = '', badge = '') {
@@ -2146,13 +2409,9 @@
         async fetchInventory() {
           const params = new URLSearchParams();
           if (this.inventorySearch) params.set('name', this.inventorySearch);
-          if (this.inventoryLocation) params.set('location', this.inventoryLocation);
+          if (this.inventoryStorageUnitId) params.set('storage_unit_id', this.inventoryStorageUnitId);
           const res = await fetch('/kitchen-manager/api/inventory/grouped?' + params);
-          const data = await res.json();
-          this.inventoryItems = data;
-          if (!this.inventoryLocation) {
-            this.locations = [...new Set(data.flatMap(g => g.locations.map(l => l.location)).filter(Boolean))];
-          }
+          this.inventoryItems = await res.json();
         },
 
         async fetchExpiring() {
@@ -2162,7 +2421,7 @@
 
         openAddItem() {
           this.editingItem = null;
-          this.itemForm = { name: '', quantity: 0, unit: '', preferred_unit: '', location: '', expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 };
+          this.itemForm = { name: '', quantity: 0, unit: '', preferred_unit: '', storage_unit_id: null, expiration_date: '', low_threshold: 0, barcode: '', quantity_per_scan: 1 };
           this.suggestions = [];
           this.showSuggestions = false;
           this.modal = 'item';
@@ -2232,7 +2491,7 @@
           if (!loc) return;
           const take = Math.min(qty, loc.quantity);
           const remaining = parseFloat((qty - take).toFixed(4));
-          const steps = [{ id: loc.id, location: loc.location, deduct: parseFloat(take.toFixed(4)), currentQty: loc.quantity }];
+          const steps = [{ id: loc.id, storage_unit: loc.storage_unit, deduct: parseFloat(take.toFixed(4)), currentQty: loc.quantity }];
           const available = group.locations.filter(l => l.id !== selectedLocationId && l.quantity > 0);
 
           // Single location covers it: execute immediately
@@ -2260,7 +2519,7 @@
           const loc = plan.available.find(l => l.id === plan.nextId);
           if (!loc) return;
           const take = Math.min(plan.remaining, loc.quantity);
-          const newSteps = [...plan.steps, { id: loc.id, location: loc.location, deduct: parseFloat(take.toFixed(4)), currentQty: loc.quantity }];
+          const newSteps = [...plan.steps, { id: loc.id, storage_unit: loc.storage_unit, deduct: parseFloat(take.toFixed(4)), currentQty: loc.quantity }];
           const newRemaining = parseFloat((plan.remaining - take).toFixed(4));
           const newAvailable = plan.available.filter(l => l.id !== loc.id);
           this.deductModal.plan = { steps: newSteps, remaining: newRemaining, available: newAvailable, nextId: newAvailable[0]?.id ?? null };
@@ -2305,7 +2564,7 @@
             id: loc.id,
             name: group.name,
             unit: group.unit,
-            location: loc.location || '',
+            storage_unit_id: this.unitIdOf(loc),
             quantity: loc.quantity,
             expiration_date: loc.expiration_date || '',
             siblings: group.locations,
@@ -2317,9 +2576,9 @@
           const f = this.editLocationForm;
           if (!f) return;
 
-          // Check if the new location matches a different sibling row
+          // Check if the new storage unit matches a different sibling row
           const collision = (f.siblings || []).find(s =>
-            s.id !== f.id && (s.location || '') === (f.location || '')
+            s.id !== f.id && this.unitIdOf(s) === (f.storage_unit_id ?? null)
           );
 
           if (collision) {
@@ -2348,7 +2607,7 @@
           const res = await fetch(this.baseUrl + '/api/inventory/' + f.id, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quantity: f.quantity, expiration_date: f.expiration_date, location: f.location }),
+            body: JSON.stringify({ quantity: f.quantity, expiration_date: f.expiration_date, storage_unit_id: f.storage_unit_id ?? null }),
           });
           if (res.ok) {
             this.showToast('Location updated');
@@ -2367,43 +2626,11 @@
             unit: group.unit,
             preferred_unit: group.preferred_unit || group.unit,
             low_threshold: group.low_threshold || 0,
-            location: '',
+            storage_unit_id: null,
             quantity: 0,
             expiration_date: '',
           };
-          this.addLocationSuggestions = [];
-          this.showAddLocationSuggestions = false;
           this.modal = 'addLocation';
-        },
-
-        async fetchEditLocationSuggestions() {
-          try {
-            const res = await fetch(this.baseUrl + '/api/inventory/locations');
-            if (!res.ok) return;
-            const all = await res.json();
-            this.editLocationSuggestions = all.filter(loc =>
-              loc.toLowerCase().includes((this.editLocationForm.location || '').toLowerCase())
-            ).slice(0, 10);
-            this.showEditLocationSuggestions = this.editLocationSuggestions.length > 0;
-          } catch {
-            this.editLocationSuggestions = [];
-            this.showEditLocationSuggestions = false;
-          }
-        },
-
-        async fetchAddLocationSuggestions() {
-          try {
-            const res = await fetch(this.baseUrl + '/api/inventory/locations');
-            if (!res.ok) return;
-            const all = await res.json();
-            this.addLocationSuggestions = all.filter(loc =>
-              loc.toLowerCase().includes((this.addLocationForm.location || '').toLowerCase())
-            ).slice(0, 10);
-            this.showAddLocationSuggestions = this.addLocationSuggestions.length > 0;
-          } catch {
-            this.addLocationSuggestions = [];
-            this.showAddLocationSuggestions = false;
-          }
         },
 
         async fetchMergeCandidates() {
@@ -2474,7 +2701,7 @@
             quantity: f.quantity,
             unit: f.unit,
             preferred_unit: f.preferred_unit || f.unit,
-            location: f.location,
+            storage_unit_id: f.storage_unit_id ?? null,
             expiration_date: f.expiration_date,
             low_threshold: f.low_threshold || 0,
           };
@@ -3100,7 +3327,7 @@
             this.groceryItemForm = {
               name: dialog.name || '', quantity: dialog.quantity || 1,
               unit: dialog.unit || '', preferred_unit: dialog.unit || '',
-              location: '', expiration_date: '', low_threshold: 0,
+              storage_unit_id: null, expiration_date: '', low_threshold: 0,
               barcode: dialog.barcode, quantity_per_scan: dialog.quantity || 1,
             };
             this.groceryScanPaused = true;
