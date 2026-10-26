@@ -10,3 +10,6 @@ Caddyfile
 .claude/
 .superpowers/
 docs/superpowers/
+coverage.out
+*_cover.out
+*_coverage.out
