@@ -1,0 +1,22 @@
+services:
+  app:
+    ports: !reset []
+    # Bridges the private project network and proxy_net (so Traefik can reach it).
+    networks:
+      - default
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.kitchen.rule=Host(`${TRAEFIK_HOST:?set TRAEFIK_HOST in .env (and pass --env-file .env, since .env is at the repo root, not deploy/)}`) && PathPrefix(`/kitchen-manager`)
+      - traefik.http.routers.kitchen.entrypoints=websecure
+      - traefik.http.routers.kitchen.tls.certresolver=le
+      - traefik.http.routers.kitchen.middlewares=forward-auth,kitchen-strip
+      - traefik.http.middlewares.kitchen-strip.stripprefix.prefixes=/kitchen-manager
+      - traefik.http.services.kitchen.loadbalancer.server.port=8080
+
+# Only the app joins proxy_net; splash stays on the project's private network so
+# other containers on the Traefik network can't reach the renderer.
+networks:
+  proxy:
+    name: proxy_net
+    external: true

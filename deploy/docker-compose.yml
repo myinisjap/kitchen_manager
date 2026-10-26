@@ -9,22 +9,12 @@ services:
     volumes:
       - ./data:/data
     restart: unless-stopped
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.kitchen.rule=Host(`myinisjap.tplinkdns.com`) && PathPrefix(`/kitchen-manager`)
-      - traefik.http.routers.kitchen.entrypoints=websecure
-      - traefik.http.routers.kitchen.tls.certresolver=le
-      - traefik.http.services.kitchen.loadbalancer.server.port=8080
-      - traefik.http.middlewares.kitchen-strip.stripprefix.prefixes=/kitchen-manager
-      - traefik.http.routers.kitchen.middlewares=forward-auth,kitchen-strip
-    networks:
-      - proxy_net
-      - default
+    # Bound to loopback by default so the app (which has no auth of its own
+    # unless OAUTH_ENABLED=true) isn't exposed to the LAN. The Traefik overlay
+    # resets this and routes to it over proxy_net instead.
+    ports:
+      - "${KITCHEN_BIND_ADDR:-127.0.0.1}:8080:8080"
 
   splash:
     image: scrapinghub/splash
     restart: unless-stopped
-
-networks:
-  proxy_net:
-    external: true

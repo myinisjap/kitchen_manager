@@ -8,3 +8,5 @@ Caddyfile
 .claude/
 .superpowers/
 docs/superpowers/
+backups/
+deploy/data/

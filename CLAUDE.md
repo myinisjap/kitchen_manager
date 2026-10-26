@@ -38,21 +38,32 @@ go run .
 # http://localhost:8080
 ```
 
-**Production (Docker):**
+**Production (Docker, behind Traefik):** see the `start-kitchen-manager-traefik` skill
+for the full procedure (DB backup, `.env` checks, verification).
+
+Compose is split like `agent-task-editor`: a base file plus a Traefik overlay.
+`--env-file .env` is required because `.env` sits at the repo root while the compose
+files are in `deploy/`; the host rule reads `TRAEFIK_HOST` and fails loudly if unset.
+
 ```bash
-cp .env.example .env  # fill in values
-docker compose -f deploy/docker-compose.yml up -d
+cp .env.example .env  # fill in values, incl. TRAEFIK_HOST
+docker compose --env-file .env -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.traefik.yml up -d
 ```
 
 **Redeploy production (after code changes):**
 ```bash
-docker compose -f deploy/docker-compose.yml down && docker compose -f deploy/docker-compose.yml up -d --build
+COMPOSE="docker compose --env-file .env -f deploy/docker-compose.yml -f deploy/docker-compose.traefik.yml"
+$COMPOSE down && $COMPOSE up -d --build
 ```
+
+Omit the overlay for a local Docker run with no Traefik route (publishes 127.0.0.1:8080).
 
 ## Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
+| `TRAEFIK_HOST` | — | Public hostname for the Traefik host rule (overlay only; required) |
 | `DB_PATH` | `./kitchen.db` | SQLite file path |
 | `SELF_SIGNED_TLS` | unset | Set to `true` to serve self-signed HTTPS on :8443 |
 | `OAUTH_ENABLED` | unset | Set to `true` to require Google OAuth |
@@ -95,7 +106,7 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 
 **TLS:** Self-signed certificates are auto-generated on startup (`tls.go`) with IP SANs so mobile devices on the same network can connect without cert errors. Certs are persisted as `cert.pem`/`key.pem`.
 
-**Testing:** Tests use in-memory SQLite (not mocks). `handlers/inventory_test.go` builds the schema in-process; `units/units_test.go` tests conversion logic directly.
+**Testing:** Tests use in-memory SQLite (not mocks). `newTestDB` in `handlers/inventory_test.go` calls the real `database.OpenDB(":memory:")`, so tests run the production schema and migrations (including `SetMaxOpenConns(1)`) rather than a hand-maintained copy; `units/units_test.go` tests conversion logic directly.
 
 **Frontend:** Alpine.js reactive state, no build step. Barcode scanning via ZXing.js (camera API). Autocomplete pulls from `GET /api/inventory/suggestions` (distinct previous names + units).
 
@@ -120,3 +131,9 @@ Single-binary Go web app with an Alpine.js SPA frontend.
 - `inventory_skus` — barcode aliases per inventory item, each with a `quantity_per_scan` multiplier; added via migration on startup
 - `meal_history` / `meal_history_ingredients` — immutable log of cooked meals; ingredient quantities recorded at cook time
 - `settings` — single key/value table for app-wide config (currently stores notification preferences)
+- `rooms` / `storage_units` — two-level location hierarchy (a room contains storage units); unit names are unique per room, not globally, so "Top Shelf" can exist in several rooms. Deleting a room cascades to its units
+- `inventory.storage_unit_id` — nullable FK replacing the old free-text `location`; NULL means the item is unfiled. Each physical location is its own inventory row (siblings share `name`+`unit`), so this is a single FK, not a join table
+- `inventory.location` — legacy free-text column, unused since the `storage_units` migration. Kept because this codebase never drops columns; the startup backfill copies each distinct non-empty value into a storage unit under an "Unsorted" room, and only touches rows where `storage_unit_id IS NULL`, so it is a no-op on later startups
+- API responses embed the location as a nested `storage_unit` object (`{"id","name","room_id","room"}`, or `null`) alongside `storage_unit_id`; the same shape is used by every inventory endpoint. `GET /api/rooms` returns the hierarchy and replaced the old flat `GET /api/inventory/locations` autocomplete
+- Room/storage-unit deletion returns 409 while any inventory row still references it, rather than orphaning items
+- Handlers inside a transaction must query through the `*sql.Tx`, never the pooled `*sql.DB` — `SetMaxOpenConns(1)` means a pool query while a tx is open deadlocks the server (see `resolveInventoryID`'s `querier` interface)
