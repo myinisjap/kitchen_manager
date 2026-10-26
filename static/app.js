@@ -6,6 +6,7 @@ import { recipes } from './js/recipes.js';
 import { calendar } from './js/calendar.js';
 import { meals } from './js/meals.js';
 import { locations } from './js/locations.js';
+import { qty } from './js/qty.js';
 
 // Merge parts by copying property descriptors (object spread would evaluate
 // getters once and break reactivity). Duplicate keys are a bug: fail loudly.
@@ -132,7 +133,7 @@ function app() {
       };
       connect();
     },
-  }, api(), inventory(), scanner(), shopping(), recipes(), calendar(), meals(), locations());
+  }, api(), inventory(), scanner(), shopping(), recipes(), calendar(), meals(), locations(), qty());
 }
 
 window.app = app; // index.html uses x-data="app()"

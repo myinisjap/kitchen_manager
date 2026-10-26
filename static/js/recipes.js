@@ -200,10 +200,6 @@ export function recipes() {
       return qty * servings / this.recipeBaseServings(recipe);
     },
 
-    formatQty(n) {
-      return parseFloat(Number(n).toFixed(2)).toString();
-    },
-
     onCalendarRecipeChange() {
       const r = this.recipes.find(r => r.id === this.calendarEntryForm.recipe_id);
       this.calendarEntryForm.servings = r ? this.recipeScaleServings(r) : null;
